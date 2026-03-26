@@ -147,6 +147,7 @@ class SessionScanner:
             end_time = None
             total_input_tokens = 0
             total_output_tokens = 0
+            file_paths = []  # Collect file paths to infer working directory
             
             with open(wire_file, 'r', encoding='utf-8', errors='ignore') as f:
                 for line in f:
@@ -166,6 +167,19 @@ class SessionScanner:
                     
                     msg_type = msg.get('type', '')
                     payload = msg.get('payload', {})
+                    
+                    # Extract file paths from ToolCall to infer working directory
+                    if msg_type == 'ToolCall':
+                        tool_data = payload
+                        func = tool_data.get('function', {})
+                        args = func.get('arguments', '{}')
+                        try:
+                            args_dict = json.loads(args)
+                            path = args_dict.get('path') or args_dict.get('file_path') or args_dict.get('cwd')
+                            if path and isinstance(path, str) and path.startswith('/'):
+                                file_paths.append(path)
+                        except:
+                            pass
                     
                     if not start_time:
                         start_time = timestamp
@@ -245,10 +259,28 @@ class SessionScanner:
             # Kimi K2.5: 估算价格
             total_cost = (total_input_tokens * 0.000002) + (total_output_tokens * 0.000008)
             
+            # Infer working directory from file paths
+            working_dir = None
+            if file_paths:
+                # Find common prefix of all file paths
+                from pathlib import Path as PathLib
+                path_objs = [PathLib(p) for p in file_paths if p.startswith('/')]
+                if path_objs:
+                    common = path_objs[0]
+                    for p in path_objs[1:]:
+                        # Find common parent
+                        while not str(p).startswith(str(common)):
+                            common = common.parent
+                            if common == PathLib('/'):
+                                break
+                    if common != PathLib('/'):
+                        working_dir = str(common)
+            
             return {
                 'session_id': f"{session_name}_{wire_file.parent.name[:20]}",
                 'platform': 'kimi-code',
                 'project': session_name,
+                'working_dir': working_dir,
                 'file_path': str(wire_file),
                 'start_time': start_time or time.time(),
                 'message_count': len(messages),
@@ -324,6 +356,17 @@ class SessionScanner:
             messages = []
             start_time = None
             end_time = None
+            
+            # Decode working directory from project directory name
+            # Format: -Users-username-path-to-project
+            working_dir = None
+            if project_name.startswith('-'):
+                # Replace - with / and remove leading -
+                decoded = project_name[1:].replace('-', '/')
+                # Handle special case where multiple - become //
+                while '//' in decoded:
+                    decoded = decoded.replace('//', '/')
+                working_dir = '/' + decoded
             
             with open(jsonl_file, 'r', encoding='utf-8') as f:
                 for line in f:
@@ -436,6 +479,7 @@ class SessionScanner:
                 'session_id': jsonl_file.stem[:20],
                 'platform': 'claude-code',
                 'project': project_name,
+                'working_dir': working_dir,
                 'file_path': str(jsonl_file),
                 'start_time': start_time or time.time(),
                 'message_count': len(messages),
@@ -593,7 +637,11 @@ class SessionScanner:
             "cost_usd": session['total_cost'],
             "tool_calls": session['tool_calls'],
             "status": status,
-            "error_message": error
+            "error_message": error,
+            "metadata": {
+                "working_dir": session.get('working_dir'),
+                "project": session.get('project')
+            }
         }
         
         try:

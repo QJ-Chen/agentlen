@@ -41,6 +41,7 @@ class TraceIn(BaseModel):
     tool_calls: List[Dict[str, Any]] = []
     status: str = "success"
     error_message: str = ""
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class TraceBatchIn(BaseModel):
@@ -48,8 +49,26 @@ class TraceBatchIn(BaseModel):
     session_id: str
 
 
-class TraceOut(TraceIn):
+class TraceOut(BaseModel):
     id: Optional[int] = None
+    trace_id: str
+    platform: str
+    agent_name: str
+    session_id: str
+    start_time: str
+    end_time: Optional[str] = None
+    duration_ms: int
+    model: str = ""
+    prompt: str = ""
+    response: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    tool_calls: List[Dict[str, Any]] = []
+    status: str = "success"
+    error_message: str = ""
+    metadata: Optional[Dict[str, Any]] = None
+    created_at: Optional[str] = None
 
 
 # API 路由
@@ -61,14 +80,14 @@ def root():
 @app.post("/api/v1/traces")
 def create_trace(trace: TraceIn):
     """创建单个 Trace"""
-    storage.save_trace(trace.dict())
+    storage.save_trace(trace.model_dump())
     return {"status": "ok", "trace_id": trace.trace_id}
 
 
 @app.post("/api/v1/traces/batch")
 def create_traces_batch(batch: TraceBatchIn):
     """批量创建 Traces"""
-    traces = [t.dict() for t in batch.traces]
+    traces = [t.model_dump() for t in batch.traces]
     storage.save_traces(traces)
     return {"status": "ok", "count": len(traces)}
 

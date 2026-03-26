@@ -8,12 +8,15 @@
 
 __version__ = "0.1.0"
 
-from agentlens.collector import Collector, create_collector
-from agentlens.storage import SQLiteStorage, JSONLStorage
-
-__all__ = [
-    "Collector",
-    "create_collector",
-    "SQLiteStorage",
-    "JSONLStorage",
-]
+try:
+    from agentlens.collector import Collector, create_collector
+    from agentlens.storage import SQLiteStorage, JSONLStorage
+    __all__ = [
+        "Collector",
+        "create_collector",
+        "SQLiteStorage",
+        "JSONLStorage",
+    ]
+except ImportError:
+    # Allow importing when collector is not available
+    __all__ = []
