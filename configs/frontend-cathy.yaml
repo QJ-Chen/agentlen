@@ -1,0 +1,12 @@
+name: "Frontend-Cathy"
+role: "frontend_dev"
+description: "前端开发工程师，实现用户界面"
+model: "gpt-4o-mini"
+effort: "medium"
+tools:
+  - Read
+  - Edit
+  - Write
+dependencies:
+  - Backend-Bob
+cache_key: "agent_frontend_v1"

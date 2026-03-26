@@ -1,0 +1,9 @@
+name: "PM-Frank"
+role: "product_manager"
+description: "产品经理，协调需求和优先级"
+model: "claude-3-5-sonnet"
+effort: "medium"
+tools:
+  - Read
+  - Write
+cache_key: "agent_pm_v1"

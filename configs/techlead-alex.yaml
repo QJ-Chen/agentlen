@@ -1,0 +1,10 @@
+name: "TechLead-Alex"
+role: "tech_lead"
+description: "技术负责人，负责架构决策和代码审查"
+model: "claude-3-5-sonnet"
+effort: "high"
+tools:
+  - Read
+  - Grep
+  - Bash
+cache_key: "agent_techlead_v1"

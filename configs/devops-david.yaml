@@ -1,0 +1,10 @@
+name: "DevOps-David"
+role: "devops"
+description: "DevOps 工程师，负责部署和基础设施"
+model: "claude-3-5-sonnet"
+effort: "low"
+tools:
+  - Read
+  - Bash
+  - WebFetch
+cache_key: "agent_devops_v1"

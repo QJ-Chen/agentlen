@@ -1,0 +1,13 @@
+name: "Backend-Bob"
+role: "backend_dev"
+description: "后端开发工程师，专注 API 和数据库"
+model: "claude-3-5-sonnet"
+effort: "medium"
+tools:
+  - Read
+  - Edit
+  - Write
+  - Bash
+dependencies:
+  - TechLead-Alex
+cache_key: "agent_backend_v1"

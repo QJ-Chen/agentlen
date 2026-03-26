@@ -1,0 +1,10 @@
+name: "QA-Emma"
+role: "qa_engineer"
+description: "QA 工程师，保证软件质量"
+model: "gpt-4o-mini"
+effort: "low"
+tools:
+  - Read
+  - Bash
+  - Grep
+cache_key: "agent_qa_v1"
