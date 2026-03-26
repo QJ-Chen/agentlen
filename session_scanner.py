@@ -90,6 +90,10 @@ class SessionScanner:
         """扫描特定平台的 sessions"""
         sessions = []
         
+        # Kimi Code 特殊处理 - 扫描 wire.jsonl 文件
+        if platform == 'kimi-code':
+            return self._scan_kimi_sessions(dir_path)
+        
         # 查找 session 文件
         session_files = list(dir_path.glob('**/session.json'))
         session_files.extend(dir_path.glob('**/*.json'))
@@ -107,6 +111,158 @@ class SessionScanner:
                 print(f"    ⚠️ 解析失败 {file_path}: {e}")
         
         return sessions
+    
+    def _scan_kimi_sessions(self, dir_path: Path) -> List[Dict]:
+        """扫描 Kimi Code sessions"""
+        sessions = []
+        
+        # 遍历所有 session 目录
+        for session_dir in dir_path.iterdir():
+            if not session_dir.is_dir():
+                continue
+            
+            # 查找 wire.jsonl 文件
+            for wire_file in session_dir.rglob('wire.jsonl'):
+                if wire_file in self.processed_files:
+                    continue
+                
+                try:
+                    session_data = self._parse_kimi_wire(wire_file, session_dir.name)
+                    if session_data:
+                        sessions.append(session_data)
+                        self.processed_files.add(wire_file)
+                except Exception as e:
+                    # Silently skip problematic files
+                    pass
+        
+        return sessions
+    
+    def _parse_kimi_wire(self, wire_file: Path, session_name: str) -> Optional[Dict]:
+        """解析 Kimi Code wire.jsonl"""
+        try:
+            tool_calls = []
+            llm_calls = []
+            messages = []
+            start_time = None
+            end_time = None
+            total_input_tokens = 0
+            total_output_tokens = 0
+            
+            with open(wire_file, 'r', encoding='utf-8', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    try:
+                        event = json.loads(line)
+                    except:
+                        continue
+                    
+                    timestamp = event.get('timestamp', time.time())
+                    msg = event.get('message', {})
+                    if not msg:
+                        continue
+                    
+                    msg_type = msg.get('type', '')
+                    payload = msg.get('payload', {})
+                    
+                    if not start_time:
+                        start_time = timestamp
+                    end_time = timestamp
+                    
+                    # TurnBegin - 用户输入
+                    if msg_type == 'TurnBegin':
+                        user_input = payload.get('user_input', '')
+                        messages.append({
+                            'role': 'user',
+                            'content': user_input,
+                            'timestamp': timestamp
+                        })
+                        llm_calls.append({
+                            'model': 'kimi-k2.5',
+                            'prompt': user_input,
+                            'timestamp': timestamp,
+                            'input_tokens': 0,
+                            'output_tokens': 0
+                        })
+                    
+                    # ToolCall
+                    elif msg_type == 'ToolCall':
+                        tool_data = payload
+                        func = tool_data.get('function', {})
+                        args = func.get('arguments', '{}')
+                        try:
+                            args_dict = json.loads(args)
+                        except:
+                            args_dict = {'raw': args}
+                        
+                        tool_calls.append({
+                            'name': func.get('name', 'unknown'),
+                            'input': args_dict,
+                            'tool_use_id': tool_data.get('id', ''),
+                            'timestamp': timestamp,
+                            'output': None
+                        })
+                    
+                    # ToolResult
+                    elif msg_type == 'ToolResult':
+                        tool_call_id = payload.get('tool_call_id', '')
+                        return_value = payload.get('return_value', {})
+                        for tc in tool_calls:
+                            if tc.get('tool_use_id') == tool_call_id:
+                                tc['output'] = return_value.get('output', '')
+                                tc['is_error'] = return_value.get('is_error', False)
+                                break
+                    
+                    # ContentPart - LLM 响应
+                    elif msg_type == 'ContentPart':
+                        content_type = payload.get('type', '')
+                        if content_type == 'text':
+                            text = payload.get('text', '')
+                            if llm_calls:
+                                llm_calls[-1]['response'] = text
+                    
+                    # StatusUpdate - Token 使用
+                    elif msg_type == 'StatusUpdate':
+                        token_usage = payload.get('token_usage', {})
+                        input_tokens = token_usage.get('input_other', 0) + token_usage.get('input_cache_read', 0)
+                        output_tokens = token_usage.get('output', 0)
+                        
+                        total_input_tokens += input_tokens
+                        total_output_tokens += output_tokens
+                        
+                        if llm_calls:
+                            llm_calls[-1]['input_tokens'] = input_tokens
+                            llm_calls[-1]['output_tokens'] = output_tokens
+            
+            if not messages and not tool_calls:
+                return None
+            
+            # 计算统计
+            duration_ms = int((end_time - start_time) * 1000) if end_time and start_time else 0
+            total_tokens = total_input_tokens + total_output_tokens
+            # Kimi K2.5: 估算价格
+            total_cost = (total_input_tokens * 0.000002) + (total_output_tokens * 0.000008)
+            
+            return {
+                'session_id': f"{session_name}_{wire_file.parent.name[:20]}",
+                'platform': 'kimi-code',
+                'project': session_name,
+                'file_path': str(wire_file),
+                'start_time': start_time or time.time(),
+                'message_count': len(messages),
+                'tool_calls': tool_calls,
+                'llm_calls': llm_calls,
+                'total_tokens': total_tokens,
+                'total_cost': total_cost,
+                'duration_ms': duration_ms,
+                'status': 'success'
+            }
+            
+        except Exception as e:
+            print(f"    ⚠️ 解析 Kimi wire {wire_file.name} 失败: {e}")
+            return None
     
     def _scan_openclaw_runs(self) -> List[Dict]:
         """扫描 OpenClaw subagent runs"""
