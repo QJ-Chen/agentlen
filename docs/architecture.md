@@ -1,281 +1,297 @@
-# AgentLens 架构设计文档
+# AgentLens 架构设计
 
-## 1. 系统概述
+## 系统概述
 
-AgentLens 是一个轻量级 Agent 执行观测平台，支持监控 OpenClaw、Claude Code、Kimi Code 等真实 Agent 的执行过程。
+AgentLens 是一个轻量级 Agent 执行观测平台，支持监控 Claude Code、Kimi Code、OpenClaw 等 Agent 的执行过程。
 
-## 2. 核心设计原则
+## 核心设计原则
 
-- **轻量级**：适合中小团队，资源占用低
-- **多平台**：统一适配不同 Agent 框架
-- **低开销**：最小化对 Agent 性能的影响
-- **成本敏感**：Token 消耗优化
+- **轻量级**: 默认 SQLite，零配置启动
+- **多平台**: 统一适配不同 Agent 框架
+- **低开销**: 异步写入，不阻塞 Agent
+- **成本敏感**: Token 消耗实时监控
 
-## 3. 系统架构
+## 系统架构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        AgentLens                             │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
-│  │   SDKs      │    │  Collector  │    │   Storage   │     │
-│  │             │───→│             │───→│             │     │
-│  │ - OpenClaw  │    │ - Intercept │    │ - SQLite    │     │
-│  │ - Claude    │    │ - Batch     │    │ - PostgreSQL│     │
-│  │ - Kimi      │    │ - Async     │    │ - File      │     │
-│  └─────────────┘    └─────────────┘    └─────────────┘     │
-│         │                  │                  │              │
-│         └──────────────────┴──────────────────┘              │
+│  ┌─────────────────┐    ┌─────────────┐    ┌─────────────┐  │
+│  │  Session Scanner│    │  Collector  │    │   Storage   │  │
+│  │                 │───→│             │───→│             │  │
+│  │ - Claude Code   │    │ - Batch     │    │ - SQLite    │  │
+│  │ - Kimi Code     │    │ - Async     │    │ - PostgreSQL│  │
+│  │ - OpenClaw      │    │             │    │             │  │
+│  └─────────────────┘    └─────────────┘    └─────────────┘  │
+│           │                    │                  │          │
+│           └────────────────────┴──────────────────┘          │
 │                            │                                 │
 │                            ↓                                 │
 │                   ┌─────────────────┐                        │
 │                   │    API Server   │                        │
-│                   │   (FastAPI)     │                        │
+│                   │    (FastAPI)    │                        │
 │                   └────────┬────────┘                        │
 │                            │                                 │
 │                            ↓                                 │
 │                   ┌─────────────────┐                        │
-│                   │   Dashboard     │                        │
-│                   │   (React)       │                        │
+│                   │    Dashboard    │                        │
+│                   │    (React)      │                        │
 │                   └─────────────────┘                        │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 4. 数据模型
+## 核心模块
 
-### 4.1 Trace（执行追踪）
+### 1. Session Scanner
 
-```python
-class Trace:
-    trace_id: str          # 唯一标识
-    platform: str          # 平台类型 (openclaw, claude, kimi)
-    agent_name: str        # Agent 名称
-    session_id: str        # 会话标识
-    
-    # 时间
-    start_time: datetime
-    end_time: datetime
-    duration_ms: int
-    
-    # LLM 调用
-    model: str             # 模型名称
-    prompt: str            # 输入提示
-    response: str          # 输出响应
-    input_tokens: int
-    output_tokens: int
-    cost_usd: float
-    
-    # 工具调用
-    tool_calls: List[ToolCall]
-    
-    # 元数据
-    status: str            # success, error, cancelled
-    error_message: str
-    metadata: dict         # 平台特定数据
-```
+扫描历史 Agent 执行记录，支持多平台:
 
-### 4.2 ToolCall（工具调用）
+- **Claude Code**: `~/.claude/projects/*.jsonl`
+- **Kimi Code**: `~/.kimi/sessions/*/wire.jsonl`
+- **OpenClaw**: `~/.openclaw/subagents/runs.json`
+
+### 2. Collector
+
+数据收集 SDK，支持手动埋点:
 
 ```python
-class ToolCall:
-    call_id: str
-    tool_name: str
-    input_args: dict
-    output_result: any
-    duration_ms: int
-    status: str
+from workflow_tracer import trace_session
+
+with trace_session("agent-name", "platform") as tracer:
+    tracer.trace_tool(...)
+    tracer.trace_llm(...)
 ```
 
-### 4.3 Session（会话）
+### 3. Storage
 
-```python
-class Session:
-    session_id: str
-    platform: str
-    start_time: datetime
-    end_time: datetime
-    total_traces: int
-    total_tokens: int
-    total_cost: float
-```
+数据存储层，支持多种后端:
 
-## 5. 多平台适配
+- **SQLiteStorage**: 本地文件，默认选项
+- **PostgreSQLStorage**: 生产环境
+- **JSONLStorage**: 追加写入，易于分析
 
-### 5.1 OpenClaw 适配
+### 4. API Server
 
-```python
-# 通过拦截 tool calls 和 LLM 请求
-class OpenClawAdapter:
-    def intercept_tool_call(self, tool_name, args):
-        trace = self.start_trace("tool_call", tool_name)
-        result = self.original_call(tool_name, args)
-        self.end_trace(trace, result)
-        return result
-    
-    def intercept_llm_call(self, model, prompt):
-        trace = self.start_trace("llm_call", model)
-        response = self.original_llm_call(model, prompt)
-        self.end_trace(trace, response)
-        return response
-```
+FastAPI 提供 REST 接口:
 
-### 5.2 Claude Code 适配
+- `POST /api/v1/traces` - 写入 trace
+- `GET /api/v1/traces` - 查询 traces
+- `GET /api/v1/stats` - 获取统计
 
-```python
-# 通过 srt (system runtime) 拦截
-class ClaudeCodeAdapter:
-    def hook_into_srt(self):
-        # 拦截 srt 的工具调用
-        # 记录到 AgentLens
-        pass
-```
+### 5. Dashboard
 
-### 5.3 Kimi Code 适配
+React 前端展示:
 
-```python
-# 通过 MCP 协议拦截
-class KimiCodeAdapter:
-    def intercept_mcp_call(self, server, tool, args):
-        trace = self.start_trace("mcp", f"{server}.{tool}")
-        result = self.original_mcp_call(server, tool, args)
-        self.end_trace(trace, result)
-        return result
-```
-
-## 6. 存储方案
-
-### 6.1 轻量级（默认）
-- **SQLite**: 本地文件，零配置
-- **JSONL**: 追加写入，易于分析
-
-### 6.2 生产级
-- **PostgreSQL**: 关系型，支持复杂查询
-- **ClickHouse**: 时序数据，高性能分析
-
-### 6.3 数据保留策略
-```python
-# 自动清理旧数据
-retention_days = 30
-max_storage_mb = 1000
-```
-
-## 7. API 设计
-
-### 7.1 Trace API
-
-```python
-# 写入 Trace
-POST /api/v1/traces
-{
-    "platform": "openclaw",
-    "agent_name": "main",
-    "model": "claude-3-5-sonnet",
-    "prompt": "...",
-    "response": "...",
-    "tool_calls": [...]
-}
-
-# 查询 Traces
-GET /api/v1/traces?platform=openclaw&start_time=...&end_time=...
-
-# 获取统计
-GET /api/v1/stats?period=24h
-{
-    "total_traces": 1000,
-    "total_tokens": 500000,
-    "total_cost": 1.25,
-    "avg_latency_ms": 2500
-}
-```
-
-### 7.2 Session API
-
-```python
-# 创建 Session
-POST /api/v1/sessions
-
-# 结束 Session
-PUT /api/v1/sessions/{id}/end
-
-# 获取 Session 详情
-GET /api/v1/sessions/{id}
-```
-
-## 8. Dashboard 功能
-
-### 8.1 实时视图
-- 当前执行列表
-- 实时成本统计
-- Agent 状态监控
-
-### 8.2 Trace 分析
-- 时序图（类似 Chrome DevTools）
+- Trace 列表
 - 工具调用链
-- 延迟分析
+- LLM 对话详情
+- 成本统计
 
-### 8.3 成本优化
-- Token 消耗趋势
-- 成本分解（按平台/模型/Agent）
-- 优化建议
+## 数据模型
 
-## 9. 性能优化
+### Trace
 
-### 9.1 数据收集
-- 异步写入（不阻塞 Agent）
-- 批量上报（减少网络开销）
-- 本地队列（网络故障时缓冲）
-
-### 9.2 存储优化
-- 数据压缩（Snappy/Zstd）
-- 自动分区（按时间）
-- 索引优化（trace_id, session_id, timestamp）
-
-## 10. 安全考虑
-
-- 敏感数据脱敏（API keys, tokens）
-- 本地优先（数据不出境）
-- 可选加密存储
-
-## 11. 部署方案
-
-### 11.1 本地开发
-```bash
-pip install agentlens
-agentlens server --local
+```python
+@dataclass
+class Trace:
+    trace_id: str              # 唯一标识
+    platform: str              # 平台类型
+    agent_name: str            # Agent 名称
+    session_id: str            # Session ID
+    
+    start_time: datetime       # 开始时间
+    end_time: datetime         # 结束时间
+    duration_ms: int           # 执行时长
+    
+    model: str                 # 模型名称
+    prompt: str                # 输入提示
+    response: str              # 输出响应
+    input_tokens: int          # 输入 Token
+    output_tokens: int         # 输出 Token
+    cost_usd: float            # 成本
+    
+    tool_calls: List[Dict]     # 工具调用
+    status: str                # 状态
+    error_message: str         # 错误信息
 ```
 
-### 11.2 团队共享
-```bash
-docker run -p 8080:8080 agentlens/server
+### ToolCall
+
+```python
+@dataclass
+class ToolCall:
+    name: str                  # 工具名称
+    input: Dict                # 输入参数
+    output: Any                # 输出结果
+    tool_use_id: str           # 调用 ID
+    timestamp: float           # 时间戳
+    duration_ms: int = 0       # 执行时长
 ```
 
-### 11.3 云托管
-- 支持 BYOC（Bring Your Own Cloud）
-- AWS/GCP/Azure 一键部署
+## 多平台适配
 
-## 12. 路线图
+### Claude Code
 
-### Phase 1 (Week 1)
-- [x] 基础架构设计
-- [ ] OpenClaw SDK
-- [ ] SQLite 存储
-- [ ] 基础 Dashboard
+解析 JSONL 文件，提取:
+- 用户输入 (user)
+- 助手响应 (assistant)
+- 工具调用 (tool_use/tool_result)
+- Token 使用 (usage)
 
-### Phase 2 (Week 2)
-- [ ] Claude Code 适配
-- [ ] Kimi Code 适配
-- [ ] Trace 可视化
-- [ ] 成本分析
+### Kimi Code
 
-### Phase 3 (Week 3)
-- [ ] PostgreSQL 支持
-- [ ] 高级查询
-- [ ] 告警系统
-- [ ] 性能优化
+解析 wire.jsonl (NDJSON)，提取:
+- TurnBegin (用户输入)
+- ToolCall / ToolResult
+- ContentPart (LLM 响应)
+- StatusUpdate (Token 使用)
 
-### Phase 4 (Week 4)
-- [ ] 文档完善
-- [ ] 测试覆盖
-- [ ] 发布准备
+### OpenClaw
+
+解析 runs.json，提取:
+- Subagent 执行记录
+- 任务和结果
+- 状态和时长
+
+## 存储方案
+
+### SQLite (默认)
+
+```python
+# 配置
+DB_PATH = ~/.agentlens/agentlens.db
+
+# 特点
+- 零配置
+- 单文件
+- 适合个人/小团队
+```
+
+### PostgreSQL (生产)
+
+```python
+# 配置
+DATABASE_URL = postgresql://user:pass@host/db
+
+# 特点
+- 高并发
+- 复杂查询
+- 适合团队
+```
+
+## API 设计
+
+### 写入 Trace
+
+```http
+POST /api/v1/traces
+Content-Type: application/json
+
+{
+    "trace_id": "uuid",
+    "platform": "claude-code",
+    "agent_name": "my-agent",
+    "model": "claude-3-5-sonnet",
+    "prompt": "Hello",
+    "response": "Hi!",
+    "input_tokens": 10,
+    "output_tokens": 5,
+    "cost_usd": 0.0002,
+    "tool_calls": [],
+    "status": "success"
+}
+```
+
+### 查询 Traces
+
+```http
+GET /api/v1/traces?platform=claude-code&limit=50
+
+Response:
+{
+    "traces": [...],
+    "total": 100
+}
+```
+
+### 获取统计
+
+```http
+GET /api/v1/stats?period_hours=24
+
+Response:
+{
+    "total_traces": 100,
+    "total_tokens": 50000,
+    "total_cost": 0.5,
+    "platforms": [...],
+    "models": [...]
+}
+```
+
+## Dashboard 功能
+
+### Trace 列表
+
+- 平台筛选
+- 时间排序
+- 搜索过滤
+
+### Trace 详情
+
+- 概览: 基本信息、Token、成本
+- 工具: 调用链、参数、结果
+- LLM: 完整提示词和响应
+- 原始: JSON 数据
+
+### 统计面板
+
+- 平台分布
+- 模型使用
+- 成本趋势
+- Token 消耗
+
+## 性能优化
+
+### 数据收集
+
+- 异步写入
+- 批量上报
+- 本地队列缓冲
+
+### 存储优化
+
+- 索引: trace_id, session_id, timestamp
+- 分页查询
+- 数据压缩
+
+### 前端优化
+
+- 虚拟列表
+- 自动刷新 (3s 间隔)
+- 懒加载详情
+
+## 路线图
+
+### v0.1.0 (当前)
+- ✅ Session Scanner (Claude, Kimi, OpenClaw)
+- ✅ SQLite + FastAPI
+- ✅ React Dashboard
+- ✅ 成本统计
+
+### v0.2.0 (计划)
+- 🔄 WebSocket 实时推送
+- 🔄 更多平台适配 (Cursor, Copilot)
+- 🔄 告警系统
+
+### v0.3.0 (计划)
+- 📋 PostgreSQL 支持
+- 📋 高级查询
+- 📋 数据导出
+
+## License
+
+MIT

@@ -1,134 +1,96 @@
 # AgentLens 数据来源说明
 
+本文档说明 AgentLens 的数据来源、流向和存储结构。
+
 ## 数据流向
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      数据来源层                              │
 ├─────────────────────────────────────────────────────────────┤
-│  1. Project Watcher        2. Session Scanner               │
-│     (project_watcher.py)      (session_scanner.py)          │
-│     - 文件系统监控            - OpenClaw runs.json          │
-│     - 文件创建/修改事件       - Kimi sessions               │
-│     - Token 估算              - Claude Code sessions        │
-├─────────────────────────────────────────────────────────────┤
-│  3. Workflow Tracer          4. Manual API Calls            │
-│     (workflow_tracer.py)      (curl / python)               │
-│     - 工具调用追踪            - 手动提交 trace              │
-│     - LLM 调用追踪                                          │
-│     - 完整输入输出                                          │
+│  Session Scanner                                            │
+│  - Claude Code: ~/.claude/projects/*.jsonl                  │
+│  - Kimi Code: ~/.kimi/sessions/*/wire.jsonl                 │
+│  - OpenClaw: ~/.openclaw/subagents/runs.json                │
 ├─────────────────────────────────────────────────────────────┤
 │                      数据存储层                              │
 ├─────────────────────────────────────────────────────────────┤
-│  SQLite Database: ~/.agentlens/agentlens.db                 │
-│  - traces 表: 所有 trace 数据                               │
-│  - sessions 表: session 聚合信息                            │
+│  SQLite: ~/.agentlens/agentlens.db                          │
+│  - traces 表: 执行追踪数据                                  │
 ├─────────────────────────────────────────────────────────────┤
 │                      API 服务层                              │
 ├─────────────────────────────────────────────────────────────┤
-│  FastAPI Server: http://localhost:8080                      │
-│  - POST /api/v1/traces       - 接收 trace 数据              │
-│  - GET  /api/v1/traces       - 查询 trace 列表              │
-│  - GET  /api/v1/stats        - 获取统计数据                 │
+│  FastAPI: http://localhost:8080                             │
+│  - POST /api/v1/traces                                      │
+│  - GET  /api/v1/traces                                      │
+│  - GET  /api/v1/stats                                       │
 ├─────────────────────────────────────────────────────────────┤
 │                      展示层                                  │
 ├─────────────────────────────────────────────────────────────┤
 │  Dashboard: http://localhost:5177                           │
 │  - Trace 列表                                               │
-│  - 详细调用链 (工具参数、LLM 提示词)                        │
+│  - 工具调用详情                                             │
+│  - LLM 对话内容                                             │
 │  - 统计分析                                                 │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 当前数据来源
+## 平台数据格式
 
-### 1. Project Watcher (agentlens-dev)
+### Claude Code
 
-**来源文件**: `project_watcher.py`
+**文件位置**: `~/.claude/projects/<project>/<session>.jsonl`
 
-**监控内容**:
-- 文件创建事件 (`file_created`)
-- 文件修改事件 (`file_modified`)
-- Token 数估算 (基于文件大小)
+**数据内容**:
+- 完整对话历史 (user/assistant)
+- 工具调用 (tool_use/tool_result)
+- Token 使用统计
+- 模型信息
 
-**数据字段**:
+**示例**:
 ```json
-{
-  "platform": "agentlens-dev",
-  "agent_name": "agentlens-dev",
-  "model": "file_modified",
-  "prompt": "File: dashboard/src/App.tsx",
-  "tool_calls": [],
-  "response": ""
-}
+{"type": "user", "content": "Hello"}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "Hi!"}], "usage": {"input_tokens": 10, "output_tokens": 5}}}
 ```
 
-**用途**: 监控项目文件变化，了解开发活动
+### Kimi Code
 
----
+**文件位置**: `~/.kimi/sessions/<session>/<uuid>/wire.jsonl`
 
-### 2. Session Scanner (openclaw / kimi-code)
+**数据内容**:
+- TurnBegin (用户输入)
+- ToolCall / ToolResult
+- ContentPart (LLM 响应)
+- StatusUpdate (Token 使用)
 
-**来源文件**: `session_scanner.py`
-
-**扫描位置**:
-- `~/.openclaw/subagents/runs.json` - OpenClaw subagent 执行记录
-- `~/.kimi/` - Kimi Code sessions
-- `~/.codex/sessions/` - Claude Code sessions (待配置)
-
-**数据字段** (OpenClaw):
+**示例**:
 ```json
-{
-  "platform": "openclaw",
-  "agent_name": "openclaw-agent",
-  "model": "moonshot/kimi-k2.5",
-  "prompt": "[任务描述]",
-  "response": "[执行结果]",
-  "duration_ms": 300000,
-  "status": "success|timeout|error",
-  "tool_calls": [...]
-}
+{"timestamp": 1234567890, "message": {"type": "TurnBegin", "payload": {"user_input": "Hello"}}}
+{"timestamp": 1234567891, "message": {"type": "ToolCall", "payload": {"function": {"name": "ReadFile", "arguments": "{}"}}}}
 ```
 
-**用途**: 分析历史 Agent 执行情况
+### OpenClaw
 
----
+**文件位置**: `~/.openclaw/subagents/runs.json`
 
-### 3. Workflow Tracer (深度追踪)
+**数据内容**:
+- Subagent 执行记录
+- 任务描述和结果
+- 状态 (ok/error/timeout)
+- 执行时长
 
-**来源文件**: `workflow_tracer.py`
-
-**追踪内容**:
-- 工具调用 (名称、输入参数、输出结果、耗时)
-- LLM 调用 (模型、提示词、响应、Token、成本)
-- 完整调用链
-
-**数据字段**:
+**示例**:
 ```json
 {
-  "platform": "openclaw",
-  "agent_name": "my-agent",
-  "model": "gpt-4",
-  "prompt": "完整提示词内容...",
-  "response": "LLM 响应内容...",
-  "input_tokens": 500,
-  "output_tokens": 150,
-  "cost_usd": 0.015,
-  "duration_ms": 2500,
-  "tool_calls": [
-    {
-      "name": "read_file",
-      "input": {"path": "/tmp/test.txt"},
-      "output": "文件内容...",
-      "duration_ms": 50
-    }
-  ]
+  "runs": [{
+    "runId": "uuid",
+    "label": "task-name",
+    "frozenResultText": "result",
+    "status": "ok",
+    "durationMs": 5000
+  }]
 }
 ```
-
-**用途**: 深度分析 Agent 工作流程
-
----
 
 ## 数据存储结构
 
@@ -138,64 +100,39 @@
 CREATE TABLE traces (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     trace_id TEXT UNIQUE,          -- 唯一标识
-    platform TEXT,                  -- 平台 (openclaw, claude-code, etc.)
+    platform TEXT,                  -- 平台 (claude-code, kimi-code, openclaw)
     agent_name TEXT,                -- Agent 名称
     session_id TEXT,                -- Session ID
-    start_time TEXT,                -- 开始时间
+    start_time TEXT,                -- 开始时间 (ISO 8601)
     end_time TEXT,                  -- 结束时间
     duration_ms INTEGER,            -- 执行时长
-    model TEXT,                     -- 模型/工具名称
+    model TEXT,                     -- 模型名称
     prompt TEXT,                    -- 提示词/输入
     response TEXT,                  -- 响应/输出
     input_tokens INTEGER,           -- 输入 Token 数
     output_tokens INTEGER,          -- 输出 Token 数
     cost_usd REAL,                  -- 成本 (USD)
-    tool_calls TEXT,                -- 工具调用 JSON
-    status TEXT,                    -- 状态
+    tool_calls TEXT,                -- 工具调用 JSON 数组
+    status TEXT,                    -- 状态 (success/error/timeout)
     error_message TEXT,             -- 错误信息
-    created_at TIMESTAMP            -- 创建时间
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
----
+## 添加新数据来源
 
-## 当前数据概况
+### 方式 1: 扩展 Session Scanner
 
-```
-总 Traces: 26
-├── agentlens-dev: 20 traces (文件监控)
-├── yiliansheng-agent: 4 traces (文件监控)
-└── claude-code: 2 traces (测试数据)
-```
-
----
-
-## 如何添加新的数据来源
-
-### 方式 1: 使用 Workflow Tracer (推荐)
+编辑 `session_scanner.py`，添加新的解析方法:
 
 ```python
-from workflow_tracer import trace_session
-
-with trace_session("my-agent", "openclaw") as tracer:
-    # 记录工具调用
-    tracer.trace_tool(
-        tool_name="search",
-        input_args={"query": "AI"},
-        output=results,
-        duration_ms=1200
-    )
-    
-    # 记录 LLM 调用
-    tracer.trace_llm(
-        model="gpt-4",
-        prompt="Your prompt",
-        response="LLM response",
-        input_tokens=100,
-        output_tokens=50,
-        cost_usd=0.002,
-        duration_ms=2000
-    )
+def _scan_new_platform(self, dir_path: Path) -> List[Dict]:
+    sessions = []
+    for session_file in dir_path.glob('*.json'):
+        data = self._parse_new_format(session_file)
+        if data:
+            sessions.append(data)
+    return sessions
 ```
 
 ### 方式 2: 直接调用 API
@@ -210,39 +147,24 @@ curl -X POST http://localhost:8080/api/v1/traces \
     "model": "gpt-4",
     "prompt": "input",
     "response": "output",
-    "tool_calls": [{"name": "tool1", "input": {}, "output": {}}]
+    "input_tokens": 100,
+    "output_tokens": 50,
+    "cost_usd": 0.002
   }'
 ```
 
-### 方式 3: 扩展 Session Scanner
+## 数据质量
 
-编辑 `session_scanner.py`，添加新的 session 目录解析逻辑。
+| 平台 | 详细程度 | Token 准确性 | 实时性 |
+|------|---------|-------------|--------|
+| Claude Code | ⭐⭐⭐⭐⭐ | 高 (API 返回) | 历史扫描 |
+| Kimi Code | ⭐⭐⭐⭐ | 高 (API 返回) | 历史扫描 |
+| OpenClaw | ⭐⭐⭐ | 估算 | 历史扫描 |
 
----
+## 注意事项
 
-## 数据质量说明
-
-| 数据来源 | 详细程度 | 实时性 | 用途 |
-|---------|---------|--------|------|
-| Project Watcher | ⭐⭐ 文件级 | 实时 | 开发活动监控 |
-| Session Scanner | ⭐⭐⭐ Session 级 | 准实时 | 历史分析 |
-| Workflow Tracer | ⭐⭐⭐⭐⭐ 调用级 | 实时 | 深度分析 |
-
----
-
-## 下一步改进
-
-1. **集成真实 Agent 工具**
-   - OpenClaw 插件拦截
-   - Claude Code hook
-   - Kimi Code 适配器
-
-2. **增强数据内容**
-   - 捕获完整 HTTP 请求/响应
-   - 记录系统资源使用
-   - 追踪错误堆栈
-
-3. **数据持久化优化**
-   - 数据压缩
-   - 自动归档
-   - 导出功能
+1. **Token 计算**: Claude/Kimi 使用 API 返回的真实值，OpenClaw 基于字符数估算
+2. **成本计算**: 基于各平台官方定价
+   - Claude Sonnet: $3/M input, $15/M output
+   - Kimi K2.5: $2/M input, $8/M output
+3. **数据隐私**: 所有数据存储在本地 SQLite，不会上传到云端
