@@ -51,10 +51,12 @@ class SessionScanner:
             'openclaw': Path.home() / '.openclaw' / 'sessions',
             'kimi-code': Path.home() / '.kimi' / 'sessions',
         }
+        self.claude_projects_dir = Path.home() / '.claude' / 'projects'
         self.openclaw_runs_file = Path.home() / '.openclaw' / 'subagents' / 'runs.json'
         self.processed_files = set()
         self.agent_name = "session-scanner"
         self.processed_run_ids = set()
+        self.processed_claude_sessions = set()
         
     def scan_sessions(self) -> List[Dict[str, Any]]:
         """扫描所有 session 目录"""
@@ -75,6 +77,12 @@ class SessionScanner:
             openclaw_sessions = self._scan_openclaw_runs()
             all_sessions.extend(openclaw_sessions)
             print(f"  ✓ openclaw-runs: 发现 {len(openclaw_sessions)} 个 runs")
+        
+        # 扫描 Claude Code projects (详细记录)
+        if self.claude_projects_dir.exists():
+            claude_sessions = self._scan_claude_projects()
+            all_sessions.extend(claude_sessions)
+            print(f"  ✓ claude-projects: 发现 {len(claude_sessions)} 个详细 sessions")
         
         return all_sessions
     
@@ -123,6 +131,169 @@ class SessionScanner:
             print(f"    ⚠️ 解析 OpenClaw runs 失败: {e}")
         
         return sessions
+    
+    def _scan_claude_projects(self) -> List[Dict]:
+        """扫描 Claude Code projects 目录 (详细记录)"""
+        sessions = []
+        
+        try:
+            # 遍历所有 project 目录
+            for project_dir in self.claude_projects_dir.iterdir():
+                if not project_dir.is_dir():
+                    continue
+                
+                # 查找 jsonl 文件
+                jsonl_files = list(project_dir.glob('*.jsonl'))
+                
+                for jsonl_file in jsonl_files:
+                    session_id = jsonl_file.stem
+                    if session_id in self.processed_claude_sessions:
+                        continue
+                    
+                    session = self._parse_claude_jsonl(jsonl_file, project_dir.name)
+                    if session:
+                        sessions.append(session)
+                        self.processed_claude_sessions.add(session_id)
+                        
+        except Exception as e:
+            print(f"    ⚠️ 扫描 Claude projects 失败: {e}")
+        
+        return sessions
+    
+    def _parse_claude_jsonl(self, jsonl_file: Path, project_name: str) -> Optional[Dict]:
+        """解析 Claude Code jsonl 文件"""
+        try:
+            tool_calls = []
+            llm_calls = []
+            messages = []
+            start_time = None
+            end_time = None
+            
+            with open(jsonl_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    try:
+                        event = json.loads(line)
+                    except:
+                        continue
+                    
+                    event_type = event.get('type')
+                    timestamp_raw = event.get('timestamp', time.time())
+                    # Handle ISO format timestamps
+                    if isinstance(timestamp_raw, str):
+                        from datetime import datetime
+                        try:
+                            # Try parsing ISO format
+                            dt = datetime.fromisoformat(timestamp_raw.replace('Z', '+00:00'))
+                            timestamp = dt.timestamp()
+                        except:
+                            timestamp = time.time()
+                    else:
+                        timestamp = timestamp_raw
+                    
+                    if not start_time:
+                        start_time = timestamp
+                    end_time = timestamp
+                    
+                    # 提取用户消息 (LLM 输入)
+                    if event_type == 'user':
+                        content = event.get('content', '')
+                        messages.append({
+                            'role': 'user',
+                            'content': content,
+                            'timestamp': timestamp
+                        })
+                        llm_calls.append({
+                            'model': 'claude-3-5-sonnet',
+                            'prompt': content,
+                            'timestamp': timestamp,
+                            'tokens': len(content) // 4
+                        })
+                    
+                    # 提取助手消息 (LLM 响应) 和工具调用
+                    elif event_type == 'assistant':
+                        message_data = event.get('message', {})
+                        content_parts = message_data.get('content', [])
+                        
+                        # Extract text content
+                        text_content = ''
+                        for part in content_parts:
+                            if part.get('type') == 'text':
+                                text_content += part.get('text', '')
+                            elif part.get('type') == 'tool_use':
+                                # Extract tool call
+                                tool_name = part.get('name', 'unknown')
+                                input_data = part.get('input', {})
+                                tool_use_id = part.get('id', '')
+                                
+                                tool_calls.append({
+                                    'name': tool_name,
+                                    'input': input_data,
+                                    'output': None,
+                                    'tool_use_id': tool_use_id,
+                                    'timestamp': timestamp
+                                })
+                            elif part.get('type') == 'tool_result':
+                                # Find matching tool call and update output
+                                result_id = part.get('tool_use_id', '')
+                                for tc in tool_calls:
+                                    if tc.get('tool_use_id') == result_id:
+                                        tc['output'] = part.get('content', '')
+                                        break
+                        
+                        # Get usage info
+                        usage = message_data.get('usage', {})
+                        input_tokens = usage.get('input_tokens', 0)
+                        output_tokens = usage.get('output_tokens', 0)
+                        model = message_data.get('model', 'claude-3-5-sonnet')
+                        
+                        messages.append({
+                            'role': 'assistant',
+                            'content': text_content,
+                            'timestamp': timestamp,
+                            'input_tokens': input_tokens,
+                            'output_tokens': output_tokens,
+                            'model': model
+                        })
+                        
+                        if llm_calls:
+                            llm_calls[-1]['response'] = text_content
+                            llm_calls[-1]['output_tokens'] = output_tokens
+                            llm_calls[-1]['input_tokens'] = input_tokens
+                            llm_calls[-1]['model'] = model
+            
+            if not messages and not tool_calls:
+                return None
+            
+            # 计算统计
+            duration_ms = int((end_time - start_time) * 1000) if end_time and start_time else 0
+            total_input_tokens = sum(m.get('input_tokens', 0) for m in llm_calls)
+            total_output_tokens = sum(m.get('output_tokens', 0) for m in llm_calls)
+            total_tokens = total_input_tokens + total_output_tokens
+            # Claude 3.5 Sonnet: $3/M input, $15/M output
+            total_cost = (total_input_tokens * 0.000003) + (total_output_tokens * 0.000015)
+            
+            return {
+                'session_id': jsonl_file.stem[:20],
+                'platform': 'claude-code',
+                'project': project_name,
+                'file_path': str(jsonl_file),
+                'start_time': start_time or time.time(),
+                'message_count': len(messages),
+                'tool_calls': tool_calls,
+                'llm_calls': llm_calls,
+                'total_tokens': total_tokens,
+                'total_cost': total_cost,
+                'duration_ms': duration_ms,
+                'status': 'success'
+            }
+            
+        except Exception as e:
+            print(f"    ⚠️ 解析 {jsonl_file.name} 失败: {e}")
+            return None
     
     def _parse_openclaw_run(self, run_id: str, run_data: Dict) -> Optional[Dict]:
         """解析单个 OpenClaw run"""
@@ -328,8 +499,13 @@ class SessionScanner:
                 print(f"  Label: {session.get('label', 'N/A')}")
                 print(f"  Status: {session.get('status', 'unknown')}")
                 print(f"  Duration: {session.get('duration_ms', 0)}ms")
+            elif session['platform'] == 'claude-code' and session.get('project'):
+                print(f"  Project: {session['project']}")
             print(f"  Messages: {session['message_count']}")
             print(f"  Tool Calls: {len(session['tool_calls'])}")
+            if session.get('tool_calls'):
+                for tc in session['tool_calls'][:3]:
+                    print(f"    - {tc.get('name', 'unknown')}: {str(tc.get('input', {}))[:60]}...")
             print(f"  LLM Calls: {len(session['llm_calls'])}")
             print(f"  Tokens: {session['total_tokens']}")
             print(f"  Cost: ${session['total_cost']:.4f}")
