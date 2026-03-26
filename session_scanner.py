@@ -591,7 +591,7 @@ class SessionScanner:
             "input_tokens": session['total_tokens'],
             "output_tokens": 0,
             "cost_usd": session['total_cost'],
-            "tool_calls": json.dumps(session['tool_calls']),
+            "tool_calls": session['tool_calls'],
             "status": status,
             "error_message": error
         }
