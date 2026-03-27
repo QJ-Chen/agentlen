@@ -1,73 +1,85 @@
-# React + TypeScript + Vite
+# AgentLens Dashboard v0.2.0
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Agent 行为监控与可视化 Dashboard。
 
-Currently, two official plugins are available:
+## 功能特性
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### 1. 列表视图 (List View)
+- 所有 Agent 执行记录列表
+- 支持搜索和平台筛选
+- 点击 Trace 查看详细信息
 
-## React Compiler
+### 2. Agent 交互图 (Interaction Graph)
+三种可视化模式：
+- **流程图**: Agent 间调用关系拓扑
+- **会话流**: 按 Session 展示执行序列
+- **调用矩阵**: Agent 间调用次数统计
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 3. 实时状态 (Realtime Status)
+- 运行中任务实时追踪
+- 进度条显示
+- 当前执行步骤
+- 最近完成任务列表
 
-## Expanding the ESLint configuration
+### 4. 详细信息面板
+- **概览**: 关键指标、Agent 信息、执行摘要
+- **时序**: 可视化时间轴
+- **工具**: 工具调用详情（可折叠、可复制）
+- **LLM**: LLM 调用详情（Prompt/Response）
+- **原始**: 完整 JSON 数据
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+## 技术栈
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+- React 19 + TypeScript
+- Vite
+- Tailwind CSS
+- Lucide React (图标)
+- Recharts (图表)
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+## 开发
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+cd dashboard
+npm install
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 构建
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run build
 ```
+
+## API 端点
+
+- `GET /api/v1/traces` - 获取 Traces 列表
+- `GET /api/v1/stats` - 获取统计数据
+
+## 截图
+
+### 列表视图
+![List View](./screenshots/list-view.png)
+
+### Agent 交互图
+![Interaction Graph](./screenshots/interaction-graph.png)
+
+### 实时状态
+![Realtime Status](./screenshots/realtime-status.png)
+
+### 详细信息
+![Detail Panel](./screenshots/detail-panel.png)
+
+## 更新日志
+
+### v0.2.0 (2026-03-27)
+- 新增增强时序图组件
+- 新增 Agent 交互图（三种视图）
+- 新增实时状态面板
+- 优化详细信息面板
+- 支持工具调用详情折叠
+- 支持一键复制 JSON
+
+### v0.1.0 (2026-03-26)
+- 基础 Dashboard 实现
+- Trace 列表和详情
+- 基础统计面板
