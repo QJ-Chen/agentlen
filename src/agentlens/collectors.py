@@ -186,7 +186,7 @@ class LogCollector(ABC):
             time.sleep(interval)
     
     def _check_files(self):
-        """检查文件变化"""
+        """检查文件变化，只解析新增内容"""
         for log_path in self.get_log_paths():
             if not log_path.exists():
                 continue
@@ -196,14 +196,39 @@ class LogCollector(ABC):
             
             if current_size > last_position:
                 try:
-                    traces = self.parse_session_file(log_path)
-                    for trace in traces:
-                        self.storage.save_trace(trace)
+                    # 只解析新增的行
+                    new_lines = []
+                    with open(log_path, 'r', encoding='utf-8') as f:
+                        f.seek(last_position)
+                        new_lines = f.readlines()
+                    
+                    if new_lines:
+                        # 获取 session 基本信息
+                        session_id = log_path.stem
+                        session_cwd = ""
+                        
+                        # 尝试从已解析的数据中获取 cwd
+                        with open(log_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                try:
+                                    data = json.loads(line.strip())
+                                    if data.get("type") == "session" and data.get("cwd"):
+                                        session_cwd = data.get("cwd", "")
+                                        break
+                                except:
+                                    pass
+                        
+                        # 解析新增的消息并保存
+                        self._parse_new_lines(log_path, new_lines, session_id, session_cwd)
                     
                     self.file_positions[log_path] = current_size
                 
                 except Exception as e:
                     logger.error(f"Error processing {log_path}: {e}")
+    
+    def _parse_new_lines(self, log_path: Path, new_lines: List[str], session_id: str, session_cwd: str):
+        """解析新增的行并保存到数据库（子类需要重写）"""
+        pass
     
     def collect_historical(self) -> List[Dict[str, Any]]:
         """收集历史日志"""
