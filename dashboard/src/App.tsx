@@ -63,7 +63,11 @@ const TraceListItem = ({
 
   return (
     <div
-      onClick={onClick}
+      onClick={(e) => {
+        e.stopPropagation();
+        console.log('TraceListItem clicked, calling onClick');
+        onClick();
+      }}
       className={`p-3 rounded-lg cursor-pointer transition-all ${
         isSelected
           ? 'bg-blue-600 text-white shadow-lg'
@@ -282,6 +286,14 @@ function App() {
       setTraces(transformedTraces);
       setStats(statsData);
       setError(null);
+      
+      // 保持当前选中的 trace 更新
+      if (selectedTrace) {
+        const updatedSelected = transformedTraces.find((t: any) => t.id === selectedTrace.id);
+        if (updatedSelected) {
+          setSelectedTrace(updatedSelected);
+        }
+      }
     } catch (err) {
       setError('无法连接到 API 服务器');
     } finally {
@@ -479,7 +491,10 @@ function App() {
                         key={trace.id}
                         trace={trace}
                         isSelected={selectedTrace?.id === trace.id}
-                        onClick={() => setSelectedTrace(trace)}
+                        onClick={() => {
+                          console.log('Trace clicked:', trace.id);
+                          setSelectedTrace(trace);
+                        }}
                       />
                     ))
                   )}
