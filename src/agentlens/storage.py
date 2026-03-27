@@ -57,10 +57,16 @@ class SQLiteStorage(Storage):
                     response TEXT,
                     input_tokens INTEGER,
                     output_tokens INTEGER,
+                    cache_read_tokens INTEGER,
+                    cache_write_tokens INTEGER,
+                    cache_creation_input_tokens INTEGER,
+                    cache_read_input_tokens INTEGER,
                     cost_usd REAL,
                     tool_calls TEXT,
                     status TEXT,
                     error_message TEXT,
+                    project_path TEXT,
+                    role TEXT,
                     metadata TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -103,8 +109,11 @@ class SQLiteStorage(Storage):
                     trace_id, platform, agent_name, session_id,
                     start_time, end_time, duration_ms, model,
                     prompt, response, input_tokens, output_tokens,
-                    cost_usd, tool_calls, status, error_message, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    cache_read_tokens, cache_write_tokens,
+                    cache_creation_input_tokens, cache_read_input_tokens,
+                    cost_usd, tool_calls, status, error_message,
+                    project_path, role, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trace.get("trace_id"),
                 trace.get("platform"),
@@ -118,10 +127,16 @@ class SQLiteStorage(Storage):
                 trace.get("response"),
                 trace.get("input_tokens"),
                 trace.get("output_tokens"),
+                trace.get("cache_read_tokens"),
+                trace.get("cache_write_tokens"),
+                trace.get("cache_creation_input_tokens"),
+                trace.get("cache_read_input_tokens"),
                 trace.get("cost_usd"),
                 json.dumps(trace.get("tool_calls", [])),
                 trace.get("status"),
                 trace.get("error_message"),
+                trace.get("project_path"),
+                trace.get("role"),
                 json.dumps(trace.get("metadata", {}))
             ))
     
@@ -134,8 +149,11 @@ class SQLiteStorage(Storage):
                         trace_id, platform, agent_name, session_id,
                         start_time, end_time, duration_ms, model,
                         prompt, response, input_tokens, output_tokens,
-                        cost_usd, tool_calls, status, error_message, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        cache_read_tokens, cache_write_tokens,
+                        cache_creation_input_tokens, cache_read_input_tokens,
+                        cost_usd, tool_calls, status, error_message,
+                        project_path, role, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     trace.get("trace_id"),
                     trace.get("platform"),
@@ -149,10 +167,16 @@ class SQLiteStorage(Storage):
                     trace.get("response"),
                     trace.get("input_tokens"),
                     trace.get("output_tokens"),
+                    trace.get("cache_read_tokens"),
+                    trace.get("cache_write_tokens"),
+                    trace.get("cache_creation_input_tokens"),
+                    trace.get("cache_read_input_tokens"),
                     trace.get("cost_usd"),
                     json.dumps(trace.get("tool_calls", [])),
                     trace.get("status"),
                     trace.get("error_message"),
+                    trace.get("project_path"),
+                    trace.get("role"),
                     json.dumps(trace.get("metadata", {}))
                 ))
     
@@ -196,16 +220,12 @@ class SQLiteStorage(Storage):
             for row in rows:
                 row_dict = dict(row)
                 # Parse JSON fields
-                if row_dict.get('tool_calls'):
-                    try:
-                        row_dict['tool_calls'] = json.loads(row_dict['tool_calls'])
-                    except:
-                        row_dict['tool_calls'] = []
-                if row_dict.get('metadata'):
-                    try:
-                        row_dict['metadata'] = json.loads(row_dict['metadata'])
-                    except:
-                        row_dict['metadata'] = {}
+                for field in ['tool_calls', 'metadata']:
+                    if row_dict.get(field):
+                        try:
+                            row_dict[field] = json.loads(row_dict[field])
+                        except:
+                            row_dict[field] = [] if field == 'tool_calls' else {}
                 results.append(row_dict)
             return results
     
