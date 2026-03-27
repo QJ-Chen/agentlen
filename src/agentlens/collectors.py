@@ -105,9 +105,16 @@ class LogCollector(ABC):
                 continue
             
             try:
+                # 从文件名提取 session_id
+                session_id = log_path.stem
+                
+                # 首先提取 cwd 信息
+                cwds = self._extract_cwd_from_session(log_path)
+                session_cwd = cwds.get(session_id, "")
+                
                 with open(log_path, 'r', encoding='utf-8') as f:
                     for line in f:
-                        trace = self.parse_log_entry(line.strip())
+                        trace = self.parse_log_entry(line.strip(), {"session_id": session_id, "cwd": session_cwd})
                         if trace:
                             traces.append(trace)
                 
@@ -118,6 +125,26 @@ class LogCollector(ABC):
                 logger.error(f"Error reading {log_path}: {e}")
         
         return traces
+    
+    def _extract_cwd_from_session(self, session_file: Path) -> Dict[str, str]:
+        """从 session 文件中提取所有 cwd"""
+        cwds = {}
+        if not session_file.exists():
+            return cwds
+        
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        data = json.loads(line.strip())
+                        if data.get("type") == "session" and data.get("cwd"):
+                            cwds[data.get("id", "")] = data.get("cwd")
+                    except:
+                        pass
+        except:
+            pass
+        
+        return cwds
 
 
 class OpenClawCollector(LogCollector):
@@ -179,16 +206,34 @@ class OpenClawCollector(LogCollector):
             usage = message.get("usage", {})
             cost = usage.get("cost", {})
             
+            # 确保 prompt/response 是字符串
+            prompt = None
+            response = None
+            if role == "user" and content:
+                if isinstance(content, str):
+                    prompt = content
+                elif isinstance(content, list):
+                    prompt = json.dumps(content)
+            elif role == "assistant" and content:
+                if isinstance(content, str):
+                    response = content
+                elif isinstance(content, list):
+                    response = json.dumps(content)
+            
+            # 获取 project_path 和 session_id
+            session_id = context.get("session_id") if context else data.get("sessionId")
+            project_path = context.get("cwd", "") if context else ""
+            
             return {
                 "trace_id": data.get("id"),
                 "platform": "openclaw",
                 "agent_name": data.get("agentId") or "main",
-                "session_id": data.get("sessionId"),
+                "session_id": session_id,
                 "start_time": data.get("timestamp"),
                 "model": message.get("model", "unknown"),
                 "role": role,
-                "prompt": content if role == "user" else None,
-                "response": content if role == "assistant" else None,
+                "prompt": prompt,
+                "response": response,
                 "input_tokens": usage.get("input", 0),
                 "output_tokens": usage.get("output", 0),
                 "cache_read_tokens": usage.get("cacheRead", 0),
@@ -196,6 +241,7 @@ class OpenClawCollector(LogCollector):
                 "cost_usd": cost.get("total", 0) if isinstance(cost, dict) else 0,
                 "tool_calls": tool_calls,
                 "status": "success" if role == "assistant" else "pending",
+                "project_path": project_path,
                 "metadata": {
                     "parent_id": data.get("parentId"),
                     "provider": message.get("provider"),
@@ -276,6 +322,20 @@ class ClaudeCodeCollector(LogCollector):
             cwd = data.get("cwd", "")
             project_name = Path(cwd).name if cwd else "unknown"
             
+            # 确保 prompt/response 是字符串
+            prompt = None
+            response = None
+            if role == "user" and content:
+                if isinstance(content, str):
+                    prompt = content
+                elif isinstance(content, list):
+                    prompt = json.dumps(content)
+            elif role == "assistant" and content:
+                if isinstance(content, str):
+                    response = content
+                elif isinstance(content, list):
+                    response = json.dumps(content)
+            
             return {
                 "trace_id": data.get("uuid"),
                 "platform": "claude-code",
@@ -284,8 +344,8 @@ class ClaudeCodeCollector(LogCollector):
                 "start_time": data.get("timestamp"),
                 "model": message.get("model", "unknown"),
                 "role": role,
-                "prompt": content if role == "user" and isinstance(content, str) else None,
-                "response": content if role == "assistant" else None,
+                "prompt": prompt,
+                "response": response,
                 "input_tokens": usage.get("input_tokens", 0),
                 "output_tokens": usage.get("output_tokens", 0),
                 "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
