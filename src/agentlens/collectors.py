@@ -1,4 +1,4 @@
-"""AgentLens Collectors - 多平台日志收集器（简化版，无 watchdog 依赖）"""
+"""AgentLens Collectors - 多平台日志收集器（Session 聚合版）"""
 
 import json
 import os
@@ -11,6 +11,119 @@ import time
 import threading
 
 logger = logging.getLogger(__name__)
+
+
+class SessionAggregator:
+    """Session 聚合器 - 将同一 session 的消息聚合成一个 trace"""
+    
+    def __init__(self):
+        self.sessions: Dict[str, Dict[str, Any]] = {}
+    
+    def add_message(self, session_id: str, message: Dict[str, Any]):
+        """添加消息到 session"""
+        if session_id not in self.sessions:
+            self.sessions[session_id] = {
+                "session_id": session_id,
+                "messages": [],
+                "tool_calls": [],
+                "llm_calls": [],
+                "start_time": None,
+                "end_time": None,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost": 0,
+                "project_path": "",
+                "platform": "",
+                "agent_name": "",
+            }
+        
+        session = self.sessions[session_id]
+        session["messages"].append(message)
+        
+        # 更新基本信息
+        if message.get("start_time"):
+            if not session["start_time"]:
+                session["start_time"] = message["start_time"]
+            session["end_time"] = message["start_time"]
+        
+        if message.get("project_path"):
+            session["project_path"] = message["project_path"]
+        
+        if message.get("platform"):
+            session["platform"] = message["platform"]
+        
+        if message.get("agent_name"):
+            session["agent_name"] = message["agent_name"]
+        
+        # 聚合 token 和成本
+        session["total_input_tokens"] += message.get("input_tokens", 0)
+        session["total_output_tokens"] += message.get("output_tokens", 0)
+        session["total_cost"] += message.get("cost_usd", 0)
+        
+        # 收集工具调用
+        if message.get("tool_calls"):
+            session["tool_calls"].extend(message["tool_calls"])
+        
+        # 收集 LLM 调用
+        if message.get("role") == "assistant" and message.get("model"):
+            session["llm_calls"].append({
+                "id": message.get("trace_id"),
+                "model": message.get("model"),
+                "start_time": message.get("start_time"),
+                "input_tokens": message.get("input_tokens", 0),
+                "output_tokens": message.get("output_tokens", 0),
+                "prompt": message.get("prompt"),
+                "response": message.get("response"),
+            })
+    
+    def get_traces(self) -> List[Dict[str, Any]]:
+        """获取聚合后的 traces"""
+        traces = []
+        
+        for session_id, session in self.sessions.items():
+            if not session["messages"]:
+                continue
+            
+            # 构建完整的 prompt 和 response
+            user_messages = [m for m in session["messages"] if m.get("role") == "user"]
+            assistant_messages = [m for m in session["messages"] if m.get("role") == "assistant"]
+            
+            # 获取第一条 user message 作为 prompt
+            first_prompt = None
+            if user_messages:
+                first_prompt = user_messages[0].get("prompt")
+            
+            # 获取最后一条 assistant message 作为 response
+            last_response = None
+            if assistant_messages:
+                last_response = assistant_messages[-1].get("response")
+            
+            trace = {
+                "trace_id": session_id,
+                "platform": session["platform"],
+                "agent_name": session["agent_name"] or "unknown",
+                "session_id": session_id,
+                "start_time": session["start_time"],
+                "end_time": session["end_time"],
+                "duration_ms": 0,  # 可以计算
+                "model": session["llm_calls"][-1]["model"] if session["llm_calls"] else "unknown",
+                "prompt": first_prompt,
+                "response": last_response,
+                "input_tokens": session["total_input_tokens"],
+                "output_tokens": session["total_output_tokens"],
+                "cost_usd": session["total_cost"],
+                "tool_calls": session["tool_calls"],
+                "status": "success",
+                "project_path": session["project_path"],
+                "metadata": {
+                    "message_count": len(session["messages"]),
+                    "llm_call_count": len(session["llm_calls"]),
+                }
+            }
+            
+            traces.append(trace)
+        
+        return traces
 
 
 class LogCollector(ABC):
@@ -33,8 +146,8 @@ class LogCollector(ABC):
         pass
     
     @abstractmethod
-    def parse_log_entry(self, line: str, context: Dict = None) -> Optional[Dict[str, Any]]:
-        """解析单条日志记录"""
+    def parse_session_file(self, log_path: Path) -> List[Dict[str, Any]]:
+        """解析整个 session 文件，返回聚合后的 traces"""
         pass
     
     def start_watching(self, interval: float = 1.0):
@@ -83,40 +196,26 @@ class LogCollector(ABC):
             
             if current_size > last_position:
                 try:
-                    with open(log_path, 'r', encoding='utf-8') as f:
-                        f.seek(last_position)
-                        new_lines = f.readlines()
-                        self.file_positions[log_path] = f.tell()
+                    traces = self.parse_session_file(log_path)
+                    for trace in traces:
+                        self.storage.save_trace(trace)
                     
-                    for line in new_lines:
-                        trace = self.parse_log_entry(line.strip())
-                        if trace:
-                            self.storage.save_trace(trace)
+                    self.file_positions[log_path] = current_size
                 
                 except Exception as e:
                     logger.error(f"Error processing {log_path}: {e}")
     
     def collect_historical(self) -> List[Dict[str, Any]]:
         """收集历史日志"""
-        traces = []
+        all_traces = []
         
         for log_path in self.get_log_paths():
             if not log_path.exists():
                 continue
             
             try:
-                # 从文件名提取 session_id
-                session_id = log_path.stem
-                
-                # 首先提取 cwd 信息
-                cwds = self._extract_cwd_from_session(log_path)
-                session_cwd = cwds.get(session_id, "")
-                
-                with open(log_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        trace = self.parse_log_entry(line.strip(), {"session_id": session_id, "cwd": session_cwd})
-                        if trace:
-                            traces.append(trace)
+                traces = self.parse_session_file(log_path)
+                all_traces.extend(traces)
                 
                 # 更新文件位置
                 self.file_positions[log_path] = log_path.stat().st_size
@@ -124,27 +223,7 @@ class LogCollector(ABC):
             except Exception as e:
                 logger.error(f"Error reading {log_path}: {e}")
         
-        return traces
-    
-    def _extract_cwd_from_session(self, session_file: Path) -> Dict[str, str]:
-        """从 session 文件中提取所有 cwd"""
-        cwds = {}
-        if not session_file.exists():
-            return cwds
-        
-        try:
-            with open(session_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    try:
-                        data = json.loads(line.strip())
-                        if data.get("type") == "session" and data.get("cwd"):
-                            cwds[data.get("id", "")] = data.get("cwd")
-                    except:
-                        pass
-        except:
-            pass
-        
-        return cwds
+        return all_traces
 
 
 class OpenClawCollector(LogCollector):
@@ -169,93 +248,105 @@ class OpenClawCollector(LogCollector):
         
         return paths
     
-    def parse_log_entry(self, line: str, context: Dict = None) -> Optional[Dict[str, Any]]:
-        """解析 OpenClaw session 日志"""
-        try:
-            data = json.loads(line)
-            msg_type = data.get("type")
-            
-            if msg_type != "message":
-                return None
-            
-            message = data.get("message", {})
-            role = message.get("role")
-            
-            # 提取工具调用
-            tool_calls = []
-            content = message.get("content", [])
-            
-            if isinstance(content, list):
-                for item in content:
-                    if item.get("type") == "toolCall":
-                        tool_calls.append({
-                            "tool_use_id": item.get("id"),
-                            "name": item.get("name"),
-                            "input": item.get("arguments", {}),
-                            "timestamp": data.get("timestamp")
-                        })
-                    elif item.get("type") == "toolResult":
-                        tool_calls.append({
-                            "tool_use_id": item.get("toolCallId"),
-                            "name": item.get("toolName"),
-                            "output": item.get("content"),
-                            "is_error": item.get("isError", False),
-                            "timestamp": data.get("timestamp")
-                        })
-            
-            usage = message.get("usage", {})
-            cost = usage.get("cost", {})
-            
-            # 确保 prompt/response 是字符串
-            prompt = None
-            response = None
-            if role == "user" and content:
-                if isinstance(content, str):
-                    prompt = content
-                elif isinstance(content, list):
-                    prompt = json.dumps(content)
-            elif role == "assistant" and content:
-                if isinstance(content, str):
-                    response = content
-                elif isinstance(content, list):
-                    response = json.dumps(content)
-            
-            # 获取 project_path 和 session_id
-            session_id = context.get("session_id") if context else data.get("sessionId")
-            project_path = context.get("cwd", "") if context else ""
-            
-            return {
-                "trace_id": data.get("id"),
-                "platform": "openclaw",
-                "agent_name": data.get("agentId") or "main",
-                "session_id": session_id,
-                "start_time": data.get("timestamp"),
-                "model": message.get("model", "unknown"),
-                "role": role,
-                "prompt": prompt,
-                "response": response,
-                "input_tokens": usage.get("input", 0),
-                "output_tokens": usage.get("output", 0),
-                "cache_read_tokens": usage.get("cacheRead", 0),
-                "cache_write_tokens": usage.get("cacheWrite", 0),
-                "cost_usd": cost.get("total", 0) if isinstance(cost, dict) else 0,
-                "tool_calls": tool_calls,
-                "status": "success" if role == "assistant" else "pending",
-                "project_path": project_path,
-                "metadata": {
-                    "parent_id": data.get("parentId"),
-                    "provider": message.get("provider"),
-                    "stop_reason": message.get("stopReason"),
-                    "thinking_level": data.get("thinkingLevel"),
-                    "api": message.get("api")
-                }
-            }
+    def parse_session_file(self, log_path: Path) -> List[Dict[str, Any]]:
+        """解析 OpenClaw session 文件，按 session 聚合"""
+        session_id = log_path.stem
+        aggregator = SessionAggregator()
         
-        except json.JSONDecodeError:
-            return None
-        except Exception as e:
-            logger.error(f"Error parsing OpenClaw log: {e}")
-            return None
+        # 首先读取 session 初始化信息
+        session_cwd = ""
+        try:
+            with open(log_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    try:
+                        data = json.loads(line.strip())
+                        if data.get("type") == "session" and data.get("cwd"):
+                            session_cwd = data.get("cwd", "")
+                            break
+                    except:
+                        pass
+        except:
+            pass
+        
+        # 解析所有消息
+        with open(log_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    data = json.loads(line.strip())
+                    
+                    if data.get("type") != "message":
+                        continue
+                    
+                    message = data.get("message", {})
+                    role = message.get("role")
+                    
+                    # 提取工具调用
+                    tool_calls = []
+                    content = message.get("content", [])
+                    
+                    if isinstance(content, list):
+                        for item in content:
+                            if item.get("type") == "toolCall":
+                                tool_calls.append({
+                                    "tool_use_id": item.get("id"),
+                                    "name": item.get("name"),
+                                    "input": item.get("arguments", {}),
+                                    "timestamp": data.get("timestamp")
+                                })
+                            elif item.get("type") == "toolResult":
+                                tool_calls.append({
+                                    "tool_use_id": item.get("toolCallId"),
+                                    "name": item.get("toolName"),
+                                    "output": item.get("content"),
+                                    "is_error": item.get("isError", False),
+                                    "timestamp": data.get("timestamp")
+                                })
+                    
+                    usage = message.get("usage", {})
+                    cost = usage.get("cost", {})
+                    
+                    # 确保 prompt/response 是字符串
+                    prompt = None
+                    response = None
+                    if role == "user" and content:
+                        if isinstance(content, str):
+                            prompt = content
+                        elif isinstance(content, list):
+                            # 提取 text 类型的内容
+                            texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                            prompt = "\n".join(texts)
+                    elif role == "assistant" and content:
+                        if isinstance(content, str):
+                            response = content
+                        elif isinstance(content, list):
+                            texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                            response = "\n".join(texts)
+                    
+                    msg_data = {
+                        "trace_id": data.get("id"),
+                        "platform": "openclaw",
+                        "agent_name": data.get("agentId") or "main",
+                        "session_id": session_id,
+                        "start_time": data.get("timestamp"),
+                        "model": message.get("model", "unknown"),
+                        "role": role,
+                        "prompt": prompt,
+                        "response": response,
+                        "input_tokens": usage.get("input", 0),
+                        "output_tokens": usage.get("output", 0),
+                        "cost_usd": cost.get("total", 0) if isinstance(cost, dict) else 0,
+                        "tool_calls": tool_calls,
+                        "project_path": session_cwd,
+                    }
+                    
+                    aggregator.add_message(session_id, msg_data)
+                    
+                except json.JSONDecodeError:
+                    continue
+                except Exception as e:
+                    logger.error(f"Error parsing line: {e}")
+        
+        return aggregator.get_traces()
 
 
 class ClaudeCodeCollector(LogCollector):
@@ -284,91 +375,97 @@ class ClaudeCodeCollector(LogCollector):
             decoded = decoded[1:]
         return decoded
     
-    def parse_log_entry(self, line: str, context: Dict = None) -> Optional[Dict[str, Any]]:
-        """解析 Claude Code 项目级日志"""
-        try:
-            data = json.loads(line)
-            msg_type = data.get("type")
-            
-            if msg_type not in ["user", "assistant"]:
-                return None
-            
-            message = data.get("message", {})
-            role = message.get("role")
-            
-            # 提取工具调用
-            tool_calls = []
-            content = message.get("content", [])
-            
-            if isinstance(content, list):
-                for item in content:
-                    if item.get("type") == "tool_use":
-                        tool_calls.append({
-                            "tool_use_id": item.get("id"),
-                            "name": item.get("name"),
-                            "input": item.get("input", {}),
-                            "timestamp": data.get("timestamp")
-                        })
-                    elif item.get("type") == "tool_result":
-                        tool_calls.append({
-                            "tool_use_id": item.get("tool_use_id"),
-                            "output": item.get("content"),
-                            "timestamp": data.get("timestamp")
-                        })
-            
-            usage = message.get("usage", {})
-            
-            # 从 cwd 提取项目路径
-            cwd = data.get("cwd", "")
-            project_name = Path(cwd).name if cwd else "unknown"
-            
-            # 确保 prompt/response 是字符串
-            prompt = None
-            response = None
-            if role == "user" and content:
-                if isinstance(content, str):
-                    prompt = content
-                elif isinstance(content, list):
-                    prompt = json.dumps(content)
-            elif role == "assistant" and content:
-                if isinstance(content, str):
-                    response = content
-                elif isinstance(content, list):
-                    response = json.dumps(content)
-            
-            return {
-                "trace_id": data.get("uuid"),
-                "platform": "claude-code",
-                "agent_name": "claude-code",
-                "session_id": data.get("sessionId"),
-                "start_time": data.get("timestamp"),
-                "model": message.get("model", "unknown"),
-                "role": role,
-                "prompt": prompt,
-                "response": response,
-                "input_tokens": usage.get("input_tokens", 0),
-                "output_tokens": usage.get("output_tokens", 0),
-                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens", 0),
-                "cache_read_input_tokens": usage.get("cache_read_input_tokens", 0),
-                "cost_usd": 0,
-                "tool_calls": tool_calls,
-                "status": "success" if role == "assistant" else "pending",
-                "project_path": cwd,
-                "metadata": {
-                    "parent_uuid": data.get("parentUuid"),
-                    "is_sidechain": data.get("isSidechain"),
-                    "version": data.get("version"),
-                    "git_branch": data.get("gitBranch"),
-                    "permission_mode": data.get("permissionMode"),
-                    "stop_reason": message.get("stop_reason")
-                }
-            }
+    def parse_session_file(self, log_path: Path) -> List[Dict[str, Any]]:
+        """解析 Claude Code session 文件，按 session 聚合"""
+        session_id = log_path.stem
+        aggregator = SessionAggregator()
         
-        except json.JSONDecodeError:
-            return None
-        except Exception as e:
-            logger.error(f"Error parsing Claude Code log: {e}")
-            return None
+        # 从目录名提取项目路径
+        project_path = ""
+        try:
+            encoded_path = log_path.parent.name
+            project_path = self._decode_path(encoded_path)
+        except:
+            pass
+        
+        with open(log_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    data = json.loads(line.strip())
+                    msg_type = data.get("type")
+                    
+                    if msg_type not in ["user", "assistant"]:
+                        continue
+                    
+                    message = data.get("message", {})
+                    role = message.get("role")
+                    
+                    # 提取工具调用
+                    tool_calls = []
+                    content = message.get("content", [])
+                    
+                    if isinstance(content, list):
+                        for item in content:
+                            if item.get("type") == "tool_use":
+                                tool_calls.append({
+                                    "tool_use_id": item.get("id"),
+                                    "name": item.get("name"),
+                                    "input": item.get("input", {}),
+                                    "timestamp": data.get("timestamp")
+                                })
+                            elif item.get("type") == "tool_result":
+                                tool_calls.append({
+                                    "tool_use_id": item.get("tool_use_id"),
+                                    "output": item.get("content"),
+                                    "timestamp": data.get("timestamp")
+                                })
+                    
+                    usage = message.get("usage", {})
+                    
+                    # 确保 prompt/response 是字符串
+                    prompt = None
+                    response = None
+                    if role == "user" and content:
+                        if isinstance(content, str):
+                            prompt = content
+                        elif isinstance(content, list):
+                            texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                            prompt = "\n".join(texts)
+                    elif role == "assistant" and content:
+                        if isinstance(content, str):
+                            response = content
+                        elif isinstance(content, list):
+                            texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                            response = "\n".join(texts)
+                    
+                    # 从 data 中获取 cwd
+                    cwd = data.get("cwd", "")
+                    
+                    msg_data = {
+                        "trace_id": data.get("uuid"),
+                        "platform": "claude-code",
+                        "agent_name": "claude-code",
+                        "session_id": session_id,
+                        "start_time": data.get("timestamp"),
+                        "model": message.get("model", "unknown"),
+                        "role": role,
+                        "prompt": prompt,
+                        "response": response,
+                        "input_tokens": usage.get("input_tokens", 0),
+                        "output_tokens": usage.get("output_tokens", 0),
+                        "cost_usd": 0,
+                        "tool_calls": tool_calls,
+                        "project_path": cwd or project_path,
+                    }
+                    
+                    aggregator.add_message(session_id, msg_data)
+                    
+                except json.JSONDecodeError:
+                    continue
+                except Exception as e:
+                    logger.error(f"Error parsing Claude Code line: {e}")
+        
+        return aggregator.get_traces()
 
 
 class KimiCodeCollector(LogCollector):
@@ -393,102 +490,47 @@ class KimiCodeCollector(LogCollector):
         
         return paths
     
-    def parse_log_entry(self, line: str, context: Dict = None) -> Optional[Dict[str, Any]]:
-        """解析 Kimi Code wire 日志"""
-        try:
-            data = json.loads(line)
-            msg_type = data.get("type")
-            
-            if msg_type == "TurnBegin":
-                return self._parse_turn_begin(data)
-            elif msg_type == "ToolCall":
-                return self._parse_tool_call(data)
-            elif msg_type == "ToolResult":
-                return self._parse_tool_result(data)
-            elif msg_type == "ContentPart":
-                return self._parse_content_part(data)
-            
-            return None
+    def parse_session_file(self, log_path: Path) -> List[Dict[str, Any]]:
+        """解析 Kimi Code wire 文件"""
+        # Kimi Code 的 wire.jsonl 已经是聚合格式，每条记录是一个完整的事件
+        # 这里简化处理，将每个 Turn 作为一个 trace
+        traces = []
         
-        except json.JSONDecodeError:
-            return None
-        except Exception as e:
-            logger.error(f"Error parsing Kimi Code log: {e}")
-            return None
-    
-    def _parse_turn_begin(self, data: Dict) -> Optional[Dict[str, Any]]:
-        """解析 TurnBegin 消息"""
-        payload = data.get("message", {}).get("payload", {})
-        user_input = payload.get("user_input", [])
+        with open(log_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    data = json.loads(line.strip())
+                    msg_type = data.get("type")
+                    
+                    if msg_type == "TurnBegin":
+                        payload = data.get("message", {}).get("payload", {})
+                        user_input = payload.get("user_input", [])
+                        prompt = user_input[0].get("text") if user_input else None
+                        
+                        traces.append({
+                            "trace_id": f"turn-{data.get('timestamp')}",
+                            "platform": "kimi-code",
+                            "agent_name": "kimi-code",
+                            "session_id": log_path.parent.name,
+                            "start_time": datetime.fromtimestamp(data.get("timestamp", 0)).isoformat(),
+                            "model": "kimi-k2.5",
+                            "prompt": prompt,
+                            "response": None,
+                            "input_tokens": 0,
+                            "output_tokens": 0,
+                            "cost_usd": 0,
+                            "tool_calls": [],
+                            "status": "streaming",
+                            "project_path": "",
+                            "metadata": {"message_type": "TurnBegin"}
+                        })
+                    
+                except json.JSONDecodeError:
+                    continue
+                except Exception as e:
+                    logger.error(f"Error parsing Kimi Code line: {e}")
         
-        return {
-            "trace_id": f"turn-{data.get('timestamp')}",
-            "platform": "kimi-code",
-            "agent_name": "kimi-code",
-            "start_time": datetime.fromtimestamp(data.get("timestamp", 0)).isoformat(),
-            "role": "user",
-            "prompt": user_input[0].get("text") if user_input else None,
-            "status": "streaming",
-            "metadata": {"message_type": "TurnBegin"}
-        }
-    
-    def _parse_tool_call(self, data: Dict) -> Optional[Dict[str, Any]]:
-        """解析 ToolCall 消息"""
-        payload = data.get("message", {}).get("payload", {})
-        function = payload.get("function", {})
-        
-        return {
-            "trace_id": f"tool-{data.get('timestamp')}",
-            "platform": "kimi-code",
-            "agent_name": "kimi-code",
-            "start_time": datetime.fromtimestamp(data.get("timestamp", 0)).isoformat(),
-            "tool_calls": [{
-                "tool_use_id": payload.get("id"),
-                "name": function.get("name"),
-                "input": json.loads(function.get("arguments", "{}")),
-                "timestamp": data.get("timestamp")
-            }],
-            "status": "success",
-            "metadata": {"message_type": "ToolCall"}
-        }
-    
-    def _parse_tool_result(self, data: Dict) -> Optional[Dict[str, Any]]:
-        """解析 ToolResult 消息"""
-        payload = data.get("message", {}).get("payload", {})
-        return_value = payload.get("return_value", {})
-        
-        return {
-            "trace_id": f"result-{data.get('timestamp')}",
-            "platform": "kimi-code",
-            "agent_name": "kimi-code",
-            "start_time": datetime.fromtimestamp(data.get("timestamp", 0)).isoformat(),
-            "tool_calls": [{
-                "tool_use_id": payload.get("tool_call_id"),
-                "output": return_value.get("output"),
-                "is_error": return_value.get("is_error", False),
-                "timestamp": data.get("timestamp")
-            }],
-            "status": "error" if return_value.get("is_error") else "success",
-            "metadata": {"message_type": "ToolResult"}
-        }
-    
-    def _parse_content_part(self, data: Dict) -> Optional[Dict[str, Any]]:
-        """解析 ContentPart 消息"""
-        payload = data.get("message", {}).get("payload", {})
-        
-        return {
-            "trace_id": f"content-{data.get('timestamp')}",
-            "platform": "kimi-code",
-            "agent_name": "kimi-code",
-            "start_time": datetime.fromtimestamp(data.get("timestamp", 0)).isoformat(),
-            "role": "assistant",
-            "response": payload.get("text"),
-            "status": "success",
-            "metadata": {
-                "message_type": "ContentPart",
-                "content_type": payload.get("type")
-            }
-        }
+        return traces
 
 
 class CollectorManager:
@@ -518,10 +560,10 @@ class CollectorManager:
         for collector in self.collectors:
             traces = collector.collect_historical()
             all_traces.extend(traces)
-            logger.info(f"{collector.get_name()}: collected {len(traces)} traces")
+            logger.info(f"{collector.get_name()}: collected {len(traces)} session traces")
         
         # 按时间排序
-        all_traces.sort(key=lambda x: x.get("start_time", ""))
+        all_traces.sort(key=lambda x: x.get("start_time", ""), reverse=True)
         
         # 批量保存
         if all_traces:
