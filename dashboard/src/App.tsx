@@ -133,21 +133,59 @@ function App() {
       const tracesData = await tracesRes.json();
       const statsData = await statsRes.json();
 
-      const transformedTraces = (tracesData.traces || []).map((t: any) => ({
-        id: t.trace_id || String(t.id),
-        agentId: t.agent_name,
-        agentName: t.agent_name,
-        platform: t.platform,
-        status: t.status === 'error' ? 'failed' : t.status || 'completed',
-        startTime: new Date(t.start_time).getTime(),
-        endTime: t.end_time ? new Date(t.end_time).getTime() : undefined,
-        duration: t.duration_ms,
-        tools: [],
-        llmCalls: [],
-        totalTokens: (t.input_tokens || 0) + (t.output_tokens || 0),
-        cost: t.cost_usd || 0,
-        raw: t,
-      }));
+      const transformedTraces = (tracesData.traces || []).map((t: any) => {
+        // Parse tool_calls from API response
+        const tools = (t.tool_calls || []).map((tool: any, idx: number) => ({
+          id: tool.tool_use_id || `tool-${idx}`,
+          name: tool.name || 'Unknown',
+          startTime: tool.timestamp ? new Date(tool.timestamp * 1000).getTime() : new Date(t.start_time).getTime(),
+          endTime: tool.timestamp ? new Date(tool.timestamp * 1000).getTime() : new Date(t.end_time || t.start_time).getTime(),
+          duration: 0,
+          status: tool.output ? 'success' : 'pending',
+          input: tool.input,
+          output: tool.output,
+        }));
+
+        // Parse llm_calls from response field if exists
+        let llmCalls: any[] = [];
+        if (t.response) {
+          try {
+            const respData = JSON.parse(t.response);
+            llmCalls = (respData.llm_calls || []).map((call: any, idx: number) => ({
+              id: `llm-${idx}`,
+              model: call.model || 'unknown',
+              startTime: call.timestamp ? new Date(call.timestamp * 1000).getTime() : new Date(t.start_time).getTime(),
+              endTime: call.timestamp ? new Date(call.timestamp * 1000).getTime() : new Date(t.end_time || t.start_time).getTime(),
+              duration: 0,
+              inputTokens: call.input_tokens || 0,
+              outputTokens: call.output_tokens || 0,
+              totalTokens: (call.input_tokens || 0) + (call.output_tokens || 0),
+              cost: 0,
+              status: call.response ? 'success' : 'streaming',
+              prompt: call.prompt,
+              response: call.response,
+            }));
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+
+        return {
+          id: t.trace_id || String(t.id),
+          agentId: t.agent_name,
+          agentName: t.agent_name,
+          platform: t.platform,
+          status: t.status === 'error' ? 'failed' : t.status || 'completed',
+          startTime: new Date(t.start_time).getTime(),
+          endTime: t.end_time ? new Date(t.end_time).getTime() : undefined,
+          duration: t.duration_ms,
+          tools,
+          llmCalls,
+          totalTokens: (t.input_tokens || 0) + (t.output_tokens || 0),
+          cost: t.cost_usd || 0,
+          raw: t,
+        };
+      });
 
       setTraces(transformedTraces);
       setStats(statsData);
