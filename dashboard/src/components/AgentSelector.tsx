@@ -8,7 +8,7 @@ import {
   XCircle,
   Clock,
 } from 'lucide-react';
-import { AgentStats } from '../types';
+import type { AgentStats } from '../types';
 
 interface AgentSelectorProps {
   agents: AgentStats[];

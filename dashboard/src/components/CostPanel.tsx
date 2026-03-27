@@ -7,13 +7,11 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  LineChart,
-  Line,
   Area,
   AreaChart,
 } from 'recharts';
 import { TrendingUp, DollarSign, Coins, BarChart3 } from 'lucide-react';
-import { CostMetrics } from '../types';
+import type { CostMetrics } from '../types';
 
 interface CostPanelProps {
   metrics: CostMetrics[];
@@ -117,7 +115,7 @@ export const CostPanel: React.FC<CostPanelProps> = ({
                   borderRadius: '8px',
                 }}
                 labelStyle={{ color: '#94a3b8' }}
-                formatter={(value: number) => [`$${value.toFixed(4)}`, '成本']}
+                formatter={(value) => [`$${Number(value).toFixed(4)}`, '成本']}
                 labelFormatter={(label) => {
                   const date = new Date(label);
                   return date.toLocaleDateString('zh-CN');
@@ -164,7 +162,7 @@ export const CostPanel: React.FC<CostPanelProps> = ({
                   borderRadius: '8px',
                 }}
                 labelStyle={{ color: '#94a3b8' }}
-                formatter={(value: number) => [value.toLocaleString(), 'Tokens']}
+                formatter={(value) => [Number(value).toLocaleString(), 'Tokens']}
                 labelFormatter={(label) => {
                   const date = new Date(label);
                   return date.toLocaleDateString('zh-CN');

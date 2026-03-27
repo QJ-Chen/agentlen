@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
+import { useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import './Dashboard.css';
 
 // 模拟数据
@@ -28,7 +28,7 @@ const platformData = [
 
 function Dashboard() {
   const [selectedPlatform, setSelectedPlatform] = useState('all');
-  const [traces, setTraces] = useState(mockTraces);
+  const [traces] = useState(mockTraces);
 
   const stats = {
     totalTraces: 1247,

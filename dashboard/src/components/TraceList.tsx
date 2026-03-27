@@ -1,6 +1,6 @@
 import React from 'react';
 import { Activity, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
-import { Trace } from '../types';
+import type { Trace } from '../types';
 
 interface TraceListProps {
   traces: Trace[];

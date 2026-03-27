@@ -1,9 +1,5 @@
 import React from 'react';
 import {
-  VerticalTimeline,
-  VerticalTimelineElement,
-} from 'react-vertical-timeline-component';
-import {
   Play,
   CheckCircle,
   XCircle,
@@ -12,7 +8,7 @@ import {
   MessageSquare,
   Clock,
 } from 'lucide-react';
-import { Trace, ToolCall, LLMCall } from '../types';
+import type { Trace, ToolCall, LLMCall } from '../types';
 
 interface TraceTimelineProps {
   trace: Trace;
@@ -147,10 +143,11 @@ export const TraceTimeline: React.FC<TraceTimelineProps> = ({ trace }) => {
             </div>
 
             {/* Events */}
-            {events.map((event, index) => {
+            {events.map((event) => {
               const isTool = event.type === 'tool';
               const Icon = isTool ? Wrench : MessageSquare;
-              const StatusIcon = statusIcons[event.status];
+              const statusKey = event.status === 'streaming' ? 'pending' : event.status;
+              const StatusIcon = statusIcons[statusKey as keyof typeof statusIcons];
               const color = isTool ? '#8b5cf6' : '#3b82f6';
 
               return (
@@ -165,7 +162,7 @@ export const TraceTimeline: React.FC<TraceTimelineProps> = ({ trace }) => {
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <span className="font-medium">
-                          {isTool ? event.name : event.model}
+                          {isTool ? event.name : (event as any).model}
                         </span>
                         <span
                           className="text-xs px-1.5 py-0.5 rounded"
@@ -178,8 +175,8 @@ export const TraceTimeline: React.FC<TraceTimelineProps> = ({ trace }) => {
                         </span>
                       </div>
                       <StatusIcon
-                        className={`w-4 h-4 ${event.status === 'pending' ? 'animate-spin' : ''}`}
-                        style={{ color: statusColors[event.status] }}
+                        className={`w-4 h-4 ${statusKey === 'pending' ? 'animate-spin' : ''}`}
+                        style={{ color: statusColors[statusKey as keyof typeof statusColors] }}
                       />
                     </div>
 
@@ -208,9 +205,9 @@ export const TraceTimeline: React.FC<TraceTimelineProps> = ({ trace }) => {
                       </div>
                     )}
 
-                    {event.error && (
+                    {(event as any).error && (
                       <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-400">
-                        {event.error}
+                        {(event as any).error}
                       </div>
                     )}
                   </div>
