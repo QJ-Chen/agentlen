@@ -91,7 +91,31 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   // Parse LLM calls from raw data
   const allLLMCalls = useMemo(() => {
-    const calls = [...trace.llmCalls];
+    const calls: Array<{
+      id: string;
+      model: string;
+      startTime: number;
+      endTime: number;
+      duration: number;
+      inputTokens: number;
+      outputTokens: number;
+      totalTokens: number;
+      cost: number;
+      status: 'success' | 'error' | 'streaming';
+      prompt?: string;
+      response?: string;
+    }> = [...trace.llmCalls];
+    
+    // Add prompt/response from raw data to each call
+    calls.forEach((call, idx) => {
+      if (trace.raw?.prompt && idx === 0) {
+        call.prompt = trace.raw.prompt;
+      }
+      if (trace.raw?.response && idx === 0) {
+        call.response = trace.raw.response;
+      }
+    });
+    
     if (trace.raw && !calls.length) {
       calls.push({
         id: 'raw-llm',
@@ -104,6 +128,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
         totalTokens: (trace.raw.input_tokens || 0) + (trace.raw.output_tokens || 0),
         cost: trace.raw.cost_usd || 0,
         status: 'success',
+        prompt: trace.raw.prompt,
+        response: trace.raw.response,
       });
     }
     return calls;
@@ -427,6 +453,44 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     </div>
   );
 
+  // Format message content for display
+  const formatMessageContent = (content: string): Array<{type: 'text' | 'code', content: string, language?: string}> => {
+    const parts: Array<{type: 'text' | 'code', content: string, language?: string}> = [];
+    const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      // Add text before code block
+      if (match.index > lastIndex) {
+        parts.push({
+          type: 'text',
+          content: content.slice(lastIndex, match.index).trim()
+        });
+      }
+      // Add code block
+      parts.push({
+        type: 'code',
+        language: match[1] || 'text',
+        content: match[2].trim()
+      });
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text
+    if (lastIndex < content.length) {
+      const remaining = content.slice(lastIndex).trim();
+      if (remaining) {
+        parts.push({
+          type: 'text',
+          content: remaining
+        });
+      }
+    }
+
+    return parts.length > 0 ? parts : [{ type: 'text', content: content.trim() }];
+  };
+
   // Render LLM Tab
   const renderLLM = () => (
     <div className="space-y-2">
@@ -438,6 +502,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       ) : (
         allLLMCalls.map((call, idx) => {
           const isExpanded = expandedLLMs.has(idx);
+          const promptParts = call.prompt ? formatMessageContent(call.prompt) : [];
+          const responseParts = call.response ? formatMessageContent(call.response) : [];
+          
           return (
             <div
               key={idx}
@@ -465,45 +532,87 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
               {isExpanded && (
                 <div className="px-4 pb-4 border-t border-slate-700/50">
-                  {trace.raw?.prompt && (
+                  {/* Prompt Section */}
+                  {call.prompt && (
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-gray-400 flex items-center gap-1">
+                        <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
                           <MessageSquare className="w-3 h-3" />
                           提示词 (Prompt)
                         </span>
                         <button
-                          onClick={() => copyToClipboard(trace.raw?.prompt || '', `llm-prompt-${idx}`)}
+                          onClick={() => copyToClipboard(call.prompt || '', `llm-prompt-${idx}`)}
                           className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
                         >
                           {copiedId === `llm-prompt-${idx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                           {copiedId === `llm-prompt-${idx}` ? '已复制' : '复制'}
                         </button>
                       </div>
-                      <pre className="bg-slate-950 p-3 rounded text-xs text-gray-300 overflow-auto max-h-80 whitespace-pre-wrap">
-                        {trace.raw?.prompt || 'No prompt recorded'}
-                      </pre>
+                      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
+                        {promptParts.map((part, pIdx) => (
+                          <div key={pIdx}>
+                            {part.type === 'code' ? (
+                              <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
+                                <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
+                                  <span className="text-xs text-gray-500">{part.language}</span>
+                                </div>
+                                <pre className="p-3 text-xs text-green-400 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
+                                  {part.content}
+                                </pre>
+                              </div>
+                            ) : (
+                              <div className="p-3 text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">
+                                {part.content}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
 
-                  {trace.raw?.response && (
-                    <div className="mt-3">
+                  {/* Response Section */}
+                  {call.response && (
+                    <div className="mt-4">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-gray-400 flex items-center gap-1">
+                        <span className="text-xs font-medium text-blue-400 flex items-center gap-1">
                           <FileText className="w-3 h-3" />
                           响应 (Response)
                         </span>
                         <button
-                          onClick={() => copyToClipboard(trace.raw?.response || '', `llm-response-${idx}`)}
+                          onClick={() => copyToClipboard(call.response || '', `llm-response-${idx}`)}
                           className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
                         >
                           {copiedId === `llm-response-${idx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                           {copiedId === `llm-response-${idx}` ? '已复制' : '复制'}
                         </button>
                       </div>
-                      <pre className="bg-slate-950 p-3 rounded text-xs text-blue-300 overflow-auto max-h-80 whitespace-pre-wrap">
-                        {trace.raw?.response || 'No response recorded'}
-                      </pre>
+                      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
+                        {responseParts.map((part, pIdx) => (
+                          <div key={pIdx}>
+                            {part.type === 'code' ? (
+                              <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
+                                <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
+                                  <span className="text-xs text-gray-500">{part.language}</span>
+                                </div>
+                                <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
+                                  {part.content}
+                                </pre>
+                              </div>
+                            ) : (
+                              <div className="p-3 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
+                                {part.content}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!call.prompt && !call.response && (
+                    <div className="mt-3 text-center py-4 text-gray-500 text-sm">
+                      无详细对话记录
                     </div>
                   )}
                 </div>
