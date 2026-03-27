@@ -38,6 +38,8 @@ export interface LLMCall {
   totalTokens: number;
   cost: number;
   status: 'success' | 'error' | 'streaming';
+  prompt?: string;
+  response?: string;
 }
 
 export interface AgentStats {

@@ -53,116 +53,15 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  // Parse tool calls from raw data
+  // Use tools directly from trace (already parsed in App.tsx)
   const allTools = useMemo(() => {
-    const tools: Array<{
-      id: string;
-      name: string;
-      startTime: number;
-      endTime: number;
-      duration: number;
-      status: 'success' | 'error' | 'pending';
-      input?: Record<string, unknown>;
-      output?: unknown;
-      error?: string;
-    }> = [...trace.tools];
-    
-    // Parse from raw.tool_calls if available
-    if (trace.raw?.tool_calls) {
-      try {
-        const rawTools = JSON.parse(trace.raw.tool_calls);
-        if (Array.isArray(rawTools)) {
-          rawTools.forEach((tool: any, idx: number) => {
-            // Check if already added by id
-            const exists = tools.some(t => t.id === (tool.id || `raw-${idx}`));
-            if (!exists) {
-              tools.push({
-                id: tool.id || `raw-${idx}`,
-                name: tool.name || 'Unknown Tool',
-                startTime: tool.start_time || tool.timestamp || trace.startTime,
-                endTime: tool.end_time || (tool.start_time || trace.startTime) + (tool.duration_ms || 0),
-                duration: tool.duration_ms || tool.duration || 0,
-                status: tool.status || 'success',
-                input: tool.input || tool.input_args || tool.arguments || {},
-                output: tool.output || tool.result || tool.response,
-                error: tool.error,
-              });
-            }
-          });
-        }
-      } catch (e) {
-        console.warn('Failed to parse tool_calls:', e);
-      }
-    }
-    
-    // Also check raw.tools
-    if (trace.raw?.tools && Array.isArray(trace.raw.tools)) {
-      trace.raw.tools.forEach((tool: any, idx: number) => {
-        const exists = tools.some(t => t.id === (tool.id || `raw-tools-${idx}`));
-        if (!exists) {
-          tools.push({
-            id: tool.id || `raw-tools-${idx}`,
-            name: tool.name || 'Unknown Tool',
-            startTime: tool.start_time || tool.timestamp || trace.startTime,
-            endTime: tool.end_time || (tool.start_time || trace.startTime) + (tool.duration_ms || 0),
-            duration: tool.duration_ms || tool.duration || 0,
-            status: tool.status || 'success',
-            input: tool.input || tool.input_args || tool.arguments || {},
-            output: tool.output || tool.result || tool.response,
-            error: tool.error,
-          });
-        }
-      });
-    }
-    
-    return tools.sort((a, b) => a.startTime - b.startTime);
-  }, [trace]);
+    return trace.tools || [];
+  }, [trace.tools]);
 
-  // Parse LLM calls from raw data
+  // Use llmCalls directly from trace (already parsed in App.tsx)
   const allLLMCalls = useMemo(() => {
-    const calls: Array<{
-      id: string;
-      model: string;
-      startTime: number;
-      endTime: number;
-      duration: number;
-      inputTokens: number;
-      outputTokens: number;
-      totalTokens: number;
-      cost: number;
-      status: 'success' | 'error' | 'streaming';
-      prompt?: string;
-      response?: string;
-    }> = [...trace.llmCalls];
-    
-    // Add prompt/response from raw data to each call
-    calls.forEach((call, idx) => {
-      if (trace.raw?.prompt && idx === 0) {
-        call.prompt = trace.raw.prompt;
-      }
-      if (trace.raw?.response && idx === 0) {
-        call.response = trace.raw.response;
-      }
-    });
-    
-    if (trace.raw && !calls.length) {
-      calls.push({
-        id: 'raw-llm',
-        model: trace.raw.model || 'unknown',
-        startTime: trace.startTime,
-        endTime: trace.endTime || trace.startTime + (trace.raw.duration_ms || 0),
-        duration: trace.raw.duration_ms || 0,
-        inputTokens: trace.raw.input_tokens || 0,
-        outputTokens: trace.raw.output_tokens || 0,
-        totalTokens: (trace.raw.input_tokens || 0) + (trace.raw.output_tokens || 0),
-        cost: trace.raw.cost_usd || 0,
-        status: 'success',
-        prompt: trace.raw.prompt,
-        response: trace.raw.response,
-      });
-    }
-    return calls;
-  }, [trace]);
+    return trace.llmCalls || [];
+  }, [trace.llmCalls]);
 
   const toggleTool = (idx: number) => {
     const newSet = new Set(expandedTools);
