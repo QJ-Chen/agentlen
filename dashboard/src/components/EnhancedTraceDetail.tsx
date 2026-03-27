@@ -66,26 +66,55 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       output?: unknown;
       error?: string;
     }> = [...trace.tools];
+    
+    // Parse from raw.tool_calls if available
     if (trace.raw?.tool_calls) {
       try {
         const rawTools = JSON.parse(trace.raw.tool_calls);
-        rawTools.forEach((tool: any) => {
-          if (!tools.some(t => t.name === tool.name)) {
-            tools.push({
-              id: tool.id || `raw-${tools.length}`,
-              name: tool.name || 'Unknown',
-              startTime: new Date(tool.timestamp || trace.startTime).getTime(),
-              endTime: new Date(tool.timestamp || trace.startTime).getTime() + (tool.duration_ms || 0),
-              duration: tool.duration_ms || 0,
-              status: tool.status || 'success',
-              input: tool.input || tool.input_args,
-              output: tool.output || tool.result,
-              error: tool.error,
-            });
-          }
-        });
-      } catch (e) {}
+        if (Array.isArray(rawTools)) {
+          rawTools.forEach((tool: any, idx: number) => {
+            // Check if already added by id
+            const exists = tools.some(t => t.id === (tool.id || `raw-${idx}`));
+            if (!exists) {
+              tools.push({
+                id: tool.id || `raw-${idx}`,
+                name: tool.name || 'Unknown Tool',
+                startTime: tool.start_time || tool.timestamp || trace.startTime,
+                endTime: tool.end_time || (tool.start_time || trace.startTime) + (tool.duration_ms || 0),
+                duration: tool.duration_ms || tool.duration || 0,
+                status: tool.status || 'success',
+                input: tool.input || tool.input_args || tool.arguments || {},
+                output: tool.output || tool.result || tool.response,
+                error: tool.error,
+              });
+            }
+          });
+        }
+      } catch (e) {
+        console.warn('Failed to parse tool_calls:', e);
+      }
     }
+    
+    // Also check raw.tools
+    if (trace.raw?.tools && Array.isArray(trace.raw.tools)) {
+      trace.raw.tools.forEach((tool: any, idx: number) => {
+        const exists = tools.some(t => t.id === (tool.id || `raw-tools-${idx}`));
+        if (!exists) {
+          tools.push({
+            id: tool.id || `raw-tools-${idx}`,
+            name: tool.name || 'Unknown Tool',
+            startTime: tool.start_time || tool.timestamp || trace.startTime,
+            endTime: tool.end_time || (tool.start_time || trace.startTime) + (tool.duration_ms || 0),
+            duration: tool.duration_ms || tool.duration || 0,
+            status: tool.status || 'success',
+            input: tool.input || tool.input_args || tool.arguments || {},
+            output: tool.output || tool.result || tool.response,
+            error: tool.error,
+          });
+        }
+      });
+    }
+    
     return tools.sort((a, b) => a.startTime - b.startTime);
   }, [trace]);
 
@@ -387,10 +416,11 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
               {isExpanded && (
                 <div className="px-4 pb-4 border-t border-slate-700/50">
-                  {tool.input && (
+                  {/* Input Section */}
+                  {tool.input && Object.keys(tool.input).length > 0 && (
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-gray-400 flex items-center gap-1">
+                        <span className="text-xs font-medium text-green-400 flex items-center gap-1">
                           <Terminal className="w-3 h-3" />
                           输入参数
                         </span>
@@ -402,16 +432,19 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                           {copiedId === `tool-input-${idx}` ? '已复制' : '复制'}
                         </button>
                       </div>
-                      <pre className="bg-slate-950 p-3 rounded text-xs text-green-400 overflow-auto max-h-60">
-                        {JSON.stringify(tool.input, null, 2)}
-                      </pre>
+                      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
+                        <pre className="p-3 text-xs text-green-400 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
+                          {JSON.stringify(tool.input, null, 2)}
+                        </pre>
+                      </div>
                     </div>
                   )}
 
+                  {/* Output Section - 使用统一的分块展示风格 */}
                   {tool.output != null && (
-                    <div className="mt-3">
+                    <div className="mt-4">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-gray-400 flex items-center gap-1">
+                        <span className="text-xs font-medium text-blue-400 flex items-center gap-1">
                           <FileText className="w-3 h-3" />
                           输出结果
                         </span>
@@ -427,21 +460,51 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                           {copiedId === `tool-output-${idx}` ? '已复制' : '复制'}
                         </button>
                       </div>
-                      <pre className="bg-slate-950 p-3 rounded text-xs text-blue-400 overflow-auto max-h-60">
-                        {typeof tool.output === 'string' ? tool.output : JSON.stringify(tool.output, null, 2)}
-                      </pre>
+                      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
+                        {typeof tool.output === 'string' ? (
+                          // 字符串输出 - 尝试解析为代码块
+                          (() => {
+                            const parts = formatMessageContent(tool.output);
+                            return parts.map((part, pIdx) => (
+                              <div key={pIdx}>
+                                {part.type === 'code' ? (
+                                  <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
+                                    <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
+                                      <span className="text-xs text-gray-500">{part.language}</span>
+                                    </div>
+                                    <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
+                                      {part.content}
+                                    </pre>
+                                  </div>
+                                ) : (
+                                  <div className="p-3 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
+                                    {part.content}
+                                  </div>
+                                )}
+                              </div>
+                            ));
+                          })()
+                        ) : (
+                          // JSON 输出
+                          <pre className="p-3 text-xs text-blue-400 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
+                            {JSON.stringify(tool.output, null, 2)}
+                          </pre>
+                        )}
+                      </div>
                     </div>
                   )}
 
                   {tool.error && (
-                    <div className="mt-3">
+                    <div className="mt-4">
                       <div className="flex items-center gap-1 mb-2">
                         <AlertCircle className="w-3 h-3 text-red-500" />
                         <span className="text-xs font-medium text-red-400">错误信息</span>
                       </div>
-                      <pre className="bg-red-950/30 p-3 rounded text-xs text-red-400 overflow-auto">
-                        {tool.error}
-                      </pre>
+                      <div className="bg-red-950/30 border border-red-900/30 rounded p-3">
+                        <pre className="text-xs text-red-400 overflow-auto whitespace-pre-wrap">
+                          {tool.error}
+                        </pre>
+                      </div>
                     </div>
                   )}
                 </div>
