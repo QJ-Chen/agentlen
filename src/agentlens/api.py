@@ -41,6 +41,8 @@ class TraceIn(BaseModel):
     tool_calls: List[Dict[str, Any]] = []
     status: str = "success"
     error_message: str = ""
+    project_path: Optional[str] = None
+    role: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -67,6 +69,8 @@ class TraceOut(BaseModel):
     tool_calls: List[Dict[str, Any]] = []
     status: str = "success"
     error_message: str = ""
+    project_path: Optional[str] = None
+    role: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
     created_at: Optional[str] = None
 
