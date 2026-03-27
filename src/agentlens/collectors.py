@@ -64,7 +64,7 @@ class SessionAggregator:
         if message.get("tool_calls"):
             session["tool_calls"].extend(message["tool_calls"])
         
-        # 收集 LLM 调用
+        # 收集 LLM 调用（只保留最近的 50 个，避免数据过大）
         if message.get("role") == "assistant" and message.get("model"):
             session["llm_calls"].append({
                 "id": message.get("trace_id"),
@@ -72,9 +72,12 @@ class SessionAggregator:
                 "start_time": message.get("start_time"),
                 "input_tokens": message.get("input_tokens", 0),
                 "output_tokens": message.get("output_tokens", 0),
-                "prompt": message.get("prompt"),
-                "response": message.get("response"),
+                "prompt": message.get("prompt")[:500] if message.get("prompt") else None,
+                "response": message.get("response")[:1000] if message.get("response") else None,
             })
+            # 只保留最近的 50 个
+            if len(session["llm_calls"]) > 50:
+                session["llm_calls"] = session["llm_calls"][-50:]
     
     def get_traces(self) -> List[Dict[str, Any]]:
         """获取聚合后的 traces"""
@@ -113,6 +116,7 @@ class SessionAggregator:
                 "output_tokens": session["total_output_tokens"],
                 "cost_usd": session["total_cost"],
                 "tool_calls": session["tool_calls"],
+                "llm_calls": session["llm_calls"],  # 包含所有 LLM 调用详情
                 "status": "success",
                 "project_path": session["project_path"],
                 "metadata": {
@@ -516,46 +520,124 @@ class KimiCodeCollector(LogCollector):
         return paths
     
     def parse_session_file(self, log_path: Path) -> List[Dict[str, Any]]:
-        """解析 Kimi Code wire 文件"""
-        # Kimi Code 的 wire.jsonl 已经是聚合格式，每条记录是一个完整的事件
-        # 这里简化处理，将每个 Turn 作为一个 trace
-        traces = []
+        """解析 Kimi Code wire 文件，按 session 聚合"""
+        session_id = log_path.parent.name
+        aggregator = SessionAggregator()
+        
+        # 用于跟踪当前 turn 的信息
+        current_turn = {
+            "prompt": None,
+            "response": None,
+            "tool_calls": [],
+            "model": "kimi-k2.5",
+            "start_time": None,
+            "input_tokens": 0,
+            "output_tokens": 0,
+        }
         
         with open(log_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
                     data = json.loads(line.strip())
                     msg_type = data.get("type")
+                    timestamp = data.get("timestamp")
                     
                     if msg_type == "TurnBegin":
+                        # 如果有之前的 turn，先保存
+                        if current_turn["prompt"] and current_turn["start_time"]:
+                            msg_data = {
+                                "trace_id": f"turn-{current_turn['start_time']}",
+                                "platform": "kimi-code",
+                                "agent_name": "kimi-code",
+                                "session_id": session_id,
+                                "start_time": datetime.fromtimestamp(current_turn['start_time'], tz=datetime.now().astimezone().tzinfo).isoformat(),
+                                "model": current_turn["model"],
+                                "role": "assistant",  # Kimi Code 的 turn 是完整的对话回合
+                                "prompt": current_turn["prompt"],
+                                "response": current_turn["response"],
+                                "input_tokens": current_turn["input_tokens"],
+                                "output_tokens": current_turn["output_tokens"],
+                                "cost_usd": 0,
+                                "tool_calls": current_turn["tool_calls"],
+                                "project_path": "",
+                            }
+                            aggregator.add_message(session_id, msg_data)
+                        
+                        # 开始新的 turn
                         payload = data.get("message", {}).get("payload", {})
                         user_input = payload.get("user_input", [])
-                        prompt = user_input[0].get("text") if user_input else None
-                        
-                        traces.append({
-                            "trace_id": f"turn-{data.get('timestamp')}",
-                            "platform": "kimi-code",
-                            "agent_name": "kimi-code",
-                            "session_id": log_path.parent.name,
-                            "start_time": datetime.fromtimestamp(data.get("timestamp", 0)).isoformat(),
-                            "model": "kimi-k2.5",
-                            "prompt": prompt,
+                        current_turn = {
+                            "prompt": user_input[0].get("text") if user_input else None,
                             "response": None,
+                            "tool_calls": [],
+                            "model": "kimi-k2.5",
+                            "start_time": timestamp,
                             "input_tokens": 0,
                             "output_tokens": 0,
-                            "cost_usd": 0,
-                            "tool_calls": [],
-                            "status": "streaming",
-                            "project_path": "",
-                            "metadata": {"message_type": "TurnBegin"}
+                        }
+                    
+                    elif msg_type == "ToolCall":
+                        payload = data.get("message", {}).get("payload", {})
+                        function = payload.get("function", {})
+                        current_turn["tool_calls"].append({
+                            "tool_use_id": payload.get("id"),
+                            "name": function.get("name"),
+                            "input": json.loads(function.get("arguments", "{}")),
+                            "timestamp": timestamp
                         })
+                    
+                    elif msg_type == "ToolResult":
+                        payload = data.get("message", {}).get("payload", {})
+                        return_value = payload.get("return_value", {})
+                        current_turn["tool_calls"].append({
+                            "tool_use_id": payload.get("tool_call_id"),
+                            "output": return_value.get("output"),
+                            "is_error": return_value.get("is_error", False),
+                            "timestamp": timestamp
+                        })
+                    
+                    elif msg_type == "ContentPart":
+                        payload = data.get("message", {}).get("payload", {})
+                        content_type = payload.get("type")
+                        if content_type == "text":
+                            if current_turn["response"]:
+                                current_turn["response"] += "\n" + payload.get("text", "")
+                            else:
+                                current_turn["response"] = payload.get("text", "")
+                    
+                    elif msg_type == "StatusUpdate":
+                        payload = data.get("message", {}).get("payload", {})
+                        usage = payload.get("usage", {})
+                        if usage:
+                            current_turn["input_tokens"] = usage.get("input", 0)
+                            current_turn["output_tokens"] = usage.get("output", 0)
                     
                 except json.JSONDecodeError:
                     continue
                 except Exception as e:
                     logger.error(f"Error parsing Kimi Code line: {e}")
         
-        return traces
+        # 保存最后一个 turn
+        if current_turn["prompt"] and current_turn["start_time"]:
+            msg_data = {
+                "trace_id": f"turn-{current_turn['start_time']}",
+                "platform": "kimi-code",
+                "agent_name": "kimi-code",
+                "session_id": session_id,
+                "start_time": datetime.fromtimestamp(current_turn['start_time'], tz=datetime.now().astimezone().tzinfo).isoformat(),
+                "model": current_turn["model"],
+                "role": "assistant",
+                "prompt": current_turn["prompt"],
+                "response": current_turn["response"],
+                "input_tokens": current_turn["input_tokens"],
+                "output_tokens": current_turn["output_tokens"],
+                "cost_usd": 0,
+                "tool_calls": current_turn["tool_calls"],
+                "project_path": "",
+            }
+            aggregator.add_message(session_id, msg_data)
+        
+        return aggregator.get_traces()
 
 
 class CollectorManager:

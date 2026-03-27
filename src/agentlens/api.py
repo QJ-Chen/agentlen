@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import uvicorn
+import json
 
 from agentlens.storage import SQLiteStorage, JSONLStorage
 
@@ -31,16 +32,21 @@ class TraceIn(BaseModel):
     session_id: str
     start_time: str
     end_time: Optional[str] = None
-    duration_ms: int
+    duration_ms: int = 0
     model: str = ""
     prompt: str = ""
     response: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: Optional[int] = 0
+    cache_write_tokens: Optional[int] = 0
+    cache_creation_input_tokens: Optional[int] = 0
+    cache_read_input_tokens: Optional[int] = 0
     cost_usd: float = 0.0
     tool_calls: List[Dict[str, Any]] = []
+    llm_calls: List[Dict[str, Any]] = []
     status: str = "success"
-    error_message: str = ""
+    error_message: Optional[str] = ""
     project_path: Optional[str] = None
     role: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -59,16 +65,21 @@ class TraceOut(BaseModel):
     session_id: str
     start_time: str
     end_time: Optional[str] = None
-    duration_ms: int
+    duration_ms: int = 0
     model: str = ""
     prompt: str = ""
     response: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: Optional[int] = 0
+    cache_write_tokens: Optional[int] = 0
+    cache_creation_input_tokens: Optional[int] = 0
+    cache_read_input_tokens: Optional[int] = 0
     cost_usd: float = 0.0
     tool_calls: List[Dict[str, Any]] = []
+    llm_calls: List[Dict[str, Any]] = []
     status: str = "success"
-    error_message: str = ""
+    error_message: Optional[str] = ""
     project_path: Optional[str] = None
     role: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
@@ -112,6 +123,21 @@ def get_traces(
         end_time=end_time,
         limit=limit
     )
+    # 确保 llm_calls 是列表，并清理 None 值
+    for trace in traces:
+        if isinstance(trace.get("llm_calls"), str):
+            try:
+                trace["llm_calls"] = json.loads(trace["llm_calls"])
+            except:
+                trace["llm_calls"] = []
+        # 清理 None 值
+        for key in ["cache_read_tokens", "cache_write_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"]:
+            if trace.get(key) is None:
+                trace[key] = 0
+        if trace.get("error_message") is None:
+            trace["error_message"] = ""
+        if trace.get("duration_ms") is None:
+            trace["duration_ms"] = 0
     return {"traces": traces, "count": len(traces)}
 
 

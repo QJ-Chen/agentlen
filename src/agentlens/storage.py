@@ -63,6 +63,7 @@ class SQLiteStorage(Storage):
                     cache_read_input_tokens INTEGER,
                     cost_usd REAL,
                     tool_calls TEXT,
+                    llm_calls TEXT,
                     status TEXT,
                     error_message TEXT,
                     project_path TEXT,
@@ -133,6 +134,7 @@ class SQLiteStorage(Storage):
                 trace.get("cache_read_input_tokens"),
                 trace.get("cost_usd"),
                 json.dumps(trace.get("tool_calls", [])),
+                json.dumps(trace.get("llm_calls", [])),
                 trace.get("status"),
                 trace.get("error_message"),
                 trace.get("project_path"),
@@ -151,9 +153,9 @@ class SQLiteStorage(Storage):
                         prompt, response, input_tokens, output_tokens,
                         cache_read_tokens, cache_write_tokens,
                         cache_creation_input_tokens, cache_read_input_tokens,
-                        cost_usd, tool_calls, status, error_message,
+                        cost_usd, tool_calls, llm_calls, status, error_message,
                         project_path, role, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     trace.get("trace_id"),
                     trace.get("platform"),
@@ -173,6 +175,7 @@ class SQLiteStorage(Storage):
                     trace.get("cache_read_input_tokens"),
                     trace.get("cost_usd"),
                     json.dumps(trace.get("tool_calls", [])),
+                    json.dumps(trace.get("llm_calls", [])),
                     trace.get("status"),
                     trace.get("error_message"),
                     trace.get("project_path"),
@@ -220,12 +223,12 @@ class SQLiteStorage(Storage):
             for row in rows:
                 row_dict = dict(row)
                 # Parse JSON fields
-                for field in ['tool_calls', 'metadata']:
+                for field in ['tool_calls', 'llm_calls', 'metadata']:
                     if row_dict.get(field):
                         try:
                             row_dict[field] = json.loads(row_dict[field])
                         except:
-                            row_dict[field] = [] if field == 'tool_calls' else {}
+                            row_dict[field] = [] if field in ['tool_calls', 'llm_calls'] else {}
                 results.append(row_dict)
             return results
     
