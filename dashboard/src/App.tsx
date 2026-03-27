@@ -141,7 +141,9 @@ function App() {
           startTime: tool.timestamp ? new Date(tool.timestamp * 1000).getTime() : new Date(t.start_time).getTime(),
           endTime: tool.timestamp ? new Date(tool.timestamp * 1000).getTime() : new Date(t.end_time || t.start_time).getTime(),
           duration: 0,
-          status: tool.output ? 'success' : 'pending',
+          // If tool has a timestamp and the trace is completed, consider it success
+          status: t.status === 'success' || t.status === 'completed' ? 'success' : 
+                  tool.error ? 'error' : 'success',
           input: tool.input,
           output: tool.output,
         }));
