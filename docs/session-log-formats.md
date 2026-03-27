@@ -89,21 +89,152 @@
 ```
 ~/.openclaw/
 ├── logs/
-│   ├── gateway.log          # 网关日志
+│   ├── gateway.log          # 网关日志（结构化文本）
 │   ├── gateway.err.log      # 错误日志
 │   ├── commands.log         # 命令日志
-│   └── config-audit.jsonl   # 配置审计
+│   └── config-audit.jsonl   # 配置审计（JSON Lines）
+├── agents/
+│   └── main/
+│       └── sessions/        # Session 日志（JSON Lines）
+│           ├── sessions.json           # Session 索引
+│           ├── <session-id>.jsonl      # Session 消息记录
+│           └── <session-id>.jsonl.lock # 文件锁
 ├── memory/                  # 记忆文件
 │   └── 2026-03-27.md
 ├── workspace/               # 工作空间
 │   └── projects/
-├── agents/                  # Agent 配置
 ├── devices/                 # 设备配对信息
 ├── completions/             # 补全记录
 └── openclaw.json            # 主配置
 ```
 
-### Gateway 日志格式
+### Session 日志格式（agents/main/sessions/*.jsonl）
+
+#### 1. Session 初始化
+```json
+{
+  "type": "session",
+  "version": 3,
+  "id": "12a466be-65bf-488b-935f-ccd3db81bc89",
+  "timestamp": "2026-03-26T20:15:25.522Z",
+  "cwd": "/Users/findai/.openclaw/workspace"
+}
+```
+
+#### 2. 模型变更
+```json
+{
+  "type": "model_change",
+  "id": "ad4fded5",
+  "parentId": null,
+  "timestamp": "2026-03-26T20:15:25.523Z",
+  "provider": "moonshot",
+  "modelId": "kimi-k2.5"
+}
+```
+
+#### 3. 用户消息
+```json
+{
+  "type": "message",
+  "id": "adef9913",
+  "parentId": "b71d5b90",
+  "timestamp": "2026-03-26T20:15:25.527Z",
+  "message": {
+    "role": "user",
+    "content": [{"type": "text", "text": "用户输入内容"}],
+    "timestamp": 1774556125525
+  }
+}
+```
+
+#### 4. AI 助手消息（带工具调用）
+```json
+{
+  "type": "message",
+  "id": "7616511b",
+  "parentId": "adef9913",
+  "timestamp": "2026-03-26T20:15:29.136Z",
+  "message": {
+    "role": "assistant",
+    "content": [
+      {
+        "type": "toolCall",
+        "id": "read:0",
+        "name": "read",
+        "arguments": {"file_path": "/path/to/file"}
+      }
+    ],
+    "api": "openai-completions",
+    "provider": "moonshot",
+    "model": "kimi-k2.5",
+    "usage": {
+      "input": 8097,
+      "output": 57,
+      "cacheRead": 3584,
+      "cacheWrite": 0,
+      "totalTokens": 11738,
+      "cost": {
+        "input": 0,
+        "output": 0,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "total": 0
+      }
+    },
+    "stopReason": "toolUse",
+    "timestamp": 1774556125528,
+    "responseId": "chatcmpl-69c593de4d445f2e4948e024"
+  }
+}
+```
+
+#### 5. 工具执行结果
+```json
+{
+  "type": "message",
+  "id": "9e3baace",
+  "parentId": "7616511b",
+  "timestamp": "2026-03-26T20:15:29.162Z",
+  "message": {
+    "role": "toolResult",
+    "toolCallId": "read:0",
+    "toolName": "read",
+    "content": [{"type": "text", "text": "文件内容"}],
+    "isError": false,
+    "timestamp": 1774556129160
+  }
+}
+```
+
+#### 6. 其他事件类型
+- `thinking_level_change`: 思考级别变更
+- `custom`: 自定义事件（如 model-snapshot）
+
+### Sessions 索引文件（sessions.json）
+```json
+{
+  "agent:main:main": {
+    "sessionId": "12a466be-65bf-488b-935f-ccd3db81bc89",
+    "updatedAt": 1774594635670,
+    "systemSent": true,
+    "abortedLastRun": false,
+    "authProfileOverride": "moonshot:default",
+    "chatType": "direct",
+    "deliveryContext": {"channel": "webchat"},
+    "origin": {
+      "label": "heartbeat",
+      "provider": "webchat",
+      "surface": "webchat"
+    },
+    "sessionFile": "/Users/findai/.openclaw/agents/main/sessions/12a466be-...jsonl",
+    "compactionCount": 2,
+    "skillsSnapshot": {...}
+  }
+}
+```
+
+### Gateway 日志格式（logs/gateway.log）
 ```
 2026-03-19T14:28:35.167+08:00 [plugins] feishu_doc: Registered feishu_doc
 2026-03-19T14:28:35.310+08:00 [canvas] host mounted at http://127.0.0.1:18789/__openclaw__/canvas/
@@ -111,11 +242,31 @@
 2026-03-19T14:28:35.315+08:00 [gateway] listening on ws://127.0.0.1:18789
 ```
 
+### Config 审计日志（logs/config-audit.jsonl）
+```json
+{
+  "ts": "2026-03-19T06:22:52.079Z",
+  "source": "config-io",
+  "event": "config.write",
+  "configPath": "/Users/findai/.openclaw/openclaw.json",
+  "pid": 52010,
+  "ppid": 52009,
+  "cwd": "/Users/findai",
+  "argv": [...],
+  "previousHash": "e3b0c44298fc1c149afbf4c8996fb924...",
+  "nextHash": "4ef3183a7fa6da2e03de058c05588cfd...",
+  "result": "rename"
+}
+```
+
 ### 特点
-- 使用结构化日志（带时间戳和标签）
-- Session 数据存储在工作区的 memory/ 目录
-- 通过 Gateway 集中管理所有连接
-- 支持设备配对和远程访问
+- **详细的 Session 日志**: JSON Lines 格式，记录完整的对话流程
+- **丰富的消息类型**: session, model_change, message, thinking_level_change, custom
+- **完整的 Token 统计**: input, output, cacheRead, cacheWrite, cost
+- **工具调用链**: toolCall → toolResult 的完整链路
+- **Session 索引**: sessions.json 提供快速查找
+- **配置审计**: 记录所有配置变更
+- **多 Agent 支持**: agents/ 目录下可以有多个 agent 配置
 
 ---
 
@@ -185,9 +336,11 @@ CREATE TABLE traces (
 - 注意处理子 session 的情况
 
 ### OpenClaw
-- 通过 Gateway API 获取实时数据
-- 监听 `~/.openclaw/logs/gateway.log`
-- 读取工作区的 memory/ 文件
+- **Session 日志**: 监听 `~/.openclaw/agents/<agent>/sessions/*.jsonl` 变化
+- **Session 索引**: 读取 `~/.openclaw/agents/<agent>/sessions/sessions.json` 获取活跃 session
+- **Gateway 日志**: 监听 `~/.openclaw/logs/gateway.log` 获取系统事件
+- **Config 审计**: 读取 `~/.openclaw/logs/config-audit.jsonl` 获取配置变更
+- **实时数据**: 通过 Gateway WebSocket API 获取实时更新
 
 ### 统一存储
 - 使用 AgentLens 的 SQLiteStorage
