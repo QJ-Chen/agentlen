@@ -262,6 +262,44 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     );
   };
 
+  // 获取工具缩略描述
+  const getToolSummary = (tool: any): string => {
+    const input = tool.input || {};
+    
+    switch (tool.name) {
+      case 'Agent':
+        return input.description || input.prompt || '';
+      case 'Bash':
+        return input.command || '';
+      case 'Write':
+      case 'Edit':
+        return input.file_path || input.path || '';
+      case 'Read':
+        return input.file_path || input.path || '';
+      case 'TaskCreate':
+        return input.description || input.prompt || '';
+      case 'TaskUpdate':
+        return input.description || '';
+      case 'Grep':
+        return `${input.query || ''} in ${input.path || ''}`;
+      case 'Glob':
+        return input.pattern || '';
+      case 'LSP':
+        return `${input.operation || ''} ${input.path || ''}`;
+      default:
+        // 尝试从 input 中提取有用的信息
+        const keys = Object.keys(input);
+        if (keys.length > 0) {
+          const firstKey = keys[0];
+          const value = input[firstKey];
+          if (typeof value === 'string' && value.length < 50) {
+            return `${firstKey}: ${value}`;
+          }
+        }
+        return '';
+    }
+  };
+
   // Render Tools Tab
   const renderTools = () => (
     <div className="space-y-2">
@@ -273,6 +311,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       ) : (
         allTools.map((tool, idx) => {
           const isExpanded = expandedTools.has(idx);
+          const summary = getToolSummary(tool);
+          const displaySummary = summary.length > 40 ? summary.substring(0, 40) + '...' : summary;
+          
           return (
             <div
               key={idx}
@@ -297,17 +338,25 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-medium truncate">{tool.name}</span>
-                    <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    <span className="font-medium">{tool.name}</span>
+                    {displaySummary && (
+                      <span className="text-xs text-gray-500 truncate flex-1" title={summary}>
+                        {displaySummary}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
+                    <span className={`px-1.5 py-0.5 rounded ${
                       tool.status === 'success' ? 'bg-emerald-500/20 text-emerald-300' :
                       tool.status === 'error' ? 'bg-red-500/20 text-red-300' :
                       'bg-yellow-500/20 text-yellow-300'
                     }`}>
                       {tool.status}
                     </span>
-                  </div>
-                  <div className="text-xs text-gray-400 mt-0.5">
-                    {formatDuration(tool.duration)} · {formatTime(tool.startTime)}
+                    <span>·</span>
+                    <span>{formatDuration(tool.duration)}</span>
+                    <span>·</span>
+                    <span>{formatTime(tool.startTime)}</span>
                   </div>
                 </div>
                 {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -467,6 +516,11 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
           const promptParts = call.prompt ? formatMessageContent(call.prompt) : [];
           const responseParts = call.response ? formatMessageContent(call.response) : [];
           
+          // 获取 prompt 预览（前 60 个字符）
+          const promptPreview = call.prompt 
+            ? call.prompt.replace(/\n/g, ' ').substring(0, 60) + (call.prompt.length > 60 ? '...' : '')
+            : '无提示词';
+          
           return (
             <div
               key={idx}
@@ -479,11 +533,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 className="w-full px-4 py-3 flex items-center gap-3 text-left"
               >
                 <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                  <MessageSquare className="w-4 h-4 text-cyan-400" />
+                  <span className="text-xs text-cyan-400 font-mono">{idx + 1}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium truncate">{call.model}</span>
+                  {/* 显示 prompt 预览而不是模型名 */}
+                  <div className="text-sm text-gray-200 truncate" title={call.prompt || ''}>
+                    {promptPreview}
                   </div>
                   <div className="text-xs text-gray-400 mt-0.5">
                     {formatDuration(call.duration)} · {call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens · ${call.cost.toFixed(4)}
@@ -493,10 +548,16 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
               </button>
 
               {isExpanded && (
-                <div className="px-4 pb-4 border-t border-slate-700/50">
+                <div className="px-4 pb-4 border-t border-slate-700/50 space-y-4">
+                  {/* 模型信息 */}
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <MessageSquare className="w-3 h-3" />
+                    <span>模型: {call.model}</span>
+                  </div>
+
                   {/* Prompt Section */}
                   {call.prompt && (
-                    <div className="mt-3">
+                    <div>
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
                           <MessageSquare className="w-3 h-3" />
@@ -535,7 +596,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
                   {/* Response Section */}
                   {call.response && (
-                    <div className="mt-4">
+                    <div>
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-blue-400 flex items-center gap-1">
                           <FileText className="w-3 h-3" />
@@ -573,7 +634,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                   )}
 
                   {!call.prompt && !call.response && (
-                    <div className="mt-3 text-center py-4 text-gray-500 text-sm">
+                    <div className="text-center py-4 text-gray-500 text-sm">
                       无详细对话记录
                     </div>
                   )}

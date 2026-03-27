@@ -8,11 +8,13 @@ export interface Trace {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   startTime: number;
   endTime?: number;
+  lastRequestTime: number;  // 最后请求时间，用于排序
   duration?: number;
   tools: ToolCall[];
   llmCalls: LLMCall[];
   totalTokens: number;
   cost: number;
+  projectPath?: string;  // 工作目录
 }
 
 export interface ToolCall {

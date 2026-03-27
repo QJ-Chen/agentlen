@@ -39,46 +39,74 @@ const TraceListItem = ({
   isSelected,
   onClick,
 }: {
-  trace: Trace & { raw?: any };
+  trace: Trace & { raw?: any; projectPath?: string; lastRequestTime?: number };
   isSelected: boolean;
   onClick: () => void;
-}) => (
-  <div
-    onClick={onClick}
-    className={`p-3 rounded-lg cursor-pointer transition-all ${
-      isSelected
-        ? 'bg-blue-600 text-white shadow-lg'
-        : 'bg-slate-800 hover:bg-slate-700 border border-slate-700/50'
-    }`}
-  >
-    <div className="flex items-center justify-between">
-      <span className={`font-medium truncate ${isSelected ? 'text-white' : 'text-gray-200'}`}>
-        {trace.agentName}
-      </span>
-      <span
-        className={`text-xs px-2 py-0.5 rounded ${
-          trace.status === 'completed'
-            ? isSelected ? 'bg-emerald-400 text-emerald-900' : 'bg-emerald-900 text-emerald-300'
-            : trace.status === 'failed'
-            ? isSelected ? 'bg-red-400 text-red-900' : 'bg-red-900 text-red-300'
-            : isSelected ? 'bg-yellow-400 text-yellow-900' : 'bg-yellow-900 text-yellow-300'
-        }`}
-      >
-        {trace.status}
-      </span>
+}) => {
+  // 获取工作目录显示
+  const getWorkDir = () => {
+    if (trace.projectPath) {
+      return trace.projectPath;
+    }
+    // 从 raw 数据中提取
+    if (trace.raw?.cwd) {
+      return trace.raw.cwd;
+    }
+    if (trace.raw?.message?.cwd) {
+      return trace.raw.message.cwd;
+    }
+    return null;
+  };
+
+  const workDir = getWorkDir();
+  const displayPath = workDir ? workDir.split('/').slice(-2).join('/') : null;
+
+  return (
+    <div
+      onClick={onClick}
+      className={`p-3 rounded-lg cursor-pointer transition-all ${
+        isSelected
+          ? 'bg-blue-600 text-white shadow-lg'
+          : 'bg-slate-800 hover:bg-slate-700 border border-slate-700/50'
+      }`}
+    >
+      <div className="flex items-center justify-between">
+        <span className={`font-medium truncate ${isSelected ? 'text-white' : 'text-gray-200'}`}>
+          {trace.agentName}
+        </span>
+        <span
+          className={`text-xs px-2 py-0.5 rounded ${
+            trace.status === 'completed'
+              ? isSelected ? 'bg-emerald-400 text-emerald-900' : 'bg-emerald-900 text-emerald-300'
+              : trace.status === 'failed'
+              ? isSelected ? 'bg-red-400 text-red-900' : 'bg-red-900 text-red-300'
+              : isSelected ? 'bg-yellow-400 text-yellow-900' : 'bg-yellow-900 text-yellow-300'
+          }`}
+        >
+          {trace.status}
+        </span>
+      </div>
+      
+      {/* 工作目录 */}
+      {displayPath && (
+        <div className={`text-xs mt-1 truncate ${isSelected ? 'text-blue-200' : 'text-gray-500'}`}>
+          📁 {displayPath}
+        </div>
+      )}
+      
+      <div className={`text-xs mt-1 ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
+        {formatTime(trace.lastRequestTime || trace.startTime)} · {trace.platform}
+      </div>
+      <div className={`flex gap-3 mt-2 text-xs ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+        <span>{trace.tools?.length || 0} 工具</span>
+        <span>{trace.totalTokens.toLocaleString()} tokens</span>
+        <span className={isSelected ? 'text-emerald-200' : 'text-emerald-400'}>
+          ${trace.cost.toFixed(4)}
+        </span>
+      </div>
     </div>
-    <div className={`text-xs mt-1 ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
-      {formatTime(trace.startTime)} · {trace.platform}
-    </div>
-    <div className={`flex gap-3 mt-2 text-xs ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
-      <span>{trace.tools?.length || 0} 工具</span>
-      <span>{trace.totalTokens.toLocaleString()} tokens</span>
-      <span className={isSelected ? 'text-emerald-200' : 'text-emerald-400'}>
-        ${trace.cost.toFixed(4)}
-      </span>
-    </div>
-  </div>
-);
+  );
+};
 
 // Stats Card
 const StatsCard = ({
@@ -220,6 +248,15 @@ function App() {
           }
         }
 
+        // 计算最后请求时间（从 LLM 调用或工具调用中获取）
+        const lastLLMTime = llmCalls.length > 0
+          ? Math.max(...llmCalls.map((c: any) => c.endTime || c.startTime))
+          : 0;
+        const lastToolTime = tools.length > 0
+          ? Math.max(...tools.map((tool: any) => tool.endTime || tool.startTime))
+          : 0;
+        const lastRequestTime = Math.max(lastLLMTime, lastToolTime, new Date(t.start_time).getTime());
+
         return {
           id: t.trace_id || String(t.id),
           agentId: t.agent_name,
@@ -228,14 +265,19 @@ function App() {
           status: t.status === 'error' ? 'failed' : t.status || 'completed',
           startTime: new Date(t.start_time).getTime(),
           endTime: t.end_time ? new Date(t.end_time).getTime() : undefined,
+          lastRequestTime,
           duration: t.duration_ms,
           tools,
           llmCalls,
           totalTokens: (t.input_tokens || 0) + (t.output_tokens || 0),
           cost: t.cost_usd || 0,
+          projectPath: t.project_path,
           raw: t,
         };
       });
+
+      // 按最后请求时间排序（最新的在前）
+      transformedTraces.sort((a: any, b: any) => b.lastRequestTime - a.lastRequestTime);
 
       setTraces(transformedTraces);
       setStats(statsData);
