@@ -112,9 +112,10 @@ class SQLiteStorage(Storage):
                     prompt, response, input_tokens, output_tokens,
                     cache_read_tokens, cache_write_tokens,
                     cache_creation_input_tokens, cache_read_input_tokens,
-                    cost_usd, tool_calls, status, error_message,
+                    cost_usd, tool_calls, llm_calls,
+                    status, error_message,
                     project_path, role, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 trace.get("trace_id"),
                 trace.get("platform"),
