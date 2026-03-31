@@ -569,7 +569,8 @@ class KimiCodeCollector(LogCollector):
             for line in f:
                 try:
                     data = json.loads(line.strip())
-                    msg_type = data.get("type")
+                    # Kimi Code 的 type 在 message 对象中
+                    msg_type = data.get("message", {}).get("type") if data.get("message") else data.get("type")
                     timestamp = data.get("timestamp")
                     
                     if msg_type == "TurnBegin":
@@ -596,8 +597,20 @@ class KimiCodeCollector(LogCollector):
                         # 开始新的 turn
                         payload = data.get("message", {}).get("payload", {})
                         user_input = payload.get("user_input", [])
+                        # user_input 可能是字符串或数组
+                        if isinstance(user_input, str):
+                            prompt_text = user_input
+                        elif isinstance(user_input, list) and len(user_input) > 0:
+                            first_item = user_input[0]
+                            if isinstance(first_item, dict):
+                                prompt_text = first_item.get("text", "")
+                            else:
+                                prompt_text = str(first_item)
+                        else:
+                            prompt_text = None
+                        
                         current_turn = {
-                            "prompt": user_input[0].get("text") if user_input else None,
+                            "prompt": prompt_text,
                             "response": None,
                             "tool_calls": [],
                             "model": "kimi-k2.5",
