@@ -88,7 +88,10 @@ export const TraceList: React.FC<TraceListProps> = ({
                       style={{ backgroundColor: platformColors[trace.platform] }}
                     />
                     <span className="font-medium truncate">
-                      {trace.agentName}
+                      {/* Claude Code 和 Kimi Code 显示工作目录，OpenClaw 显示 agentName */}
+                      {(trace.platform === 'claude-code' || trace.platform === 'kimi-code') && trace.projectPath
+                        ? trace.projectPath.split('/').pop() || trace.projectPath
+                        : trace.agentName}
                     </span>
                   </div>
                   <StatusIcon
