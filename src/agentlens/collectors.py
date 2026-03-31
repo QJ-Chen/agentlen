@@ -897,10 +897,14 @@ class KimiCodeCollector(LogCollector):
                     
                     elif msg_type == "StatusUpdate":
                         payload = data.get("message", {}).get("payload", {})
-                        usage = payload.get("usage", {})
-                        if usage:
-                            current_turn["input_tokens"] = usage.get("input", 0)
-                            current_turn["output_tokens"] = usage.get("output", 0)
+                        token_usage = payload.get("token_usage", {})
+                        if token_usage:
+                            # Kimi Code 使用 input_other, input_cache_read, input_cache_creation, output
+                            input_tokens = token_usage.get("input_other", 0) + \
+                                          token_usage.get("input_cache_read", 0) + \
+                                          token_usage.get("input_cache_creation", 0)
+                            current_turn["input_tokens"] = input_tokens
+                            current_turn["output_tokens"] = token_usage.get("output", 0)
                     
                 except json.JSONDecodeError:
                     continue

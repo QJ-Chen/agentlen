@@ -172,7 +172,7 @@ def get_traces(
 
 
 @app.get("/api/v1/stats")
-def get_stats(period_hours: int = Query(24, ge=1, le=168)):
+def get_stats(period_hours: int = Query(720, ge=1, le=8760)):
     """获取统计信息"""
     stats = storage.get_stats(period_hours)
     return stats
