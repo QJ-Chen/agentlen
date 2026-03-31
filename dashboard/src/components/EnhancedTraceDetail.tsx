@@ -63,6 +63,38 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     return trace.llmCalls || [];
   }, [trace.llmCalls]);
 
+  // Group LLM calls by prompt
+  const groupedLLMCalls = useMemo(() => {
+    const groups: { prompt: string; calls: typeof allLLMCalls }[] = [];
+    let currentGroup: { prompt: string; calls: typeof allLLMCalls } | null = null;
+
+    for (const call of allLLMCalls) {
+      if (!currentGroup || currentGroup.prompt !== call.prompt) {
+        currentGroup = { prompt: call.prompt || '', calls: [] };
+        groups.push(currentGroup);
+      }
+      currentGroup.calls.push(call);
+    }
+
+    return groups;
+  }, [allLLMCalls]);
+
+  // Find tool calls related to a specific LLM call
+  const getRelatedToolCalls = (call: typeof allLLMCalls[0]) => {
+    if (!trace.tools || !call.startTime) return [];
+    
+    // Find tools that happened after this LLM call but before the next one
+    const callIndex = allLLMCalls.findIndex(c => c.id === call.id);
+    const nextCall = allLLMCalls[callIndex + 1];
+    
+    return trace.tools.filter(tool => {
+      if (!tool.startTime) return false;
+      const afterThisCall = tool.startTime >= call.startTime;
+      const beforeNextCall = !nextCall || tool.startTime < nextCall.startTime;
+      return afterThisCall && beforeNextCall;
+    });
+  };
+
   const toggleTool = (idx: number) => {
     const newSet = new Set(expandedTools);
     if (newSet.has(idx)) newSet.delete(idx);
@@ -81,7 +113,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     { id: 'overview', label: '概览', icon: Activity },
     { id: 'timeline', label: '时序', icon: Clock },
     { id: 'tools', label: `工具 (${allTools.length})`, icon: Wrench },
-    { id: 'llm', label: `LLM (${allLLMCalls.length})`, icon: MessageSquare },
+    { id: 'llm', label: `LLM (${groupedLLMCalls.length}组)`, icon: MessageSquare },
     { id: 'raw', label: '原始', icon: Code },
   ];
 
@@ -504,140 +536,163 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   // Render LLM Tab
   const renderLLM = () => (
-    <div className="space-y-2">
+    <div className="space-y-4">
       {allLLMCalls.length === 0 ? (
         <div className="text-center py-8 text-gray-500">
           <MessageSquare className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p>无 LLM 调用记录</p>
         </div>
       ) : (
-        allLLMCalls.map((call, idx) => {
-          const isExpanded = expandedLLMs.has(idx);
-          const promptParts = call.prompt ? formatMessageContent(call.prompt) : [];
-          const responseParts = call.response ? formatMessageContent(call.response) : [];
-          
-          // 获取 prompt 预览（前 60 个字符）
-          const promptPreview = call.prompt 
-            ? call.prompt.replace(/\n/g, ' ').substring(0, 60) + (call.prompt.length > 60 ? '...' : '')
+        groupedLLMCalls.map((group, groupIdx) => {
+          const isGroupExpanded = expandedLLMs.has(groupIdx);
+          const promptPreview = group.prompt
+            ? group.prompt.replace(/\n/g, ' ').substring(0, 80) + (group.prompt.length > 80 ? '...' : '')
             : '无提示词';
           
           return (
             <div
-              key={idx}
+              key={groupIdx}
               className={`rounded-lg border transition-all ${
-                isExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
+                isGroupExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
               }`}
             >
+              {/* Group Header */}
               <button
-                onClick={() => toggleLLM(idx)}
+                onClick={() => toggleLLM(groupIdx)}
                 className="w-full px-4 py-3 flex items-center gap-3 text-left"
               >
                 <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                  <span className="text-xs text-cyan-400 font-mono">{idx + 1}</span>
+                  <span className="text-xs text-cyan-400 font-mono">{groupIdx + 1}</span>
                 </div>
                 <div className="flex-1 min-w-0">
-                  {/* 显示 prompt 预览而不是模型名 */}
-                  <div className="text-sm text-gray-200 truncate" title={call.prompt || ''}>
+                  <div className="text-sm text-gray-200 truncate" title={group.prompt}>
                     {promptPreview}
                   </div>
-                  <div className="text-xs text-gray-400 mt-0.5">
-                    {formatDuration(call.duration)} · {call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens · ${call.cost.toFixed(4)}
+                  <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
+                    <span>{group.calls.length} 次调用</span>
+                    <span>·</span>
+                    <span>{group.calls.reduce((sum, c) => sum + c.inputTokens, 0).toLocaleString()} → {group.calls.reduce((sum, c) => sum + c.outputTokens, 0).toLocaleString()} tokens</span>
                   </div>
                 </div>
-                {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                {isGroupExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
               </button>
 
-              {isExpanded && (
-                <div className="px-4 pb-4 border-t border-slate-700/50 space-y-4">
-                  {/* 模型信息 */}
-                  <div className="flex items-center gap-2 text-xs text-gray-500">
-                    <MessageSquare className="w-3 h-3" />
-                    <span>模型: {call.model}</span>
-                  </div>
-
-                  {/* Prompt Section */}
-                  {call.prompt && (
-                    <div>
+              {/* Group Content */}
+              {isGroupExpanded && (
+                <div className="border-t border-slate-700/50">
+                  {/* Show Prompt Once */}
+                  {group.prompt && (
+                    <div className="px-4 py-3 bg-slate-900/30 border-b border-slate-700/50">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
                           <MessageSquare className="w-3 h-3" />
-                          提示词 (Prompt)
+                          用户提示词
                         </span>
                         <button
-                          onClick={() => copyToClipboard(call.prompt || '', `llm-prompt-${idx}`)}
+                          onClick={() => copyToClipboard(group.prompt, `group-prompt-${groupIdx}`)}
                           className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
                         >
-                          {copiedId === `llm-prompt-${idx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                          {copiedId === `llm-prompt-${idx}` ? '已复制' : '复制'}
+                          {copiedId === `group-prompt-${groupIdx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          {copiedId === `group-prompt-${groupIdx}` ? '已复制' : '复制'}
                         </button>
                       </div>
-                      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
-                        {promptParts.map((part, pIdx) => (
-                          <div key={pIdx}>
-                            {part.type === 'code' ? (
-                              <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
-                                <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
-                                  <span className="text-xs text-gray-500">{part.language}</span>
-                                </div>
-                                <pre className="p-3 text-xs text-green-400 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
-                                  {part.content}
-                                </pre>
-                              </div>
-                            ) : (
-                              <div className="p-3 text-sm text-gray-300 whitespace-pre-wrap leading-relaxed">
-                                {part.content}
-                              </div>
-                            )}
-                          </div>
-                        ))}
+                      <div className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-auto">
+                        {group.prompt}
                       </div>
                     </div>
                   )}
 
-                  {/* Response Section */}
-                  {call.response && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs font-medium text-blue-400 flex items-center gap-1">
-                          <FileText className="w-3 h-3" />
-                          响应 (Response)
-                        </span>
-                        <button
-                          onClick={() => copyToClipboard(call.response || '', `llm-response-${idx}`)}
-                          className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                  {/* Individual LLM Calls */}
+                  <div className="space-y-2 p-4">
+                    {group.calls.map((call, callIdx) => {
+                      const callKey = `${groupIdx}-${callIdx}`;
+                      const isCallExpanded = expandedLLMs.has(callKey as unknown as number);
+                      const relatedTools = getRelatedToolCalls(call);
+                      
+                      return (
+                        <div
+                          key={callKey}
+                          className={`rounded border ${isCallExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}
                         >
-                          {copiedId === `llm-response-${idx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                          {copiedId === `llm-response-${idx}` ? '已复制' : '复制'}
-                        </button>
-                      </div>
-                      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
-                        {responseParts.map((part, pIdx) => (
-                          <div key={pIdx}>
-                            {part.type === 'code' ? (
-                              <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
-                                <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
-                                  <span className="text-xs text-gray-500">{part.language}</span>
-                                </div>
-                                <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
-                                  {part.content}
-                                </pre>
+                          <button
+                            onClick={() => toggleLLM(callKey as unknown as number)}
+                            className="w-full px-3 py-2 flex items-center gap-2 text-left"
+                          >
+                            <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center">
+                              <span className="text-xs text-blue-400 font-mono">{callIdx + 1}</span>
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm text-gray-300 truncate">
+                                {call.response 
+                                  ? call.response.replace(/\n/g, ' ').substring(0, 50) + (call.response.length > 50 ? '...' : '')
+                                  : '无响应内容'}
                               </div>
-                            ) : (
-                              <div className="p-3 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
-                                {part.content}
+                              <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+                                <span>{call.model}</span>
+                                <span>·</span>
+                                <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
+                                {relatedTools.length > 0 && (
+                                  <>
+                                    <span>·</span>
+                                    <span className="text-violet-400">{relatedTools.length} 个工具调用</span>
+                                  </>
+                                )}
                               </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                            </div>
+                            {isCallExpanded ? <ChevronDown className="w-3 h-3 text-gray-400" /> : <ChevronRight className="w-3 h-3 text-gray-400" />}
+                          </button>
 
-                  {!call.prompt && !call.response && (
-                    <div className="text-center py-4 text-gray-500 text-sm">
-                      无详细对话记录
-                    </div>
-                  )}
+                          {isCallExpanded && (
+                            <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
+                              {/* Response */}
+                              {call.response && (
+                                <div>
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-medium text-blue-400">响应内容</span>
+                                    <button
+                                      onClick={() => copyToClipboard(call.response || '', `call-response-${callKey}`)}
+                                      className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                                    >
+                                      {copiedId === `call-response-${callKey}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                                      {copiedId === `call-response-${callKey}` ? '已复制' : '复制'}
+                                    </button>
+                                  </div>
+                                  <div className="bg-slate-950 rounded border border-slate-800 p-2 text-sm text-gray-200 whitespace-pre-wrap max-h-40 overflow-auto">
+                                    {call.response}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Related Tool Calls */}
+                              {relatedTools.length > 0 && (
+                                <div>
+                                  <div className="text-xs font-medium text-violet-400 mb-2 flex items-center gap-1">
+                                    <Wrench className="w-3 h-3" />
+                                    相关工具调用 ({relatedTools.length})
+                                  </div>
+                                  <div className="space-y-1">
+                                    {relatedTools.map((tool, toolIdx) => (
+                                      <div key={toolIdx} className="bg-slate-900/50 rounded border border-slate-700/50 p-2">
+                                        <div className="flex items-center gap-2 text-xs">
+                                          <span className="text-violet-400 font-medium">{tool.name}</span>
+                                          <span className="text-gray-500">{formatTime(tool.startTime || 0)}</span>
+                                        </div>
+                                        {tool.input && Object.keys(tool.input).length > 0 && (
+                                          <div className="mt-1 text-xs text-gray-400 font-mono truncate">
+                                            {JSON.stringify(tool.input).substring(0, 100)}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
