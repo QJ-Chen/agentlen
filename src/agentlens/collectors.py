@@ -549,6 +549,30 @@ class KimiCodeCollector(LogCollector):
         
         return paths
     
+    def _extract_work_dir_from_tool_calls(self, tool_calls: List[Dict]) -> str:
+        """从 tool calls 中提取工作目录"""
+        from os.path import commonprefix, dirname
+        
+        paths = []
+        for tool in tool_calls:
+            input_data = tool.get("input", {})
+            path = input_data.get("path", "")
+            if path and path.startswith("/"):
+                paths.append(path)
+        
+        if not paths:
+            return ""
+        
+        common = commonprefix(paths)
+        if common:
+            # 向上找到合理的项目目录
+            work_dir = dirname(common)
+            # 如果 common 是文件，再向上找一级
+            if "." in common.split("/")[-1]:
+                work_dir = dirname(work_dir)
+            return work_dir
+        return ""
+    
     def parse_session_file(self, log_path: Path) -> List[Dict[str, Any]]:
         """解析 Kimi Code wire 文件，按 session 聚合"""
         session_id = log_path.parent.name
@@ -590,7 +614,7 @@ class KimiCodeCollector(LogCollector):
                                 "output_tokens": current_turn["output_tokens"],
                                 "cost_usd": 0,
                                 "tool_calls": current_turn["tool_calls"],
-                                "project_path": "",
+                                "project_path": self._extract_work_dir_from_tool_calls(current_turn["tool_calls"]),
                             }
                             aggregator.add_message(session_id, msg_data)
                         
@@ -676,7 +700,7 @@ class KimiCodeCollector(LogCollector):
                 "output_tokens": current_turn["output_tokens"],
                 "cost_usd": 0,
                 "tool_calls": current_turn["tool_calls"],
-                "project_path": "",
+                "project_path": self._extract_work_dir_from_tool_calls(current_turn["tool_calls"]),
             }
             aggregator.add_message(session_id, msg_data)
         
