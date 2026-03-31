@@ -180,76 +180,27 @@ function App() {
           output: tool.output,
         }));
 
-        // Parse llm_calls from response field if exists
+        // Parse llm_calls from API response
         let llmCalls: any[] = [];
-        // Get trace-level prompt/response as fallback
-        const tracePrompt = t.prompt || '';
-        const traceResponse = t.response || '';
         
-        if (t.response) {
-          try {
-            const respData = JSON.parse(t.response);
-            const rawLLMCalls = respData.llm_calls || [];
-            
-            if (rawLLMCalls.length > 0) {
-              // Distribute trace-level prompt/response to LLM calls
-              llmCalls = rawLLMCalls.map((call: any, idx: number) => {
-                // Use call-level prompt/response if available, otherwise use trace-level
-                const hasCallPrompt = call.prompt && call.prompt.trim().length > 0;
-                const hasCallResponse = call.response && call.response.trim().length > 0;
-                
-                return {
-                  id: `llm-${idx}`,
-                  model: call.model || 'unknown',
-                  startTime: call.timestamp ? new Date(call.timestamp * 1000).getTime() : new Date(t.start_time).getTime(),
-                  endTime: call.timestamp ? new Date(call.timestamp * 1000).getTime() : new Date(t.end_time || t.start_time).getTime(),
-                  duration: 0,
-                  inputTokens: call.input_tokens || 0,
-                  outputTokens: call.output_tokens || 0,
-                  totalTokens: (call.input_tokens || 0) + (call.output_tokens || 0),
-                  cost: 0,
-                  status: call.response ? 'success' : 'streaming',
-                  // Use call-level if available, otherwise fall back to trace-level for first/last call
-                  prompt: hasCallPrompt ? call.prompt : (idx === 0 ? tracePrompt : ''),
-                  response: hasCallResponse ? call.response : (idx === rawLLMCalls.length - 1 ? traceResponse : ''),
-                };
-              });
-            } else if (tracePrompt || traceResponse) {
-              // If no llm_calls but trace has prompt/response, create a synthetic LLM call
-              llmCalls = [{
-                id: 'llm-0',
-                model: t.model || 'unknown',
-                startTime: new Date(t.start_time).getTime(),
-                endTime: t.end_time ? new Date(t.end_time).getTime() : new Date(t.start_time).getTime(),
-                duration: t.duration_ms || 0,
-                inputTokens: t.input_tokens || 0,
-                outputTokens: t.output_tokens || 0,
-                totalTokens: (t.input_tokens || 0) + (t.output_tokens || 0),
-                cost: t.cost_usd || 0,
-                status: t.status === 'success' || t.status === 'completed' ? 'success' : 'streaming',
-                prompt: tracePrompt,
-                response: traceResponse,
-              }];
-            }
-          } catch (e) {
-            // If JSON parse fails but trace has prompt/response, create synthetic LLM call
-            if (tracePrompt || traceResponse) {
-              llmCalls = [{
-                id: 'llm-0',
-                model: t.model || 'unknown',
-                startTime: new Date(t.start_time).getTime(),
-                endTime: t.end_time ? new Date(t.end_time).getTime() : new Date(t.start_time).getTime(),
-                duration: t.duration_ms || 0,
-                inputTokens: t.input_tokens || 0,
-                outputTokens: t.output_tokens || 0,
-                totalTokens: (t.input_tokens || 0) + (t.output_tokens || 0),
-                cost: t.cost_usd || 0,
-                status: t.status === 'success' || t.status === 'completed' ? 'success' : 'streaming',
-                prompt: tracePrompt,
-                response: traceResponse,
-              }];
-            }
-          }
+        // API returns llm_calls as an array directly
+        const rawLLMCalls = t.llm_calls || [];
+        
+        if (rawLLMCalls.length > 0) {
+          llmCalls = rawLLMCalls.map((call: any, idx: number) => ({
+            id: call.id || `llm-${idx}`,
+            model: call.model || 'unknown',
+            startTime: call.start_time ? new Date(call.start_time).getTime() : new Date(t.start_time).getTime(),
+            endTime: call.start_time ? new Date(call.start_time).getTime() : new Date(t.end_time || t.start_time).getTime(),
+            duration: 0,
+            inputTokens: call.input_tokens || 0,
+            outputTokens: call.output_tokens || 0,
+            totalTokens: (call.input_tokens || 0) + (call.output_tokens || 0),
+            cost: 0,
+            status: call.response ? 'success' : 'streaming',
+            prompt: call.prompt || '',
+            response: call.response || '',
+          }));
         }
 
         // 计算最后请求时间（从 LLM 调用或工具调用中获取）

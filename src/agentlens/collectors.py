@@ -66,13 +66,20 @@ class SessionAggregator:
         
         # 收集 LLM 调用（只保留最近的 50 个，避免数据过大）
         if message.get("role") == "assistant" and message.get("model"):
+            # 查找前一个 user 消息的 prompt
+            last_user_prompt = None
+            for prev_msg in reversed(session["messages"][:-1]):  # 排除当前消息
+                if prev_msg.get("role") == "user" and prev_msg.get("prompt"):
+                    last_user_prompt = prev_msg.get("prompt")
+                    break
+            
             session["llm_calls"].append({
                 "id": message.get("trace_id"),
                 "model": message.get("model"),
                 "start_time": message.get("start_time"),
                 "input_tokens": message.get("input_tokens", 0),
                 "output_tokens": message.get("output_tokens", 0),
-                "prompt": message.get("prompt")[:500] if message.get("prompt") else None,
+                "prompt": last_user_prompt[:500] if last_user_prompt else None,
                 "response": message.get("response")[:1000] if message.get("response") else None,
             })
             # 只保留最近的 50 个
@@ -348,8 +355,20 @@ class OpenClawCollector(LogCollector):
                         if isinstance(content, str):
                             response = content
                         elif isinstance(content, list):
+                            # 提取 text 类型的内容
                             texts = [item.get("text", "") for item in content if item.get("type") == "text"]
                             response = "\n".join(texts)
+                            
+                            # 如果没有 text 但有 toolCall，将 toolCall 作为 response
+                            if not response:
+                                tool_calls_in_content = [item for item in content if item.get("type") == "toolCall"]
+                                if tool_calls_in_content:
+                                    response_parts = []
+                                    for tc in tool_calls_in_content:
+                                        tc_name = tc.get("name", "Unknown")
+                                        tc_args = tc.get("arguments", {})
+                                        response_parts.append(f"[{tc_name}] {json.dumps(tc_args, ensure_ascii=False)[:200]}")
+                                    response = "\n".join(response_parts)
                     
                     msg_data = {
                         "trace_id": data.get("id"),
@@ -466,6 +485,17 @@ class ClaudeCodeCollector(LogCollector):
                         elif isinstance(content, list):
                             texts = [item.get("text", "") for item in content if item.get("type") == "text"]
                             response = "\n".join(texts)
+                            
+                            # 如果没有 text 但有 tool_use，将 tool_use 作为 response
+                            if not response:
+                                tool_uses = [item for item in content if item.get("type") == "tool_use"]
+                                if tool_uses:
+                                    response_parts = []
+                                    for tu in tool_uses:
+                                        tu_name = tu.get("name", "Unknown")
+                                        tu_input = tu.get("input", {})
+                                        response_parts.append(f"[{tu_name}] {json.dumps(tu_input, ensure_ascii=False)[:200]}")
+                                    response = "\n".join(response_parts)
                     
                     # 从 data 中获取 cwd
                     cwd = data.get("cwd", "")
