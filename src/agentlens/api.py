@@ -6,8 +6,13 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import uvicorn
 import json
+import logging
 
 from agentlens.storage import SQLiteStorage, JSONLStorage
+from agentlens.collectors import CollectorManager
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AgentLens API", version="0.1.0")
 
@@ -22,6 +27,31 @@ app.add_middleware(
 
 # 存储（默认 SQLite）
 storage = SQLiteStorage()
+
+# 收集器管理器（用于实时监听）
+collector_manager = None
+
+@app.on_event("startup")
+async def startup_event():
+    """启动时收集历史数据并启用实时监听"""
+    global collector_manager
+    
+    # 收集历史数据
+    collector_manager = CollectorManager(storage)
+    count = collector_manager.collect_all_historical()
+    logger.info(f"Collected {count} historical traces")
+    
+    # 启动实时监听
+    collector_manager.start_all(interval=5.0)  # 每 5 秒检查一次
+    logger.info("Started real-time log watching")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """关闭时停止监听"""
+    global collector_manager
+    if collector_manager:
+        collector_manager.stop_all()
+        logger.info("Stopped log watching")
 
 
 # 数据模型

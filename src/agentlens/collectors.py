@@ -240,6 +240,12 @@ class LogCollector(ABC):
     def _parse_new_lines(self, log_path: Path, new_lines: List[str], session_id: str, session_cwd: str):
         """解析新增的行并保存到数据库（子类需要重写）"""
         pass
+
+    def _parse_incremental(self, log_path: Path, new_lines: List[str]) -> List[Dict[str, Any]]:
+        """通用增量解析方法 - 子类可以调用或重写"""
+        # 默认实现：重新解析整个文件
+        # 子类可以重写此方法以实现更高效的增量解析
+        return self.parse_session_file(log_path)
     
     def collect_historical(self) -> List[Dict[str, Any]]:
         """收集历史日志"""
@@ -396,6 +402,100 @@ class OpenClawCollector(LogCollector):
         
         return aggregator.get_traces()
 
+    def _parse_new_lines(self, log_path: Path, new_lines: List[str], session_id: str, session_cwd: str):
+        """增量解析新增的行"""
+        aggregator = SessionAggregator()
+        
+        for line in new_lines:
+            try:
+                data = json.loads(line.strip())
+                
+                if data.get("type") != "message":
+                    continue
+                
+                message = data.get("message", {})
+                role = message.get("role")
+                
+                # 提取工具调用
+                tool_calls = []
+                content = message.get("content", [])
+                
+                if isinstance(content, list):
+                    for item in content:
+                        if item.get("type") == "toolCall":
+                            tool_calls.append({
+                                "tool_use_id": item.get("id"),
+                                "name": item.get("name"),
+                                "input": item.get("arguments", {}),
+                                "timestamp": data.get("timestamp")
+                            })
+                        elif item.get("type") == "toolResult":
+                            tool_calls.append({
+                                "tool_use_id": item.get("toolCallId"),
+                                "name": item.get("toolName"),
+                                "output": item.get("content"),
+                                "is_error": item.get("isError", False),
+                                "timestamp": data.get("timestamp")
+                            })
+                
+                usage = message.get("usage", {})
+                cost = usage.get("cost", {})
+                
+                # 确保 prompt/response 是字符串
+                prompt = None
+                response = None
+                if role == "user" and content:
+                    if isinstance(content, str):
+                        prompt = content
+                    elif isinstance(content, list):
+                        texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                        prompt = "\n".join(texts)
+                elif role == "assistant" and content:
+                    if isinstance(content, str):
+                        response = content
+                    elif isinstance(content, list):
+                        texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                        response = "\n".join(texts)
+                        
+                        if not response:
+                            tool_calls_in_content = [item for item in content if item.get("type") == "toolCall"]
+                            if tool_calls_in_content:
+                                response_parts = []
+                                for tc in tool_calls_in_content:
+                                    tc_name = tc.get("name", "Unknown")
+                                    tc_args = tc.get("arguments", {})
+                                    response_parts.append(f"[{tc_name}] {json.dumps(tc_args, ensure_ascii=False)[:200]}")
+                                response = "\n".join(response_parts)
+                
+                msg_data = {
+                    "trace_id": data.get("id"),
+                    "platform": "openclaw",
+                    "agent_name": data.get("agentId") or "main",
+                    "session_id": session_id,
+                    "start_time": data.get("timestamp"),
+                    "model": message.get("model", "unknown"),
+                    "role": role,
+                    "prompt": prompt,
+                    "response": response,
+                    "input_tokens": usage.get("input", 0),
+                    "output_tokens": usage.get("output", 0),
+                    "cost_usd": cost.get("total", 0) if isinstance(cost, dict) else 0,
+                    "tool_calls": tool_calls,
+                    "project_path": session_cwd,
+                }
+                
+                aggregator.add_message(session_id, msg_data)
+                
+            except json.JSONDecodeError:
+                continue
+            except Exception as e:
+                logger.error(f"Error parsing incremental line: {e}")
+        
+        # 保存到数据库
+        traces = aggregator.get_traces()
+        if traces and self.storage:
+            self.storage.save_traces(traces)
+
 
 class ClaudeCodeCollector(LogCollector):
     """Claude Code 日志收集器"""
@@ -525,6 +625,108 @@ class ClaudeCodeCollector(LogCollector):
                     logger.error(f"Error parsing Claude Code line: {e}")
         
         return aggregator.get_traces()
+
+    def _parse_new_lines(self, log_path: Path, new_lines: List[str], session_id: str, session_cwd: str):
+        """增量解析新增的行"""
+        aggregator = SessionAggregator()
+        
+        # 从目录名提取项目路径
+        project_path = ""
+        try:
+            encoded_path = log_path.parent.name
+            project_path = self._decode_path(encoded_path)
+        except:
+            pass
+        
+        for line in new_lines:
+            try:
+                data = json.loads(line.strip())
+                msg_type = data.get("type")
+                
+                if msg_type not in ["user", "assistant"]:
+                    continue
+                
+                message = data.get("message", {})
+                role = message.get("role")
+                
+                # 提取工具调用
+                tool_calls = []
+                content = message.get("content", [])
+                
+                if isinstance(content, list):
+                    for item in content:
+                        if item.get("type") == "tool_use":
+                            tool_calls.append({
+                                "tool_use_id": item.get("id"),
+                                "name": item.get("name"),
+                                "input": item.get("input", {}),
+                                "timestamp": data.get("timestamp")
+                            })
+                        elif item.get("type") == "tool_result":
+                            tool_calls.append({
+                                "tool_use_id": item.get("tool_use_id"),
+                                "output": item.get("content"),
+                                "timestamp": data.get("timestamp")
+                            })
+                
+                usage = message.get("usage", {})
+                
+                # 确保 prompt/response 是字符串
+                prompt = None
+                response = None
+                if role == "user" and content:
+                    if isinstance(content, str):
+                        prompt = content
+                    elif isinstance(content, list):
+                        texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                        prompt = "\n".join(texts)
+                elif role == "assistant" and content:
+                    if isinstance(content, str):
+                        response = content
+                    elif isinstance(content, list):
+                        texts = [item.get("text", "") for item in content if item.get("type") == "text"]
+                        response = "\n".join(texts)
+                        
+                        if not response:
+                            tool_uses = [item for item in content if item.get("type") == "tool_use"]
+                            if tool_uses:
+                                response_parts = []
+                                for tu in tool_uses:
+                                    tu_name = tu.get("name", "Unknown")
+                                    tu_input = tu.get("input", {})
+                                    response_parts.append(f"[{tu_name}] {json.dumps(tu_input, ensure_ascii=False)[:200]}")
+                                response = "\n".join(response_parts)
+                
+                cwd = data.get("cwd", "")
+                
+                msg_data = {
+                    "trace_id": data.get("uuid"),
+                    "platform": "claude-code",
+                    "agent_name": "claude-code",
+                    "session_id": session_id,
+                    "start_time": data.get("timestamp"),
+                    "model": message.get("model", "unknown"),
+                    "role": role,
+                    "prompt": prompt,
+                    "response": response,
+                    "input_tokens": usage.get("input_tokens", 0),
+                    "output_tokens": usage.get("output_tokens", 0),
+                    "cost_usd": 0,
+                    "tool_calls": tool_calls,
+                    "project_path": cwd or project_path,
+                }
+                
+                aggregator.add_message(session_id, msg_data)
+                
+            except json.JSONDecodeError:
+                continue
+            except Exception as e:
+                logger.error(f"Error parsing incremental Claude Code line: {e}")
+        
+        # 保存到数据库
+        traces = aggregator.get_traces()
+        if traces and self.storage:
+            self.storage.save_traces(traces)
 
 
 class KimiCodeCollector(LogCollector):
@@ -747,6 +949,14 @@ class KimiCodeCollector(LogCollector):
             aggregator.add_message(session_id, msg_data)
         
         return aggregator.get_traces()
+
+    def _parse_new_lines(self, log_path: Path, new_lines: List[str], session_id: str, session_cwd: str):
+        """增量解析新增的行 - Kimi Code 需要重新解析整个文件以维护状态"""
+        # Kimi Code 的日志格式需要维护 current_turn 状态
+        # 简单的做法是重新解析整个文件
+        traces = self.parse_session_file(log_path)
+        if traces and self.storage:
+            self.storage.save_traces(traces)
 
 
 class CollectorManager:
