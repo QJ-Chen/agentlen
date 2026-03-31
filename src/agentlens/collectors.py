@@ -600,6 +600,27 @@ class KimiCodeCollector(LogCollector):
                     if msg_type == "TurnBegin":
                         # 如果有之前的 turn，先保存
                         if current_turn["prompt"] and current_turn["start_time"]:
+                            # 先添加 user 消息（用于 LLM call 关联）
+                            if current_turn["prompt"]:
+                                user_msg_data = {
+                                    "trace_id": f"user-{current_turn['start_time']}",
+                                    "platform": "kimi-code",
+                                    "agent_name": "kimi-code",
+                                    "session_id": session_id,
+                                    "start_time": datetime.fromtimestamp(current_turn['start_time'], tz=datetime.now().astimezone().tzinfo).isoformat(),
+                                    "model": current_turn["model"],
+                                    "role": "user",
+                                    "prompt": current_turn["prompt"],
+                                    "response": None,
+                                    "input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "cost_usd": 0,
+                                    "tool_calls": [],
+                                    "project_path": self._extract_work_dir_from_tool_calls(current_turn["tool_calls"]),
+                                }
+                                aggregator.add_message(session_id, user_msg_data)
+                            
+                            # 再添加 assistant 消息（会创建 LLM call）
                             msg_data = {
                                 "trace_id": f"turn-{current_turn['start_time']}",
                                 "platform": "kimi-code",
@@ -607,7 +628,7 @@ class KimiCodeCollector(LogCollector):
                                 "session_id": session_id,
                                 "start_time": datetime.fromtimestamp(current_turn['start_time'], tz=datetime.now().astimezone().tzinfo).isoformat(),
                                 "model": current_turn["model"],
-                                "role": "assistant",  # Kimi Code 的 turn 是完整的对话回合
+                                "role": "assistant",
                                 "prompt": current_turn["prompt"],
                                 "response": current_turn["response"],
                                 "input_tokens": current_turn["input_tokens"],
@@ -686,6 +707,27 @@ class KimiCodeCollector(LogCollector):
         
         # 保存最后一个 turn
         if current_turn["prompt"] and current_turn["start_time"]:
+            # 先添加 user 消息（用于 LLM call 关联）
+            if current_turn["prompt"]:
+                user_msg_data = {
+                    "trace_id": f"user-{current_turn['start_time']}",
+                    "platform": "kimi-code",
+                    "agent_name": "kimi-code",
+                    "session_id": session_id,
+                    "start_time": datetime.fromtimestamp(current_turn['start_time'], tz=datetime.now().astimezone().tzinfo).isoformat(),
+                    "model": current_turn["model"],
+                    "role": "user",
+                    "prompt": current_turn["prompt"],
+                    "response": None,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0,
+                    "tool_calls": [],
+                    "project_path": self._extract_work_dir_from_tool_calls(current_turn["tool_calls"]),
+                }
+                aggregator.add_message(session_id, user_msg_data)
+            
+            # 再添加 assistant 消息（会创建 LLM call）
             msg_data = {
                 "trace_id": f"turn-{current_turn['start_time']}",
                 "platform": "kimi-code",
