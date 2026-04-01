@@ -249,6 +249,24 @@ class SQLiteStorage(Storage):
             
             row = cursor.fetchone()
             
+            # 统计 LLM calls 总数（从 llm_calls JSON 字段中计算）
+            cursor = conn.execute("""
+                SELECT llm_calls
+                FROM traces
+                WHERE start_time >= datetime('now', '-{} hours')
+            """.format(period_hours))
+            
+            total_llm_calls = 0
+            for row_data in cursor.fetchall():
+                llm_calls_json = row_data[0]
+                if llm_calls_json:
+                    try:
+                        llm_calls = json.loads(llm_calls_json)
+                        if isinstance(llm_calls, list):
+                            total_llm_calls += len(llm_calls)
+                    except:
+                        pass
+            
             # 按平台统计
             cursor = conn.execute("""
                 SELECT 
@@ -284,6 +302,7 @@ class SQLiteStorage(Storage):
             return {
                 "period_hours": period_hours,
                 "total_traces": row[0] or 0,
+                "total_llm_calls": total_llm_calls,
                 "total_tokens": row[1] or 0,
                 "total_cost": round(row[2] or 0, 4),
                 "avg_duration_ms": round(row[3] or 0, 2),

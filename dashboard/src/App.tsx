@@ -102,6 +102,7 @@ const TraceListItem = ({
         {formatTime(trace.lastRequestTime || trace.startTime)} · {trace.platform}
       </div>
       <div className={`flex gap-3 mt-2 text-xs ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+        <span>{trace.llmCalls?.length || 0} LLM</span>
         <span>{trace.tools?.length || 0} 工具</span>
         <span>{trace.totalTokens.toLocaleString()} tokens</span>
         <span className={isSelected ? 'text-emerald-200' : 'text-emerald-400'}>
