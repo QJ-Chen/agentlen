@@ -27,6 +27,17 @@ import requests
 
 API_URL = "http://localhost:8080"
 
+# Platform token pricing (USD per million tokens)
+PLATFORM_PRICING = {
+    "openclaw": {"input_per_1m": 0.2, "output_per_1m": 1.2},   # MiniMax-M2
+    "claude-code": {"input_per_1m": 3.0, "output_per_1m": 15.0}, # Claude 3.5 Sonnet
+    "kimi-code": {"input_per_1m": 0.5, "output_per_1m": 1.5},   # Kimi K2.5
+}
+
+def calc_cost(platform: str, input_tokens: int, output_tokens: int) -> float:
+    rates = PLATFORM_PRICING.get(platform, {"input_per_1m": 0.5, "output_per_1m": 1.5})
+    return (input_tokens / 1_000_000) * rates["input_per_1m"] + (output_tokens / 1_000_000) * rates["output_per_1m"]
+
 
 @dataclass
 class SessionEvent:
@@ -166,12 +177,12 @@ class SessionScanner:
                         continue
                     
                     msg_type = msg.get('type', '')
-                    payload = msg.get('payload', {})
+                    payload = msg.get('payload') or {}
                     
                     # Extract file paths from ToolCall to infer working directory
                     if msg_type == 'ToolCall':
-                        tool_data = payload
-                        func = tool_data.get('function', {})
+                        tool_data = payload or {}
+                        func = tool_data.get('function') or {}
                         args = func.get('arguments', '{}')
                         try:
                             args_dict = json.loads(args)
@@ -203,8 +214,8 @@ class SessionScanner:
                     
                     # ToolCall
                     elif msg_type == 'ToolCall':
-                        tool_data = payload
-                        func = tool_data.get('function', {})
+                        tool_data = payload or {}
+                        func = tool_data.get('function') or {}
                         args = func.get('arguments', '{}')
                         try:
                             args_dict = json.loads(args)
@@ -572,8 +583,8 @@ class SessionScanner:
                 if msg.get('role') == 'assistant' and msg.get('tool_calls'):
                     for tc in msg['tool_calls']:
                         tool_calls.append({
-                            'name': tc.get('function', {}).get('name', 'unknown'),
-                            'input': tc.get('function', {}).get('arguments', {}),
+                            'name': (tc.get('function') or {}).get('name', 'unknown'),
+                            'input': (tc.get('function') or {}).get('arguments', {}),
                             'timestamp': msg.get('timestamp', time.time())
                         })
                 
@@ -622,10 +633,10 @@ class SessionScanner:
             duration_ms = 0
         
         trace_data = {
-            "trace_id": f"session_{session['session_id']}",
+            "trace_id": f"session_{session['session_id'][:20]}",
             "platform": session['platform'],
-            "agent_name": f"{session['platform']}-agent",
-            "session_id": session['session_id'],
+            "agent_name": session.get('agent_name') or f"{session['platform']}-agent",
+            "session_id": session['session_id'][:40],  # 避免超长 ID
             "start_time": datetime.fromtimestamp(session['start_time']).isoformat(),
             "end_time": datetime.now().isoformat(),
             "duration_ms": duration_ms,
@@ -634,7 +645,11 @@ class SessionScanner:
             "response": response,
             "input_tokens": sum(lc.get('input_tokens', 0) for lc in session.get('llm_calls', [])),
             "output_tokens": sum(lc.get('output_tokens', 0) for lc in session.get('llm_calls', [])),
-            "cost_usd": session['total_cost'],
+            "cost_usd": calc_cost(
+                session['platform'],
+                sum(lc.get('input_tokens', 0) for lc in session.get('llm_calls', [])),
+                sum(lc.get('output_tokens', 0) for lc in session.get('llm_calls', []))
+            ),
             "tool_calls": session['tool_calls'],
             "status": status,
             "error_message": error,
@@ -644,12 +659,21 @@ class SessionScanner:
             }
         }
         
+        # 确保必填字段不为空
+        if not trace_data.get('prompt'):
+            trace_data['prompt'] = f"{session['platform']} session"
+        if not trace_data.get('response'):
+            trace_data['response'] = ""
+        
         try:
-            requests.post(
+            response = requests.post(
                 f"{API_URL}/api/v1/traces",
                 json=trace_data,
-                timeout=2.0
+                timeout=3.0
             )
+            if response.status_code >= 400:
+                print(f"    ⚠️ API {response.status_code}: {response.text[:100]}")
+                return False
             return True
         except Exception as e:
             print(f"    ⚠️ 发送失败: {e}")
