@@ -1,41 +1,142 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import './Dashboard.css';
 
-// 模拟数据
-const mockTraces = [
-  { id: '1', platform: 'openclaw', agent: 'main', model: 'claude-3-5', duration: 2500, cost: 0.002, status: 'success', time: '14:01:23' },
-  { id: '2', platform: 'claude-code', agent: 'dev', model: 'claude-3-5', duration: 3200, cost: 0.003, status: 'success', time: '14:02:15' },
-  { id: '3', platform: 'openclaw', agent: 'main', model: 'gpt-4o', duration: 1800, cost: 0.004, status: 'error', time: '14:03:42' },
-  { id: '4', platform: 'kimi-code', agent: 'review', model: 'kimi-k2', duration: 2100, cost: 0.001, status: 'success', time: '14:04:18' },
-  { id: '5', platform: 'openclaw', agent: 'main', model: 'claude-3-5', duration: 2900, cost: 0.0025, status: 'success', time: '14:05:33' },
-];
+const API_BASE = 'http://localhost:8080';
 
-const costData = [
-  { time: '14:00', cost: 0.012 },
-  { time: '14:05', cost: 0.028 },
-  { time: '14:10', cost: 0.045 },
-  { time: '14:15', cost: 0.058 },
-  { time: '14:20', cost: 0.072 },
-];
+const PLATFORM_COLORS: Record<string, string> = {
+  'openclaw': '#0088FE',
+  'claude-code': '#00C49F',
+  'kimi-code': '#FFBB28',
+  'cursor': '#FF8042',
+};
 
-const platformData = [
-  { name: 'OpenClaw', value: 45, color: '#0088FE' },
-  { name: 'Claude Code', value: 30, color: '#00C49F' },
-  { name: 'Kimi Code', value: 15, color: '#FFBB28' },
-  { name: 'Cursor', value: 10, color: '#FF8042' },
-];
+interface Trace {
+  trace_id: string;
+  platform: string;
+  agent?: string;
+  model: string;
+  prompt: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  started_at: string;
+  ended_at?: string;
+  status: string;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
 
-function Dashboard() {
+interface Stats {
+  total_traces: number;
+  total_cost: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  platform_counts: Record<string, number>;
+}
+
+
+function formatTime(isoString: string): string {
+  const d = new Date(isoString);
+  return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
+}
+
+function formatCost(cost: number): string {
+  if (cost === 0) return '$0.00';
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens === 0) return '0';
+  if (tokens < 1000) return `${tokens}`;
+  if (tokens < 1_000_000) return `${(tokens / 1000).toFixed(1)}K`;
+  return `${(tokens / 1_000_000).toFixed(2)}M`;
+}
+
+export default function Dashboard() {
+  const [traces, setTraces] = useState<Trace[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState('all');
-  const [traces] = useState(mockTraces);
 
-  const stats = {
-    totalTraces: 1247,
-    totalCost: 12.45,
-    totalTokens: 456000,
-    avgLatency: 2300,
-  };
+  const fetchData = useCallback(async () => {
+    try {
+      const [tracesRes, statsRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/traces?limit=20`),
+        fetch(`${API_BASE}/api/v1/stats`),
+      ]);
+
+      if (!tracesRes.ok || !statsRes.ok) throw new Error('API request failed');
+
+      const tracesData = await tracesRes.json();
+      const statsData = await statsRes.json();
+
+      setTraces(tracesData.traces || []);
+      setStats(statsData);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fetch data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
+  // Compute platform distribution from real data
+  const platformCounts = stats?.platform_counts || {};
+  const platformData = Object.entries(platformCounts).map(([name, value]) => ({
+    name,
+    value,
+    color: PLATFORM_COLORS[name] || '#888888',
+  }));
+
+  // Compute cost trend from traces (group by hour bucket)
+  const costByHour: Record<string, number> = {};
+  for (const t of traces) {
+    if (t.cost_usd > 0) {
+      const hour = t.started_at.substring(0, 13); // "2026-04-08T12"
+      costByHour[hour] = (costByHour[hour] || 0) + t.cost_usd;
+    }
+  }
+  const costData = Object.entries(costByHour)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-12)
+    .map(([time, cost]) => ({
+      time: time.substring(11, 16), // "12:00"
+      cost: Math.round(cost * 100) / 100,
+    }));
+
+  const filteredTraces = selectedPlatform === 'all'
+    ? traces
+    : traces.filter(t => t.platform === selectedPlatform);
+
+  if (loading) {
+    return (
+      <div className="dashboard">
+        <div className="loading-state">加载中...</div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="dashboard">
+        <div className="error-state">⚠️ {error} — 确保 AgentLens API 在 http://localhost:8080 运行</div>
+      </div>
+    );
+  }
+
+  const totalCost = stats?.total_cost || 0;
+  const totalInput = stats?.total_input_tokens || 0;
+  const totalOutput = stats?.total_output_tokens || 0;
+  const totalTokens = totalInput + totalOutput;
 
   return (
     <div className="dashboard">
@@ -47,20 +148,20 @@ function Dashboard() {
       {/* 统计卡片 */}
       <div className="stats-grid">
         <div className="stat-card">
-          <div className="stat-value">{stats.totalTraces.toLocaleString()}</div>
+          <div className="stat-value">{(stats?.total_traces || 0).toLocaleString()}</div>
           <div className="stat-label">总执行次数</div>
         </div>
         <div className="stat-card">
-          <div className="stat-value">${stats.totalCost.toFixed(2)}</div>
-          <div className="stat-label">总成本 (24h)</div>
+          <div className="stat-value">${totalCost.toFixed(2)}</div>
+          <div className="stat-label">总成本 (USD)</div>
         </div>
         <div className="stat-card">
-          <div className="stat-value">{(stats.totalTokens / 1000).toFixed(0)}K</div>
+          <div className="stat-value">{formatTokens(totalTokens)}</div>
           <div className="stat-label">Token 消耗</div>
         </div>
         <div className="stat-card">
-          <div className="stat-value">{stats.avgLatency}ms</div>
-          <div className="stat-label">平均延迟</div>
+          <div className="stat-value">{formatTokens(totalInput)}</div>
+          <div className="stat-label">Input Tokens</div>
         </div>
       </div>
 
@@ -68,106 +169,112 @@ function Dashboard() {
       <div className="charts-grid">
         <div className="chart-card">
           <h3>💰 成本趋势</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={costData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="time" />
-              <YAxis />
-              <Tooltip />
-              <Line type="monotone" dataKey="cost" stroke="#8884d8" />
-            </LineChart>
-          </ResponsiveContainer>
+          {costData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={costData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" />
+                <YAxis />
+                <Tooltip formatter={(v: unknown) => `$${Number(v).toFixed(4)}`} />
+                <Line type="monotone" dataKey="cost" stroke="#8884d8" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="chart-empty">暂无成本数据</div>
+          )}
         </div>
 
         <div className="chart-card">
           <h3>📊 平台分布</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie
-                data={platformData}
-                cx="50%"
-                cy="50%"
-                innerRadius={40}
-                outerRadius={70}
-                paddingAngle={5}
-                dataKey="value"
-              >
-                {platformData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={entry.color} />
-                ))}
-              </Pie>
-              <Tooltip />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
+          {platformData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie
+                  data={platformData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={40}
+                  outerRadius={70}
+                  paddingAngle={5}
+                  dataKey="value"
+                  label={({ name, percent }: { name?: string; percent?: number }) => `${name ?? ''} ${((percent ?? 0) * 100).toFixed(0)}%`}
+                >
+                  {platformData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="chart-empty">暂无平台数据</div>
+          )}
         </div>
       </div>
 
       {/* 平台筛选 */}
       <div className="platform-filter">
-        <button 
+        <button
           className={selectedPlatform === 'all' ? 'active' : ''}
           onClick={() => setSelectedPlatform('all')}
         >
-          全部
+          全部 ({stats?.total_traces || 0})
         </button>
-        <button 
-          className={selectedPlatform === 'openclaw' ? 'active' : ''}
-          onClick={() => setSelectedPlatform('openclaw')}
-        >
-          OpenClaw
-        </button>
-        <button 
-          className={selectedPlatform === 'claude-code' ? 'active' : ''}
-          onClick={() => setSelectedPlatform('claude-code')}
-        >
-          Claude Code
-        </button>
-        <button 
-          className={selectedPlatform === 'kimi-code' ? 'active' : ''}
-          onClick={() => setSelectedPlatform('kimi-code')}
-        >
-          Kimi Code
-        </button>
+        {Object.entries(platformCounts).map(([platform, count]) => (
+          <button
+            key={platform}
+            className={selectedPlatform === platform ? 'active' : ''}
+            onClick={() => setSelectedPlatform(platform)}
+          >
+            {platform} ({count})
+          </button>
+        ))}
       </div>
 
       {/* Trace 列表 */}
       <div className="traces-section">
         <h3>📋 最近执行记录</h3>
-        <table className="traces-table">
-          <thead>
-            <tr>
-              <th>时间</th>
-              <th>平台</th>
-              <th>Agent</th>
-              <th>模型</th>
-              <th>耗时</th>
-              <th>成本</th>
-              <th>状态</th>
-            </tr>
-          </thead>
-          <tbody>
-            {traces.map((trace) => (
-              <tr key={trace.id}>
-                <td>{trace.time}</td>
-                <td>
-                  <span className={`platform-badge ${trace.platform}`}>
-                    {trace.platform}
-                  </span>
-                </td>
-                <td>{trace.agent}</td>
-                <td>{trace.model}</td>
-                <td>{trace.duration}ms</td>
-                <td>${trace.cost.toFixed(4)}</td>
-                <td>
-                  <span className={`status-badge ${trace.status}`}>
-                    {trace.status === 'success' ? '✓' : '✗'}
-                  </span>
-                </td>
+        {filteredTraces.length === 0 ? (
+          <div className="chart-empty">暂无执行记录</div>
+        ) : (
+          <table className="traces-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>平台</th>
+                <th>模型</th>
+                <th>Input</th>
+                <th>Output</th>
+                <th>成本</th>
+                <th>状态</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {filteredTraces.map((trace) => (
+                <tr key={trace.trace_id}>
+                  <td>{formatTime(trace.started_at)}</td>
+                  <td>
+                    <span className={`platform-badge ${trace.platform}`}>
+                      {trace.platform}
+                    </span>
+                  </td>
+                  <td>{trace.model || '—'}</td>
+                  <td>{formatTokens(trace.input_tokens)}</td>
+                  <td>{formatTokens(trace.output_tokens)}</td>
+                  <td className={trace.cost_usd > 0 ? 'cost-positive' : ''}>
+                    {formatCost(trace.cost_usd)}
+                  </td>
+                  <td>
+                    <span className={`status-badge ${trace.status === 'success' ? 'success' : 'error'}`}>
+                      {trace.status === 'success' ? '✓' : '✗'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
 
       {/* 底部信息 */}
@@ -177,5 +284,3 @@ function Dashboard() {
     </div>
   );
 }
-
-export default Dashboard;

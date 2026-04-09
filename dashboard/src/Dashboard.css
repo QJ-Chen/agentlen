@@ -226,3 +226,39 @@
     min-width: 600px;
   }
 }
+
+/* Loading & Error states */
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  font-size: 1.2rem;
+  color: #666;
+}
+
+.error-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  font-size: 1.1rem;
+  color: #f44336;
+  padding: 2rem;
+  text-align: center;
+}
+
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #999;
+  font-size: 0.95rem;
+}
+
+/* Cost highlight */
+.cost-positive {
+  color: #0088FE;
+  font-weight: 500;
+}

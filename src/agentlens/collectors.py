@@ -10,6 +10,17 @@ import logging
 import time
 import threading
 
+# Platform pricing for cost calculation
+PLATFORM_PRICING = {
+    "openclaw": {"input_per_1m": 0.2, "output_per_1m": 1.2},  # MiniMax-M2
+    "claude-code": {"input_per_1m": 3.0, "output_per_1m": 15.0},  # Claude 3.5 Sonnet
+    "kimi-code": {"input_per_1m": 0.5, "output_per_1m": 1.5},  # Kimi K2.5
+}
+
+def calc_cost(platform: str, input_tokens: int, output_tokens: int) -> float:
+    rates = PLATFORM_PRICING.get(platform, {"input_per_1m": 0.5, "output_per_1m": 1.5})
+    return (input_tokens / 1_000_000) * rates["input_per_1m"] + (output_tokens / 1_000_000) * rates["output_per_1m"]
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +120,7 @@ class SessionAggregator:
                 last_response = assistant_messages[-1].get("response")
             
             trace = {
-                "trace_id": session_id,
+                "trace_id": f"session_{session_id[:20]}",
                 "platform": session["platform"],
                 "agent_name": session["agent_name"] or "unknown",
                 "session_id": session_id,
@@ -121,7 +132,7 @@ class SessionAggregator:
                 "response": last_response,
                 "input_tokens": session["total_input_tokens"],
                 "output_tokens": session["total_output_tokens"],
-                "cost_usd": session["total_cost"],
+                "cost_usd": calc_cost(session["platform"], session["total_input_tokens"], session["total_output_tokens"]),
                 "tool_calls": session["tool_calls"],
                 "llm_calls": session["llm_calls"],  # 包含所有 LLM 调用详情
                 "status": "success",
