@@ -1,297 +1,522 @@
-# AgentLens 架构设计
+# AgentLens 架构设计文档
 
-## 系统概述
+## 1. 系统概述
 
-AgentLens 是一个轻量级 Agent 执行观测平台，支持监控 Claude Code、Kimi Code、OpenClaw 等 Agent 的执行过程。
+AgentLens 是一个轻量级 Agent 执行观测平台，专注于多平台 Agent 的 Trace 收集、成本监控和执行可视化。
 
-## 核心设计原则
+### 1.1 设计原则
+- **轻量级**：适合中小团队快速部署
+- **成本敏感**：Token 优化，采样策略
+- **多平台**：支持 OpenClaw、Claude Code、Kimi Code 等
+- **可扩展**：插件化架构，易于添加新平台
 
-- **轻量级**: 默认 SQLite，零配置启动
-- **多平台**: 统一适配不同 Agent 框架
-- **低开销**: 异步写入，不阻塞 Agent
-- **成本敏感**: Token 消耗实时监控
+---
 
-## 系统架构
+## 2. 整体架构
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        AgentLens                             │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌─────────────────┐    ┌─────────────┐    ┌─────────────┐  │
-│  │  Session Scanner│    │  Collector  │    │   Storage   │  │
-│  │                 │───→│             │───→│             │  │
-│  │ - Claude Code   │    │ - Batch     │    │ - SQLite    │  │
-│  │ - Kimi Code     │    │ - Async     │    │ - PostgreSQL│  │
-│  │ - OpenClaw      │    │             │    │             │  │
-│  └─────────────────┘    └─────────────┘    └─────────────┘  │
-│           │                    │                  │          │
-│           └────────────────────┴──────────────────┘          │
-│                            │                                 │
-│                            ↓                                 │
-│                   ┌─────────────────┐                        │
-│                   │    API Server   │                        │
-│                   │    (FastAPI)    │                        │
-│                   └────────┬────────┘                        │
-│                            │                                 │
-│                            ↓                                 │
-│                   ┌─────────────────┐                        │
-│                   │    Dashboard    │                        │
-│                   │    (React)      │                        │
-│                   └─────────────────┘                        │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        Agent 执行环境                            │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │  OpenClaw    │  │ Claude Code  │  │  Kimi Code   │  ...      │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘           │
+│         │                 │                 │                   │
+│         └─────────────────┼─────────────────┘                   │
+│                           │                                     │
+│                    ┌──────▼───────┐                             │
+│                    │   SDK/Hook   │  ← 平台适配层                │
+│                    └──────┬───────┘                             │
+└───────────────────────────┼─────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      AgentLens Core                             │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │  Collector   │  │   Storage    │  │     API      │           │
+│  │  (数据收集)   │  │  (数据存储)   │  │   (REST)     │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Dashboard (React)                          │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │ Trace 视图   │  │  成本分析    │  │  实时监控    │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 核心模块
+---
 
-### 1. Session Scanner
+## 3. 数据收集器设计 (Collector)
 
-扫描历史 Agent 执行记录，支持多平台:
-
-- **Claude Code**: `~/.claude/projects/*.jsonl`
-- **Kimi Code**: `~/.kimi/sessions/*/wire.jsonl`
-- **OpenClaw**: `~/.openclaw/subagents/runs.json`
-
-### 2. Collector
-
-数据收集 SDK，支持手动埋点:
+### 3.1 核心抽象
 
 ```python
-from workflow_tracer import trace_session
+# collector/base.py
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
+from enum import Enum
+import time
+import uuid
 
-with trace_session("agent-name", "platform") as tracer:
-    tracer.trace_tool(...)
-    tracer.trace_llm(...)
+class PlatformType(Enum):
+    OPENCLAW = "openclaw"
+    CLAUDE_CODE = "claude_code"
+    KIMI_CODE = "kimi_code"
+    CURSOR = "cursor"
+    CUSTOM = "custom"
+
+@dataclass
+class TraceContext:
+    """Trace 上下文，贯穿整个 Agent 执行周期"""
+    trace_id: str
+    session_id: str
+    platform: PlatformType
+    start_time: float
+    metadata: Dict[str, Any]
+    
+    @classmethod
+    def create(cls, platform: PlatformType, metadata: Dict = None) -> "TraceContext":
+        return cls(
+            trace_id=str(uuid.uuid4()),
+            session_id=str(uuid.uuid4()),
+            platform=platform,
+            start_time=time.time(),
+            metadata=metadata or {}
+        )
+
+@dataclass
+class Span:
+    """执行单元（工具调用、LLM 请求等）"""
+    span_id: str
+    trace_id: str
+    parent_id: Optional[str]
+    name: str
+    span_type: str  # "tool", "llm", "agent", "custom"
+    start_time: float
+    end_time: Optional[float]
+    duration_ms: Optional[float]
+    status: str  # "running", "success", "error"
+    input_data: Dict[str, Any]
+    output_data: Dict[str, Any]
+    token_usage: Optional["TokenUsage"]
+    error: Optional[str]
+    metadata: Dict[str, Any]
+
+@dataclass
+class TokenUsage:
+    """Token 消耗统计"""
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    model: str
+    cost_usd: Optional[float] = None
+
+class BaseCollector(ABC):
+    """数据收集器基类"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.sampler = Sampler(config.get("sampling", {}))
+        self.exporter = self._create_exporter()
+    
+    @abstractmethod
+    def _create_exporter(self) -> "BaseExporter":
+        """创建数据导出器"""
+        pass
+    
+    def start_trace(self, metadata: Dict = None) -> TraceContext:
+        """开始一个新的 Trace"""
+        if not self.sampler.should_sample():
+            return None
+        context = TraceContext.create(self.platform, metadata)
+        self.exporter.export_trace_start(context)
+        return context
+    
+    def start_span(self, context: TraceContext, name: str, 
+                   span_type: str, parent_id: str = None) -> Span:
+        """开始一个新的 Span"""
+        span = Span(
+            span_id=str(uuid.uuid4()),
+            trace_id=context.trace_id,
+            parent_id=parent_id,
+            name=name,
+            span_type=span_type,
+            start_time=time.time(),
+            end_time=None,
+            duration_ms=None,
+            status="running",
+            input_data={},
+            output_data={},
+            token_usage=None,
+            error=None,
+            metadata={}
+        )
+        return span
+    
+    def end_span(self, span: Span, output_data: Dict = None, 
+                 token_usage: TokenUsage = None, error: str = None):
+        """结束 Span"""
+        span.end_time = time.time()
+        span.duration_ms = (span.end_time - span.start_time) * 1000
+        span.status = "error" if error else "success"
+        span.output_data = output_data or {}
+        span.token_usage = token_usage
+        span.error = error
+        self.exporter.export_span(span)
+    
+    def end_trace(self, context: TraceContext):
+        """结束 Trace"""
+        self.exporter.export_trace_end(context)
+
+class Sampler:
+    """采样器 - 控制数据收集成本"""
+    
+    def __init__(self, config: Dict):
+        self.rate = config.get("rate", 1.0)  # 采样率 0-1
+        self.max_traces_per_min = config.get("max_traces_per_min", 100)
+        self._trace_count = 0
+        self._reset_time = time.time()
+    
+    def should_sample(self) -> bool:
+        now = time.time()
+        if now - self._reset_time > 60:
+            self._trace_count = 0
+            self._reset_time = now
+        
+        if self._trace_count >= self.max_traces_per_min:
+            return False
+        
+        import random
+        if random.random() > self.rate:
+            return False
+        
+        self._trace_count += 1
+        return True
 ```
 
-### 3. Storage
+### 3.2 平台适配器
 
-数据存储层，支持多种后端:
-
-- **SQLiteStorage**: 本地文件，默认选项
-- **PostgreSQLStorage**: 生产环境
-- **JSONLStorage**: 追加写入，易于分析
-
-### 4. API Server
-
-FastAPI 提供 REST 接口:
-
-- `POST /api/v1/traces` - 写入 trace
-- `GET /api/v1/traces` - 查询 traces
-- `GET /api/v1/stats` - 获取统计
-
-### 5. Dashboard
-
-React 前端展示:
-
-- Trace 列表
-- 工具调用链
-- LLM 对话详情
-- 成本统计
-
-## 数据模型
-
-### Trace
+#### OpenClaw 适配器
 
 ```python
+# collector/adapters/openclaw_adapter.py
+from collector.base import BaseCollector, Span, TokenUsage
+from typing import Dict, Any
+
+class OpenClawCollector(BaseCollector):
+    """OpenClaw 平台数据收集器"""
+    
+    platform = "openclaw"
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self._current_trace = None
+        self._span_stack = []
+    
+    def _create_exporter(self):
+        from collector.exporters import get_exporter
+        return get_exporter(self.config.get("exporter", {"type": "sqlite"}))
+    
+    def on_tool_start(self, tool_name: str, params: Dict):
+        """工具调用开始"""
+        if not self._current_trace:
+            self._current_trace = self.start_trace()
+        
+        parent_id = self._span_stack[-1].span_id if self._span_stack else None
+        span = self.start_span(
+            context=self._current_trace,
+            name=f"tool:{tool_name}",
+            span_type="tool",
+            parent_id=parent_id
+        )
+        span.input_data = {"params": params}
+        self._span_stack.append(span)
+        return span.span_id
+    
+    def on_tool_end(self, span_id: str, result: Any, error: str = None):
+        """工具调用结束"""
+        span = self._find_span(span_id)
+        if span:
+            self.end_span(span, output_data={"result": result}, error=error)
+            self._span_stack.remove(span)
+    
+    def on_llm_start(self, model: str, messages: list, params: Dict):
+        """LLM 请求开始"""
+        if not self._current_trace:
+            self._current_trace = self.start_trace()
+        
+        parent_id = self._span_stack[-1].span_id if self._span_stack else None
+        span = self.start_span(
+            context=self._current_trace,
+            name=f"llm:{model}",
+            span_type="llm",
+            parent_id=parent_id
+        )
+        span.input_data = {
+            "model": model,
+            "messages": self._truncate_messages(messages),
+            "params": params
+        }
+        self._span_stack.append(span)
+        return span.span_id
+    
+    def on_llm_end(self, span_id: str, response: Dict, token_usage: Dict):
+        """LLM 请求结束"""
+        span = self._find_span(span_id)
+        if span:
+            usage = TokenUsage(
+                prompt_tokens=token_usage.get("prompt_tokens", 0),
+                completion_tokens=token_usage.get("completion_tokens", 0),
+                total_tokens=token_usage.get("total_tokens", 0),
+                model=span.input_data.get("model", "unknown"),
+                cost_usd=self._calculate_cost(token_usage, span.input_data.get("model"))
+            )
+            self.end_span(span, output_data={"response": response}, token_usage=usage)
+            self._span_stack.remove(span)
+    
+    def _truncate_messages(self, messages: list, max_chars: int = 1000) -> list:
+        """截断消息内容，减少存储"""
+        truncated = []
+        for msg in messages:
+            content = msg.get("content", "")
+            if len(content) > max_chars:
+                content = content[:max_chars] + "... [truncated]"
+            truncated.append({**msg, "content": content})
+        return truncated
+    
+    def _calculate_cost(self, usage: Dict, model: str) -> float:
+        """计算 Token 成本"""
+        pricing = {
+            "gpt-4": {"prompt": 0.03, "completion": 0.06},
+            "gpt-3.5-turbo": {"prompt": 0.0015, "completion": 0.002},
+            "claude-3-opus": {"prompt": 0.015, "completion": 0.075},
+            "claude-3-sonnet": {"prompt": 0.003, "completion": 0.015},
+        }
+        rates = pricing.get(model, pricing["gpt-3.5-turbo"])
+        prompt_cost = usage.get("prompt_tokens", 0) * rates["prompt"] / 1000
+        completion_cost = usage.get("completion_tokens", 0) * rates["completion"] / 1000
+        return round(prompt_cost + completion_cost, 6)
+    
+    def _find_span(self, span_id: str) -> Span:
+        for span in self._span_stack:
+            if span.span_id == span_id:
+                return span
+        return None
+```
+
+#### Claude Code 适配器
+
+```python
+# collector/adapters/claude_code_adapter.py
+from collector.base import BaseCollector
+from typing import Dict, Any
+
+class ClaudeCodeCollector(BaseCollector):
+    """Claude Code 平台数据收集器"""
+    
+    platform = "claude_code"
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+    
+    def _create_exporter(self):
+        from collector.exporters import get_exporter
+        return get_exporter(self.config.get("exporter", {"type": "sqlite"}))
+    
+    def on_command_start(self, command: str, cwd: str):
+        """命令执行开始"""
+        pass
+    
+    def on_command_end(self, exit_code: int, output: str):
+        """命令执行结束"""
+        pass
+    
+    def on_file_read(self, path: str, content: str):
+        """文件读取"""
+        pass
+    
+    def on_file_edit(self, path: str, old_text: str, new_text: str):
+        """文件编辑"""
+        pass
+```
+
+---
+
+## 4. 数据模型设计
+
+### 4.1 Trace 数据模型
+
+```python
+# models/trace.py
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+from enum import Enum
+
+class SpanType(Enum):
+    TOOL = "tool"
+    LLM = "llm"
+    AGENT = "agent"
+    THOUGHT = "thought"
+    CUSTOM = "custom"
+
+class SpanStatus(Enum):
+    RUNNING = "running"
+    SUCCESS = "success"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+@dataclass
+class TokenUsage:
+    """Token 使用统计"""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    model: str = ""
+    cost_usd: float = 0.0
+
+@dataclass
+class Span:
+    """执行单元"""
+    span_id: str
+    trace_id: str
+    parent_id: Optional[str] = None
+    name: str = ""
+    span_type: str = "custom"
+    status: str = "running"
+    start_time: datetime = field(default_factory=datetime.utcnow)
+    end_time: Optional[datetime] = None
+    duration_ms: Optional[float] = None
+    input_data: Dict[str, Any] = field(default_factory=dict)
+    output_data: Dict[str, Any] = field(default_factory=dict)
+    token_usage: Optional[TokenUsage] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: List[str] = field(default_factory=list)
+
 @dataclass
 class Trace:
-    trace_id: str              # 唯一标识
-    platform: str              # 平台类型
-    agent_name: str            # Agent 名称
-    session_id: str            # Session ID
-    
-    start_time: datetime       # 开始时间
-    end_time: datetime         # 结束时间
-    duration_ms: int           # 执行时长
-    
-    model: str                 # 模型名称
-    prompt: str                # 输入提示
-    response: str              # 输出响应
-    input_tokens: int          # 输入 Token
-    output_tokens: int         # 输出 Token
-    cost_usd: float            # 成本
-    
-    tool_calls: List[Dict]     # 工具调用
-    status: str                # 状态
-    error_message: str         # 错误信息
-```
+    """完整的执行追踪"""
+    trace_id: str
+    session_id: str
+    platform: str
+    platform_version: Optional[str] = None
+    start_time: datetime = field(default_factory=datetime.utcnow)
+    end_time: Optional[datetime] = None
+    duration_ms: Optional[float] = None
+    status: str = "running"
+    total_spans: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    error_count: int = 0
+    root_span_id: Optional[str] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    tags: List[str] = field(default_factory=list)
+    user_id: Optional[str] = None
+    project_id: Optional[str] = None
 
-### ToolCall
-
-```python
 @dataclass
-class ToolCall:
-    name: str                  # 工具名称
-    input: Dict                # 输入参数
-    output: Any                # 输出结果
-    tool_use_id: str           # 调用 ID
-    timestamp: float           # 时间戳
-    duration_ms: int = 0       # 执行时长
+class Session:
+    """会话（多个 Trace 的集合）"""
+    session_id: str
+    start_time: datetime = field(default_factory=datetime.utcnow)
+    end_time: Optional[datetime] = None
+    platform: str = ""
+    user_id: Optional[str] = None
+    trace_count: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+    metadata: Dict[str, Any] = field(default_factory=dict)
 ```
 
-## 多平台适配
+### 4.2 数据库 Schema (SQLite)
 
-### Claude Code
+```sql
+-- schema.sql
+-- 轻量级设计，适合中小团队
 
-解析 JSONL 文件，提取:
-- 用户输入 (user)
-- 助手响应 (assistant)
-- 工具调用 (tool_use/tool_result)
-- Token 使用 (usage)
+-- Trace 表
+CREATE TABLE traces (
+    trace_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    platform_version TEXT,
+    start_time DATETIME NOT NULL,
+    end_time DATETIME,
+    duration_ms REAL,
+    status TEXT DEFAULT 'running',
+    total_spans INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    total_cost_usd REAL DEFAULT 0.0,
+    error_count INTEGER DEFAULT 0,
+    root_span_id TEXT,
+    metadata TEXT,
+    tags TEXT,
+    user_id TEXT,
+    project_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-### Kimi Code
+-- Span 表
+CREATE TABLE spans (
+    span_id TEXT PRIMARY KEY,
+    trace_id TEXT NOT NULL,
+    parent_id TEXT,
+    name TEXT NOT NULL,
+    span_type TEXT NOT NULL,
+    status TEXT DEFAULT 'running',
+    start_time DATETIME NOT NULL,
+    end_time DATETIME,
+    duration_ms REAL,
+    input_data TEXT,
+    output_data TEXT,
+    prompt_tokens INTEGER DEFAULT 0,
+    completion_tokens INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    model TEXT,
+    cost_usd REAL DEFAULT 0.0,
+    error TEXT,
+    error_type TEXT,
+    metadata TEXT,
+    tags TEXT,
+    FOREIGN KEY (trace_id) REFERENCES traces(trace_id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_id) REFERENCES spans(span_id) ON DELETE SET NULL
+);
 
-解析 wire.jsonl (NDJSON)，提取:
-- TurnBegin (用户输入)
-- ToolCall / ToolResult
-- ContentPart (LLM 响应)
-- StatusUpdate (Token 使用)
+-- Session 表
+CREATE TABLE sessions (
+    session_id TEXT PRIMARY KEY,
+    start_time DATETIME NOT NULL,
+    end_time DATETIME,
+    platform TEXT NOT NULL,
+    user_id TEXT,
+    trace_count INTEGER DEFAULT 0,
+    total_tokens INTEGER DEFAULT 0,
+    total_cost_usd REAL DEFAULT 0.0,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
-### OpenClaw
+-- 索引优化
+CREATE INDEX idx_traces_session ON traces(session_id);
+CREATE INDEX idx_traces_platform ON traces(platform);
+CREATE INDEX idx_traces_start_time ON traces(start_time);
+CREATE INDEX idx_traces_user ON traces(user_id);
+CREATE INDEX idx_spans_trace ON spans(trace_id);
+CREATE INDEX idx_spans_parent ON spans(parent_id);
+CREATE INDEX idx_spans_type ON spans(span_type);
+CREATE INDEX idx_spans_start_time ON spans(start_time);
 
-解析 runs.json，提取:
-- Subagent 执行记录
-- 任务和结果
-- 状态和时长
-
-## 存储方案
-
-### SQLite (默认)
-
-```python
-# 配置
-DB_PATH = ~/.agentlens/agentlens.db
-
-# 特点
-- 零配置
-- 单文件
-- 适合个人/小团队
-```
-
-### PostgreSQL (生产)
-
-```python
-# 配置
-DATABASE_URL = postgresql://user:pass@host/db
-
-# 特点
-- 高并发
-- 复杂查询
-- 适合团队
-```
-
-## API 设计
-
-### 写入 Trace
-
-```http
-POST /api/v1/traces
-Content-Type: application/json
-
-{
-    "trace_id": "uuid",
-    "platform": "claude-code",
-    "agent_name": "my-agent",
-    "model": "claude-3-5-sonnet",
-    "prompt": "Hello",
-    "response": "Hi!",
-    "input_tokens": 10,
-    "output_tokens": 5,
-    "cost_usd": 0.0002,
-    "tool_calls": [],
-    "status": "success"
-}
-```
-
-### 查询 Traces
-
-```http
-GET /api/v1/traces?platform=claude-code&limit=50
-
-Response:
-{
-    "traces": [...],
-    "total": 100
-}
-```
-
-### 获取统计
-
-```http
-GET /api/v1/stats?period_hours=24
-
-Response:
-{
-    "total_traces": 100,
-    "total_tokens": 50000,
-    "total_cost": 0.5,
-    "platforms": [...],
-    "models": [...]
-}
-```
-
-## Dashboard 功能
-
-### Trace 列表
-
-- 平台筛选
-- 时间排序
-- 搜索过滤
-
-### Trace 详情
-
-- 概览: 基本信息、Token、成本
-- 工具: 调用链、参数、结果
-- LLM: 完整提示词和响应
-- 原始: JSON 数据
-
-### 统计面板
-
-- 平台分布
-- 模型使用
-- 成本趋势
-- Token 消耗
-
-## 性能优化
-
-### 数据收集
-
-- 异步写入
-- 批量上报
-- 本地队列缓冲
-
-### 存储优化
-
-- 索引: trace_id, session_id, timestamp
-- 分页查询
-- 数据压缩
-
-### 前端优化
-
-- 虚拟列表
-- 自动刷新 (3s 间隔)
-- 懒加载详情
-
-## 路线图
-
-### v0.1.0 (当前)
-- ✅ Session Scanner (Claude, Kimi, OpenClaw)
-- ✅ SQLite + FastAPI
-- ✅ React Dashboard
-- ✅ 成本统计
-
-### v0.2.0 (计划)
-- 🔄 WebSocket 实时推送
-- 🔄 更多平台适配 (Cursor, Copilot)
-- 🔄 告警系统
-
-### v0.3.0 (计划)
-- 📋 PostgreSQL 支持
-- 📋 高级查询
-- 📋 数据导出
-
-## License
-
-MIT
+-- 成本统计视图
+CREATE VIEW daily_costs AS
+SELECT 
+    date(start_time) as date,
+    platform,
+    COUNT(*) as trace_count,
+    SUM(total_tokens) as total_tokens,
+    SUM(total_cost_usd) as total_cost_usd,
+    SUM(error_count) as total_errors

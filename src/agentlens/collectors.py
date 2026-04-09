@@ -77,13 +77,13 @@ class SessionAggregator:
         
         # 收集 LLM 调用（只保留最近的 50 个，避免数据过大）
         if message.get("role") == "assistant" and message.get("model"):
-            # 查找前一个 user 消息的 prompt
+            # 查找前一个 user 消息的 prompt（命令已在collector中预处理到prompt里）
             last_user_prompt = None
             for prev_msg in reversed(session["messages"][:-1]):  # 排除当前消息
-                if prev_msg.get("role") == "user" and prev_msg.get("prompt"):
+                if prev_msg.get("role") == "user":
                     last_user_prompt = prev_msg.get("prompt")
                     break
-            
+
             session["llm_calls"].append({
                 "id": message.get("trace_id"),
                 "model": message.get("model"),
@@ -94,8 +94,8 @@ class SessionAggregator:
                 "response": message.get("response")[:1000] if message.get("response") else None,
             })
             # 只保留最近的 50 个
-            if len(session["llm_calls"]) > 50:
-                session["llm_calls"] = session["llm_calls"][-50:]
+            if len(session["llm_calls"]) > 500:
+                session["llm_calls"] = session["llm_calls"][-500:]
     
     def get_traces(self) -> List[Dict[str, Any]]:
         """获取聚合后的 traces"""
@@ -393,6 +393,12 @@ class OpenClawCollector(LogCollector):
                                         tc_args = tc.get("arguments", {})
                                         response_parts.append(f"[{tc_name}] {json.dumps(tc_args, ensure_ascii=False)[:200]}")
                                     response = "\n".join(response_parts)
+
+                            # 如果还是没有 response 但有 thinking，将 thinking 作为 response
+                            if not response:
+                                thinking_items = [item.get("thinking", "") for item in content if item.get("type") == "thinking"]
+                                if thinking_items:
+                                    response = "[thinking] " + "\n".join(thinking_items)
                     
                     msg_data = {
                         "trace_id": data.get("id"),
@@ -451,7 +457,7 @@ class ClaudeCodeCollector(LogCollector):
         """解析 Claude Code session 文件，按 session 聚合"""
         session_id = log_path.stem
         aggregator = SessionAggregator()
-        
+
         # 从目录名提取项目路径
         project_path = ""
         try:
@@ -459,23 +465,27 @@ class ClaudeCodeCollector(LogCollector):
             project_path = self._decode_path(encoded_path)
         except:
             pass
-        
+
+        # 跟踪最近一次命令（用于关联命令和后续的用户消息）
+        import re
+        pending_command: Dict[str, str] = {}
+
         with open(log_path, 'r', encoding='utf-8') as f:
             for line in f:
                 try:
                     data = json.loads(line.strip())
                     msg_type = data.get("type")
-                    
+
                     if msg_type not in ["user", "assistant"]:
                         continue
-                    
+
                     message = data.get("message", {})
                     role = message.get("role")
-                    
+
                     # 提取工具调用
                     tool_calls = []
                     content = message.get("content", [])
-                    
+
                     if isinstance(content, list):
                         for item in content:
                             if item.get("type") == "tool_use":
@@ -491,18 +501,58 @@ class ClaudeCodeCollector(LogCollector):
                                     "output": item.get("content"),
                                     "timestamp": data.get("timestamp")
                                 })
-                    
+
                     usage = message.get("usage", {})
-                    
-                    # 确保 prompt/response 是字符串
+
+                    # 解析命令标签和实际内容
                     prompt = None
                     response = None
+                    is_command_only = False
+
                     if role == "user" and content:
                         if isinstance(content, str):
-                            prompt = content
+                            # 提取命令标签内容
+                            cmd_match = re.search(r'<command-name>(.*?)</command-name>', content)
+                            args_match = re.search(r'<command-args>(.*?)</command-args>', content, re.DOTALL)
+                            msg_match = re.search(r'<command-message>(.*?)</command-message>', content, re.DOTALL)
+
+                            if cmd_match:
+                                # 这是一个命令消息
+                                pending_command = {
+                                    "name": cmd_match.group(1).strip(),
+                                    "args": args_match.group(1).strip() if args_match else ""
+                                }
+                                # 移除所有命令标签，检查剩余内容
+                                remaining = content
+                                for tag_pattern in [r'<command-name>.*?</command-name>', r'<command-message>.*?</command-message>', r'<command-args>.*?</command-args>']:
+                                    remaining = re.sub(tag_pattern, '', remaining)
+                                remaining = remaining.strip()
+                                if remaining:
+                                    prompt = remaining
+                                else:
+                                    is_command_only = True
+                            else:
+                                prompt = content
                         elif isinstance(content, list):
                             texts = [item.get("text", "") for item in content if item.get("type") == "text"]
                             prompt = "\n".join(texts)
+
+                            # 如果用户消息只有 tool_result 没有实际文本，跳过
+                            if not prompt and role == "user":
+                                # 检查是否有文本类型的 content item
+                                has_text_content = any(item.get("type") == "text" for item in content)
+                                if not has_text_content:
+                                    # 只有 tool_result，跳过不存储
+                                    continue
+
+                            # 如果有 pending command，将其加入 prompt
+                            if pending_command and prompt:
+                                cmd_str = f"[/{pending_command['name']}"
+                                if pending_command['args']:
+                                    cmd_str += f" {pending_command['args']}"
+                                cmd_str += "]"
+                                prompt = f"{cmd_str}\n{prompt}"
+                                pending_command = {}  # 清空 pending command
                     elif role == "assistant" and content:
                         if isinstance(content, str):
                             response = content
@@ -520,10 +570,20 @@ class ClaudeCodeCollector(LogCollector):
                                         tu_input = tu.get("input", {})
                                         response_parts.append(f"[{tu_name}] {json.dumps(tu_input, ensure_ascii=False)[:200]}")
                                     response = "\n".join(response_parts)
+
+                            # 如果还是没有 response 但有 thinking，将 thinking 作为 response
+                            if not response:
+                                thinking_items = [item.get("thinking", "") for item in content if item.get("type") == "thinking"]
+                                if thinking_items:
+                                    response = "[thinking] " + "\n".join(thinking_items)
                     
                     # 从 data 中获取 cwd
                     cwd = data.get("cwd", "")
-                    
+
+                    # 跳过 command-only 消息（只有命令没有实际内容）
+                    if is_command_only:
+                        continue
+
                     msg_data = {
                         "trace_id": data.get("uuid"),
                         "platform": "claude-code",
@@ -540,7 +600,7 @@ class ClaudeCodeCollector(LogCollector):
                         "tool_calls": tool_calls,
                         "project_path": cwd or project_path,
                     }
-                    
+
                     aggregator.add_message(session_id, msg_data)
                     
                 except json.JSONDecodeError:

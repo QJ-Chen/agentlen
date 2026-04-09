@@ -43,6 +43,37 @@ const TraceListItem = ({
   isSelected: boolean;
   onClick: () => void;
 }) => {
+  // Clean command tags from text
+  const cleanCommandText = (text: string): string => {
+    if (!text) return '';
+    return text
+      .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
+      .replace(/<command-name>.*?<\/command-name>/gi, '')
+      .replace(/<command-args>.*?<\/command-args>/gi, '')
+      .replace(/<command-message>.*?<\/command-message>/gi, '')
+      .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, '')
+      .trim();
+  };
+
+  // Get prompt preview from llm_calls or raw data
+  const getPromptPreview = (): string => {
+    // Try to get from first LLM call
+    if (trace.llmCalls && trace.llmCalls.length > 0) {
+      const firstPrompt = trace.llmCalls[0]?.prompt;
+      if (firstPrompt) {
+        const cleaned = cleanCommandText(firstPrompt);
+        return cleaned.substring(0, 60) + (cleaned.length > 60 ? '...' : '');
+      }
+    }
+    // Fall back to raw prompt
+    const rawPrompt = (trace.raw as any)?.prompt;
+    if (rawPrompt) {
+      const cleaned = cleanCommandText(rawPrompt);
+      return cleaned.substring(0, 60) + (cleaned.length > 60 ? '...' : '');
+    }
+    return '';
+  };
+
   // 获取工作目录显示
   const getWorkDir = () => {
     if (trace.projectPath) {
@@ -60,6 +91,7 @@ const TraceListItem = ({
 
   const workDir = getWorkDir();
   const displayPath = workDir ? workDir.split('/').slice(-2).join('/') : null;
+  const promptPreview = getPromptPreview();
 
   return (
     <div
@@ -90,14 +122,21 @@ const TraceListItem = ({
           {trace.status}
         </span>
       </div>
-      
+
+      {/* Prompt preview */}
+      {promptPreview && (
+        <div className={`text-xs mt-1 truncate ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
+          💬 {promptPreview}
+        </div>
+      )}
+
       {/* 工作目录 */}
       {displayPath && (
         <div className={`text-xs mt-1 truncate ${isSelected ? 'text-blue-200' : 'text-gray-500'}`}>
           📁 {displayPath}
         </div>
       )}
-      
+
       <div className={`text-xs mt-1 ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
         {formatTime(trace.lastRequestTime || trace.startTime)} · {trace.platform}
       </div>

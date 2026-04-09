@@ -17,6 +17,9 @@ import {
   Zap,
   Box,
   Activity,
+  Sparkles,
+  User,
+  Bot,
 } from 'lucide-react';
 import type { Trace } from '../types';
 
@@ -25,6 +28,42 @@ interface EnhancedTraceDetailProps {
 }
 
 type TabType = 'overview' | 'timeline' | 'tools' | 'llm' | 'raw';
+
+// Platform display names and colors
+const PLATFORM_CONFIG: Record<string, { name: string; color: string; bg: string }> = {
+  'claude-code': { name: 'Claude Code', color: 'text-orange-400', bg: 'bg-orange-500/20' },
+  'openclaw': { name: 'OpenClaw', color: 'text-blue-400', bg: 'bg-blue-500/20' },
+  'kimi-code': { name: 'Kimi Code', color: 'text-violet-400', bg: 'bg-violet-500/20' },
+  'cursor': { name: 'Cursor', color: 'text-purple-400', bg: 'bg-purple-500/20' },
+};
+
+// Clean command tag pollution from text
+function cleanCommandText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
+    .replace(/<command-name>.*?<\/command-name>/gi, '')
+    .replace(/<command-args>.*?<\/command-args>/gi, '')
+    .replace(/<command-message>.*?<\/command-message>/gi, '')
+    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, '')
+    .trim();
+}
+
+// Truncate text with ellipsis
+function truncateText(text: string, maxLength: number): string {
+  if (!text || text.length <= maxLength) return text;
+  return text.substring(0, maxLength) + '...';
+}
+
+// Format thinking content for display
+function formatThinking(thinking: string): string {
+  if (!thinking) return '';
+  // Truncate long thinking content
+  if (thinking.length > 500) {
+    return thinking.substring(0, 500) + '...\n[thinking truncated]';
+  }
+  return thinking;
+}
 
 export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace }) => {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
@@ -118,125 +157,167 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   ];
 
   // Render Overview Tab
-  const renderOverview = () => (
-    <div className="space-y-6">
-      {/* Key Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
-          <Clock className="w-6 h-6 mx-auto mb-2 text-blue-400" />
-          <div className="text-2xl font-bold">{formatDuration(trace.duration)}</div>
-          <div className="text-xs text-gray-500">执行时间</div>
-        </div>
-        <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
-          <Wrench className="w-6 h-6 mx-auto mb-2 text-violet-400" />
-          <div className="text-2xl font-bold">{allTools.length}</div>
-          <div className="text-xs text-gray-500">工具调用</div>
-        </div>
-        <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
-          <Hash className="w-6 h-6 mx-auto mb-2 text-cyan-400" />
-          <div className="text-2xl font-bold">{trace.totalTokens.toLocaleString()}</div>
-          <div className="text-xs text-gray-500">Tokens</div>
-        </div>
-        <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
-          <DollarSign className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
-          <div className="text-2xl font-bold">${trace.cost.toFixed(4)}</div>
-          <div className="text-xs text-gray-500">成本</div>
-        </div>
-      </div>
+  const renderOverview = () => {
+    // Get cleaned prompt and response from raw data
+    const rawTrace = (trace as any).raw || {};
+    const cleanedPrompt = cleanCommandText(rawTrace.prompt || '');
+    const cleanedResponse = cleanCommandText(rawTrace.response || '');
+    const platformConfig = PLATFORM_CONFIG[trace.platform] || { name: trace.platform, color: 'text-gray-400', bg: 'bg-gray-500/20' };
 
-      {/* Agent Info */}
-      <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-        <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
-          <Box className="w-4 h-4" />
-          Agent 信息
-        </h3>
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <span className="text-gray-500 block text-xs mb-1">名称</span>
-            <span className="font-medium">{trace.agentName}</span>
+    return (
+      <div className="space-y-6">
+        {/* Key Metrics */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
+            <Clock className="w-6 h-6 mx-auto mb-2 text-blue-400" />
+            <div className="text-2xl font-bold">{formatDuration(trace.duration)}</div>
+            <div className="text-xs text-gray-500">执行时间</div>
           </div>
-          <div>
-            <span className="text-gray-500 block text-xs mb-1">平台</span>
-            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
-              trace.platform === 'openclaw' ? 'bg-blue-500/20 text-blue-300' :
-              trace.platform === 'claude-code' ? 'bg-orange-500/20 text-orange-300' :
-              trace.platform === 'kimi-code' ? 'bg-violet-500/20 text-violet-300' :
-              'bg-gray-500/20 text-gray-300'
-            }`}>
-              {trace.platform}
-            </span>
+          <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
+            <Wrench className="w-6 h-6 mx-auto mb-2 text-violet-400" />
+            <div className="text-2xl font-bold">{allTools.length}</div>
+            <div className="text-xs text-gray-500">工具调用</div>
           </div>
-          <div>
-            <span className="text-gray-500 block text-xs mb-1">状态</span>
-            <span className={`inline-flex items-center gap-1 ${
-              trace.status === 'completed' ? 'text-emerald-400' :
-              trace.status === 'failed' ? 'text-red-400' :
-              trace.status === 'running' ? 'text-blue-400' :
-              'text-gray-400'
-            }`}>
-              {trace.status === 'completed' && <Zap className="w-3 h-3" />}
-              {trace.status === 'failed' && <AlertCircle className="w-3 h-3" />}
-              {trace.status === 'running' && <Activity className="w-3 h-3" />}
-              {trace.status === 'completed' ? '已完成' :
-               trace.status === 'failed' ? '失败' :
-               trace.status === 'running' ? '运行中' : '已取消'}
-            </span>
+          <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
+            <Hash className="w-6 h-6 mx-auto mb-2 text-cyan-400" />
+            <div className="text-2xl font-bold">{trace.totalTokens.toLocaleString()}</div>
+            <div className="text-xs text-gray-500">Tokens</div>
           </div>
-          <div>
-            <span className="text-gray-500 block text-xs mb-1">时间</span>
-            <span>{formatTime(trace.startTime)}</span>
+          <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
+            <DollarSign className="w-6 h-6 mx-auto mb-2 text-emerald-400" />
+            <div className="text-2xl font-bold">${trace.cost.toFixed(4)}</div>
+            <div className="text-xs text-gray-500">成本</div>
           </div>
         </div>
-      </div>
 
-      {/* Quick Preview */}
-      {(allTools.length > 0 || allLLMCalls.length > 0) && (
+        {/* Agent Info */}
         <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
           <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
-            <Layers className="w-4 h-4" />
-            执行摘要
+            <Box className="w-4 h-4" />
+            Agent 信息
           </h3>
-          
-          {allTools.length > 0 && (
-            <div className="mb-4">
-              <h4 className="text-xs font-medium text-gray-500 mb-2">工具调用</h4>
-              <div className="space-y-1">
-                {allTools.slice(0, 5).map((tool, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-sm">
-                    <Wrench className="w-3 h-3 text-violet-400" />
-                    <span className="truncate flex-1">{tool.name}</span>
-                    <span className="text-xs text-gray-500">{formatDuration(tool.duration)}</span>
-                  </div>
-                ))}
-                {allTools.length > 5 && (
-                  <div className="text-xs text-gray-500 pl-5">
-                    +{allTools.length - 5} more...
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-          
-          {allLLMCalls.length > 0 && (
+          <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
-              <h4 className="text-xs font-medium text-gray-500 mb-2">LLM 调用</h4>
-              <div className="space-y-1">
-                {allLLMCalls.map((call, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-sm">
-                    <MessageSquare className="w-3 h-3 text-cyan-400" />
-                    <span className="truncate flex-1">{call.model}</span>
-                    <span className="text-xs text-gray-500">
-                      {call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <span className="text-gray-500 block text-xs mb-1">名称</span>
+              <span className="font-medium">{trace.agentName}</span>
             </div>
-          )}
+            <div>
+              <span className="text-gray-500 block text-xs mb-1">平台</span>
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${platformConfig.bg} ${platformConfig.color}`}>
+                {platformConfig.name}
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 block text-xs mb-1">状态</span>
+              <span className={`inline-flex items-center gap-1 ${
+                trace.status === 'completed' ? 'text-emerald-400' :
+                trace.status === 'failed' ? 'text-red-400' :
+                trace.status === 'running' ? 'text-blue-400' :
+                'text-gray-400'
+              }`}>
+                {trace.status === 'completed' && <Zap className="w-3 h-3" />}
+                {trace.status === 'failed' && <AlertCircle className="w-3 h-3" />}
+                {trace.status === 'running' && <Activity className="w-3 h-3" />}
+                {trace.status === 'completed' ? '已完成' :
+                 trace.status === 'failed' ? '失败' :
+                 trace.status === 'running' ? '运行中' : '已取消'}
+              </span>
+            </div>
+            <div>
+              <span className="text-gray-500 block text-xs mb-1">时间</span>
+              <span>{formatTime(trace.startTime)}</span>
+            </div>
+          </div>
         </div>
-      )}
-    </div>
-  );
+
+        {/* Session Preview - cleaned prompt/response */}
+        {(cleanedPrompt || cleanedResponse) && (
+          <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+            <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
+              <Sparkles className="w-4 h-4" />
+              Session 预览
+            </h3>
+            <div className="space-y-3">
+              {cleanedPrompt && (
+                <div>
+                  <div className="flex items-center gap-1 mb-1">
+                    <User className="w-3 h-3 text-gray-500" />
+                    <span className="text-xs text-gray-500">用户</span>
+                  </div>
+                  <div className="text-sm text-gray-200 bg-slate-900/50 rounded p-2 border border-slate-700/50">
+                    {truncateText(cleanedPrompt, 300)}
+                  </div>
+                </div>
+              )}
+              {cleanedResponse && (
+                <div>
+                  <div className="flex items-center gap-1 mb-1">
+                    <Bot className="w-3 h-3 text-gray-500" />
+                    <span className="text-xs text-gray-500">助手</span>
+                  </div>
+                  <div className="text-sm text-gray-200 bg-slate-900/50 rounded p-2 border border-slate-700/50">
+                    {truncateText(cleanedResponse, 300)}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Quick Preview */}
+        {(allTools.length > 0 || allLLMCalls.length > 0) && (
+          <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+            <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
+              <Layers className="w-4 h-4" />
+              执行摘要
+            </h3>
+
+            {allLLMCalls.length > 0 && (
+              <div className="mb-4">
+                <h4 className="text-xs font-medium text-gray-500 mb-2">LLM 调用 ({allLLMCalls.length})</h4>
+                <div className="space-y-1">
+                  {allLLMCalls.slice(0, 5).map((call, idx) => (
+                    <div key={idx} className="flex items-center gap-2 text-sm">
+                      <MessageSquare className="w-3 h-3 text-cyan-400" />
+                      <span className="truncate flex-1" title={call.model}>{call.model}</span>
+                      <span className="text-xs text-gray-500">
+                        {call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()}
+                      </span>
+                    </div>
+                  ))}
+                  {allLLMCalls.length > 5 && (
+                    <div className="text-xs text-gray-500 pl-5">
+                      +{allLLMCalls.length - 5} more...
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {allTools.length > 0 && (
+              <div>
+                <h4 className="text-xs font-medium text-gray-500 mb-2">工具调用 ({allTools.length})</h4>
+                <div className="space-y-1">
+                  {allTools.slice(0, 5).map((tool, idx) => (
+                    <div key={idx} className="flex items-center gap-2 text-sm">
+                      <Wrench className="w-3 h-3 text-violet-400" />
+                      <span className="truncate flex-1">{tool.name}</span>
+                      <span className="text-xs text-gray-500">{formatDuration(tool.duration)}</span>
+                    </div>
+                  ))}
+                  {allTools.length > 5 && (
+                    <div className="text-xs text-gray-500 pl-5">
+                      +{allTools.length - 5} more...
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Render Timeline Tab
   const renderTimeline = () => {
@@ -442,27 +523,45 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                       </div>
                       <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
                         {typeof tool.output === 'string' ? (
-                          // 字符串输出 - 尝试解析为代码块
+                          // 字符串输出 - 尝试解析为代码块，支持长输出截断
                           (() => {
-                            const parts = formatMessageContent(tool.output);
-                            return parts.map((part, pIdx) => (
-                              <div key={pIdx}>
-                                {part.type === 'code' ? (
-                                  <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
-                                    <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
-                                      <span className="text-xs text-gray-500">{part.language}</span>
-                                    </div>
-                                    <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
-                                      {part.content}
-                                    </pre>
+                            // 对于超长输出，先截断
+                            const maxOutputLength = 2000;
+                            let output = tool.output;
+                            let isTruncated = false;
+                            if (output.length > maxOutputLength) {
+                              output = output.substring(0, maxOutputLength);
+                              isTruncated = true;
+                            }
+
+                            const parts = formatMessageContent(output);
+                            return (
+                              <>
+                                {parts.map((part, pIdx) => (
+                                  <div key={pIdx}>
+                                    {part.type === 'code' ? (
+                                      <div className="border-t border-b border-slate-800 first:border-t-0 last:border-b-0">
+                                        <div className="flex items-center justify-between px-3 py-1 bg-slate-900/50 border-b border-slate-800">
+                                          <span className="text-xs text-gray-500">{part.language}</span>
+                                        </div>
+                                        <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">
+                                          {part.content}
+                                        </pre>
+                                      </div>
+                                    ) : (
+                                      <div className="p-3 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
+                                        {part.content}
+                                      </div>
+                                    )}
                                   </div>
-                                ) : (
-                                  <div className="p-3 text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">
-                                    {part.content}
+                                ))}
+                                {isTruncated && (
+                                  <div className="p-2 text-xs text-gray-500 text-center border-t border-slate-800 bg-slate-900/50">
+                                    [Output truncated - full content available via copy button]
                                   </div>
                                 )}
-                              </div>
-                            ));
+                              </>
+                            );
                           })()
                         ) : (
                           // JSON 输出
@@ -545,8 +644,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       ) : (
         groupedLLMCalls.map((group, groupIdx) => {
           const isGroupExpanded = expandedLLMs.has(groupIdx);
-          const promptPreview = group.prompt
-            ? group.prompt.replace(/\n/g, ' ').substring(0, 80) + (group.prompt.length > 80 ? '...' : '')
+          // Clean command tags from prompt for preview
+          const cleanedPrompt = cleanCommandText(group.prompt || '');
+          const promptPreview = cleanedPrompt
+            ? cleanedPrompt.replace(/\n/g, ' ').substring(0, 80) + (cleanedPrompt.length > 80 ? '...' : '')
             : '无提示词';
           
           return (
@@ -597,7 +698,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                         </button>
                       </div>
                       <div className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-auto">
-                        {group.prompt}
+                        {cleanedPrompt}
                       </div>
                     </div>
                   )}
@@ -623,8 +724,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="text-sm text-gray-300 truncate">
-                                {call.response 
-                                  ? call.response.replace(/\n/g, ' ').substring(0, 50) + (call.response.length > 50 ? '...' : '')
+                                {call.response
+                                  ? cleanCommandText(call.response).replace(/\n/g, ' ').substring(0, 50) + (cleanCommandText(call.response).length > 50 ? '...' : '')
                                   : '无响应内容'}
                               </div>
                               <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
@@ -658,7 +759,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                     </button>
                                   </div>
                                   <div className="bg-slate-950 rounded border border-slate-800 p-2 text-sm text-gray-200 whitespace-pre-wrap max-h-40 overflow-auto">
-                                    {call.response}
+                                    {cleanCommandText(call.response)}
                                   </div>
                                 </div>
                               )}
