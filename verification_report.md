@@ -93,7 +93,7 @@ AgentLens 现在可以监控 `/Users/findai/Documents/客户材料/亿联胜-车
 - ✅ 文件创建/修改事件
 - ✅ 自动 Token 估算
 - ✅ 实时 Dashboard 显示
-- ✅ 多平台支持
+- ✅ Claude Code 运行时支持
 
 ---
 
@@ -105,7 +105,7 @@ AgentLens 现在可以监控 `/Users/findai/Documents/客户材料/亿联胜-车
 2. **API 统计**: http://localhost:8080/api/v1/stats
 3. **CLI 工具**:
    ```bash
-   cd /Users/findai/.openclaw/workspace/projects/agentlens
+   cd /Users/findai/workspace/tools/agentlens
    python3 src/agentlens/cli.py
    ```
 
@@ -116,16 +116,13 @@ Project Watcher 已在后台运行，将持续监控：
 - 文件修改
 - 目录变化
 
-### 深度追踪（可选）
+### Session 复盘（当前推荐）
 
-如需追踪 Agent 内部工作流（工具调用、LLM 请求），使用：
-```python
-from workflow_tracer import trace_session
-
-with trace_session("your-agent") as tracer:
-    # 你的 Agent 代码
-    tracer.trace_tool("read_file", {...}, result, duration)
-```
+使用 Claude Code 本地日志 + AgentLens Dashboard 即可查看：
+- 工具调用
+- LLM 请求
+- Session 时间线
+- 项目级成本与活动
 
 ---
 

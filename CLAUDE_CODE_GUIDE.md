@@ -6,8 +6,8 @@
 
 在终端 1 运行：
 ```bash
-cd /Users/findai/.openclaw/workspace/projects/agentlens
-PYTHONPATH=src:$PYTHONPATH python3 src/agentlens/api.py
+cd /Users/findai/workspace/tools/agentlens
+python3 -m src.agentlens.api
 ```
 
 服务将在 http://localhost:8080 启动
@@ -17,7 +17,7 @@ PYTHONPATH=src:$PYTHONPATH python3 src/agentlens/api.py
 将 `agentlens_observer.py` 复制到你的 Claude Code 项目根目录：
 
 ```bash
-cp /Users/findai/.openclaw/workspace/projects/agentlens/agentlens_observer.py \
+cp /Users/findai/workspace/tools/agentlens/agentlens_observer.py \
    /path/to/your/claude-code-project/
 ```
 
@@ -53,7 +53,7 @@ log_event("custom_event", {"key": "value"})
 
 在终端 2 运行监控：
 ```bash
-cd /Users/findai/.openclaw/workspace/projects/agentlens
+cd /Users/findai/workspace/tools/agentlens
 PYTHONPATH=src:$PYTHONPATH python3 src/agentlens/cli.py monitor
 ```
 
@@ -66,7 +66,7 @@ PYTHONPATH=src:$PYTHONPATH python3 src/agentlens/cli.py
 
 在终端 3 运行：
 ```bash
-cd /Users/findai/.openclaw/workspace/projects/agentlens/dashboard
+cd /Users/findai/workspace/tools/agentlens/dashboard
 npm install  # 首次运行
 npm run dev
 ```
@@ -88,13 +88,13 @@ AgentLens 会自动收集：
 - `GET /api/v1/stats` - 统计摘要
 - `GET /api/v1/traces` - Trace 列表
 - `POST /api/v1/traces` - 提交 Trace
-- `GET /api/v1/platforms` - 平台列表
+- `GET /api/v1/platforms` - 平台列表（固定返回 Claude Code）
 - `GET /api/v1/sessions` - 会话列表
 
 ## 💡 使用技巧
 
 1. **批量观测**：使用 `log_event()` 记录批量操作
-2. **过滤查看**：Dashboard 支持按平台筛选
+2. **过滤查看**：Dashboard 支持搜索与状态筛选
 3. **成本告警**：监控总成本，设置预算上限
 4. **性能分析**：查看平均延迟，识别慢操作
 

@@ -1,16 +1,16 @@
-"""AgentLens - 轻量级 Agent 可观测平台
+"""AgentLens package exports.
 
-核心模块：
-- collector: 数据收集
-- storage: 数据存储
-- api: REST API
+AgentLens is a local-first session intelligence toolkit for coding agents.
+The canonical product path is log ingestion + storage + API + dashboard, with
+SDK/manual tracing kept as a secondary compatibility path.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 try:
     from agentlens.collector import Collector, create_collector
-    from agentlens.storage import SQLiteStorage, JSONLStorage
+    from agentlens.storage import JSONLStorage, SQLiteStorage
+
     __all__ = [
         "Collector",
         "create_collector",
@@ -18,5 +18,4 @@ try:
         "JSONLStorage",
     ]
 except ImportError:
-    # Allow importing when collector is not available
     __all__ = []

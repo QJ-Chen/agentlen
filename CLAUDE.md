@@ -2,100 +2,167 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Product definition
 
-AgentLens is a lightweight multi-platform Agent observability platform for tracking execution traces, token usage, and API costs across OpenClaw, Claude Code, Kimi Code, and Cursor.
+AgentLens is a **local-first session intelligence tool for Claude Code sessions**.
 
-## Architecture
+Its canonical job is to:
+- ingest local Claude Code session logs
+- normalize them into structured session records
+- store them locally in SQLite
+- expose searchable inspection and analytics views through a FastAPI backend and React dashboard
 
+Keep the product language centered on **Claude Code session replay, inspection, provenance, cost, and analytics**.
+
+Do **not** casually reposition AgentLens as:
+- a hosted telemetry platform
+- a remote-control or mission-control system
+- a generic tracing backend
+- a multi-agent runtime
+
+## Canonical runtime flow
+
+```text
+Claude Code session logs
+        ↓
+CollectorManager + Claude Code collector
+        ↓
+normalized session-level records
+        ↓
+SQLite (`~/.agentlens/agentlens.db`)
+        ↓
+FastAPI session/stats endpoints
+        ↓
+React dashboard for inbox / inspector / analytics
 ```
-agentlens/
-├── src/agentlens/          # Python backend
-│   ├── api.py              # FastAPI REST API server (port 8080)
-│   ├── storage.py          # SQLite/JSONL storage layer
-│   ├── collector.py        # Data collection SDK
-│   ├── collectors.py       # Collector manager for platform adapters
-│   ├── realtime.py        # Real-time log watching
-│   └── adapters/           # Platform-specific adapters
-├── dashboard/              # React TypeScript frontend (Vite, port 5177)
-│   └── src/
-│       ├── App.tsx         # Main app
-│       ├── Dashboard.tsx   # Dashboard component
-│       └── components/     # UI components (TraceTimeline, CostPanel, etc.)
-├── session_scanner.py      # Scans historical sessions from all platforms
-├── workflow_tracer.py      # SDK for manual tracing
-└── tests/                  # Test files
-```
 
-## Commands
+## Core code paths
 
-### Backend (Python)
+### Backend and ingestion
+- `src/agentlens/collectors.py`
+  - canonical ingestion pipeline
+  - historical backfill + polling watch mode
+  - Claude Code log parsing
+  - session aggregation of tool calls, LLM calls, token counts, and provenance
+- `src/agentlens/storage.py`
+  - canonical SQLite persistence
+  - keeps a backward-compatible `traces` table even though the product is session-centric
+  - powers session list/detail and overview/project stats queries
+- `src/agentlens/api.py`
+  - canonical FastAPI runtime
+  - on startup it backfills historical sessions and starts log watching automatically
+  - serves session/stats APIs and compatibility ingestion endpoints
+- `session_scanner.py`
+  - standalone CLI wrapper around `CollectorManager`
+  - use for one-shot backfills or a dedicated local watch process outside the API server
+
+### Frontend
+- `dashboard/src/main.tsx`
+  - frontend entrypoint
+  - mounts `App.tsx`
+- `dashboard/src/App.tsx`
+  - current dashboard shell
+  - fetches API data, normalizes records for the UI, and drives sessions / analytics / activity views
+- `dashboard/src/components/EnhancedTraceDetail.tsx`
+  - session inspector
+- `dashboard/src/components/RealtimeStatusPanel.tsx`
+  - recent activity / freshness view
+- `dashboard/src/components/AgentInteractionGraph.tsx`
+  - graph-style visualization
+
+## Important architecture distinctions
+
+### 1. The product is session-centric, but storage is still trace-shaped
+The current backend stores data in a backward-compatible `traces` table with JSON columns such as `tool_calls` and `llm_calls`. The UI and higher-level API treat those rows as **session records**. When refactoring, preserve both:
+- session-centric UX and queries
+- compatibility for existing trace ingestion paths
+
+### 2. API startup already runs ingestion watchers
+`src/agentlens/api.py` does a historical backfill and then starts collector watch mode on boot. Do not add a second parallel watcher unless you intentionally want duplicate work.
+
+### 3. The active dashboard is `App.tsx`, not every dashboard-looking file
+`dashboard/src/main.tsx` mounts `App.tsx`. If you find alternate dashboard files, verify whether they are actually wired into the app before changing product behavior around them.
+
+### 4. The frontend assumes the backend is on port 8080
+`dashboard/src/App.tsx` hardcodes `API_URL = 'http://localhost:8080'`. Backend port changes require matching frontend changes.
+
+## Supported source
+
+The canonical ingestion path is local Claude Code session-log parsing from:
+- `~/.claude/projects/.../*.jsonl`
+
+There is also a secondary pushed-trace path through `POST /api/v1/traces` and `POST /api/v1/traces/batch`. Keep those compatibility endpoints working when changing backend models.
+
+## Experimental / non-core areas
+
+Treat these as secondary unless the task explicitly targets them:
+- `src/agentlens/collector.py`
+- `src/agentlens/adapters/claude_code.py`
+- `src/agentlens/models.py`
+- `src/agentlens/tracer.py`
+- `src/agentlens/orchestrator.py`
+- `configs/*.yaml`
+- simulation/demo scripts or files under `tests/` that are not normal pytest coverage
+
+Do not let these modules drive repository-wide product wording or architectural decisions unless they are being actively integrated into the main ingestion + API + dashboard flow.
+
+## Common commands
+
+### Install
 ```bash
-# Start API server
+pip install -e .
+cd dashboard && npm install
+```
+
+### Run the backend API
+```bash
 python3 -m src.agentlens.api
+```
 
-# Run tests
+### Run the frontend
+```bash
+cd dashboard
+npm run dev
+```
+
+### Refresh the local database from Claude Code logs
+```bash
+python3 session_scanner.py
+```
+
+### Watch Claude Code sessions continuously
+```bash
+python3 session_scanner.py --watch --interval 5
+```
+
+### Backend quality checks
+```bash
 pytest
-
-# Lint/format
+pytest path/to/test_file.py::test_name
 ruff check .
 black .
-
-# Type check
 mypy
 ```
 
-### Frontend (Dashboard)
+### Frontend quality checks
 ```bash
 cd dashboard
-
-# Install dependencies
-npm install
-
-# Start dev server (http://localhost:5177)
-npm run dev
-
-# Build for production
-npm run build
-
-# Lint
 npm run lint
+npm run build
+npm run preview
 ```
 
-### Data Collection
-```bash
-# Scan historical sessions (one-shot)
-python3 session_scanner.py
+## Refactor guardrails
 
-# Scan with continuous watching
-python3 session_scanner.py --watch --interval 30
-```
+Preserve these behaviors during backend or UI changes:
+- real parser support for Claude Code logs
+- provenance fields such as `session_file_path` and `project_path`
+- fidelity of tool-call and LLM-call detail
+- compatibility for `POST /api/v1/traces` ingestion
+- local-first operation without requiring external services
 
-## Data Sources
-
-| Platform | Path | Data |
-|----------|------|------|
-| Claude Code | `~/.claude/projects/*.jsonl` | Full conversations, tool calls, token usage |
-| Kimi Code | `~/.kimi/sessions/*/wire.jsonl` | Tool calls, LLM interactions |
-| OpenClaw | `~/.openclaw/subagents/runs.json` | Subagent execution records |
-| SDK | Manual via `workflow_tracer.py` | Custom tracing |
-
-## API Endpoints
-
-- `POST /api/v1/traces` - Create trace
-- `POST /api/v1/traces/batch` - Batch create traces
-- `GET /api/v1/traces?platform=&limit=` - Query traces
-- `GET /api/v1/stats?period_hours=` - Get cost/token statistics
-- `GET /api/v1/platforms` - List all platforms
-- `GET /api/v1/sessions` - List all sessions
-
-## Storage
-
-Default storage is SQLite at `~/.agentlens/agentlens.db`. The `traces` table stores all execution data including `tool_calls` and `llm_calls` as JSON columns.
-
-## Key Files
-
-- `src/agentlens/api.py` - FastAPI app with startup/shutdown events that collect historical data and start real-time watching
-- `src/agentlens/storage.py` - SQLiteStorage class handles all DB operations with JSON serialization for nested fields
-- `src/agentlens/collectors.py` - CollectorManager coordinates multiple platform collectors
-- `dashboard/src/Dashboard.tsx` - Main dashboard React component
+Prefer simplifying:
+- duplicate or stale dashboard variants
+- overlapping ingestion entrypoints when one canonical path is enough
+- product language that implies remote control instead of local session inspection
+- experimental orchestration code leaking into the main product story

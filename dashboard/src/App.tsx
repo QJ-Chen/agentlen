@@ -1,332 +1,354 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ComponentType } from 'react';
 import {
-  LayoutDashboard,
   Activity,
-  RefreshCw,
-  Terminal,
-  Filter,
-  Search,
   BarChart3,
+  Filter,
+  LayoutDashboard,
   Network,
+  RefreshCw,
+  Search,
+  Terminal,
+  X,
 } from 'lucide-react';
-import type { Trace } from './types';
+import type { OverviewStats, ProjectStats, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
 import { EnhancedTraceTimeline } from './components/EnhancedTraceTimeline';
 import { AgentInteractionGraph } from './components/AgentInteractionGraph';
 import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
+import {
+  cleanSessionText,
+  formatCompactDuration,
+  formatInteger,
+  formatTokens,
+  shortProjectPath,
+} from './lib/sessionUtils';
 import './index.css';
 
 const API_URL = 'http://localhost:8080';
 
-// Format helpers
-const formatTime = (timestamp: number) => {
-  return new Date(timestamp).toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
+type ViewMode = 'sessions' | 'analytics' | 'activity';
+type TraceWithRaw = Trace & { raw?: RawSessionRecord };
+
+interface RawToolCall {
+  tool_use_id?: string;
+  tool_name?: string;
+  name?: string;
+  timestamp?: string | number;
+  duration_ms?: number;
+  is_error?: boolean;
+  error?: string;
+  error_message?: string;
+  input?: Record<string, unknown>;
+  input_args?: Record<string, unknown>;
+  output?: unknown;
+  output_result?: unknown;
+}
+
+interface RawLLMCall {
+  id?: string;
+  model?: string;
+  start_time?: string | number;
+  timestamp?: string | number;
+  duration_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  prompt?: string;
+  response?: string;
+}
+
+interface RawSessionRecord {
+  id?: string | number;
+  trace_id?: string;
+  session_id?: string;
+  agent_name?: string;
+  platform?: 'claude-code';
+  status?: string;
+  start_time?: string | number;
+  end_time?: string | number;
+  duration_ms?: number;
+  tool_calls?: RawToolCall[];
+  llm_calls?: RawLLMCall[];
+  total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  project_path?: string;
+  session_file_path?: string;
+  prompt?: string;
+  response?: string;
+  model?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface SessionsResponse {
+  sessions: RawSessionRecord[];
+}
+
+interface ProjectsResponse {
+  projects: ProjectStats[];
+}
+
+const DEFAULT_EMPTY_SELECTION = {
+  title: 'Select a session to inspect',
+  description:
+    'Review prompt/response previews, tool activity, model usage, cost, and source provenance for one coding-agent session.',
+};
+
+function normalizeStatus(status: string): Trace['status'] {
+  if (status === 'failed' || status === 'error' || status === 'timeout') return 'failed';
+  if (status === 'running' || status === 'pending') return 'running';
+  if (status === 'cancelled' || status === 'canceled') return 'cancelled';
+  return 'completed';
+}
+
+function toTimestamp(value?: string | number | null): number | undefined {
+  if (value === null || value === undefined || value === '') return undefined;
+  if (typeof value === 'number') {
+    return value > 10_000_000_000 ? value : value * 1000;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function transformSession(record: RawSessionRecord): TraceWithRaw {
+  const recordStartTime = toTimestamp(record.start_time) ?? 0;
+
+  const tools = (record.tool_calls || []).map((tool, idx) => {
+    const startTime = toTimestamp(tool.timestamp) ?? recordStartTime;
+    const duration = tool.duration_ms || 0;
+    return {
+      id: tool.tool_use_id || `tool-${idx}`,
+      name: tool.name || tool.tool_name || 'Unknown',
+      startTime,
+      endTime: startTime + duration,
+      duration,
+      status: tool.is_error || tool.error ? 'error' : 'success',
+      input: tool.input || tool.input_args,
+      output: tool.output ?? tool.output_result,
+      error: tool.error || tool.error_message,
+    } as const;
   });
-};
 
-const formatDuration = (ms?: number) => {
-  if (!ms) return '-';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-};
+  const llmCalls = (record.llm_calls || []).map((call, idx) => {
+    const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
+    const duration = call.duration_ms || 0;
+    const inputTokens = call.input_tokens || 0;
+    const outputTokens = call.output_tokens || 0;
+    return {
+      id: call.id || `llm-${idx}`,
+      model: call.model || record.model || 'unknown',
+      startTime,
+      endTime: startTime + duration,
+      duration,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cost: call.cost_usd || 0,
+      status: call.response ? 'success' : 'streaming',
+      prompt: call.prompt || '',
+      response: call.response || '',
+    } as const;
+  });
 
-// Simple Trace List Item
-const TraceListItem = ({
+  const startTime = recordStartTime || Date.now();
+  const endTime = toTimestamp(record.end_time);
+  const lastRequestTime =
+    Math.max(
+      startTime,
+      ...tools.map((tool) => tool.endTime || tool.startTime),
+      ...llmCalls.map((call) => call.endTime || call.startTime),
+    ) || startTime;
+
+  return {
+    id: record.trace_id || record.session_id || String(record.id || startTime),
+    sessionId: record.session_id || record.trace_id || String(record.id || startTime),
+    agentId: record.agent_name || record.platform || 'claude-code',
+    agentName: record.agent_name || 'claude-code',
+    platform: record.platform || 'claude-code',
+    status: normalizeStatus(record.status || 'completed'),
+    startTime,
+    endTime,
+    lastRequestTime,
+    duration: record.duration_ms || 0,
+    tools,
+    llmCalls,
+    totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
+    cost: record.cost_usd || 0,
+    projectPath: record.project_path || '',
+    sessionFilePath: record.session_file_path || '',
+    prompt: record.prompt || '',
+    response: record.response || '',
+    model: record.model || 'unknown',
+    metadata: record.metadata || {},
+    raw: record,
+  };
+}
+
+function TraceListItem({
   trace,
   isSelected,
   onClick,
 }: {
-  trace: Trace & { raw?: any; projectPath?: string; lastRequestTime?: number };
+  trace: TraceWithRaw;
   isSelected: boolean;
   onClick: () => void;
-}) => {
-  // Clean command tags from text
-  const cleanCommandText = (text: string): string => {
-    if (!text) return '';
-    return text
-      .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
-      .replace(/<command-name>.*?<\/command-name>/gi, '')
-      .replace(/<command-args>.*?<\/command-args>/gi, '')
-      .replace(/<command-message>.*?<\/command-message>/gi, '')
-      .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, '')
-      .trim();
-  };
-
-  // Get prompt preview from llm_calls or raw data
-  const getPromptPreview = (): string => {
-    // Try to get from first LLM call
-    if (trace.llmCalls && trace.llmCalls.length > 0) {
-      const firstPrompt = trace.llmCalls[0]?.prompt;
-      if (firstPrompt) {
-        const cleaned = cleanCommandText(firstPrompt);
-        return cleaned.substring(0, 60) + (cleaned.length > 60 ? '...' : '');
-      }
-    }
-    // Fall back to raw prompt
-    const rawPrompt = (trace.raw as any)?.prompt;
-    if (rawPrompt) {
-      const cleaned = cleanCommandText(rawPrompt);
-      return cleaned.substring(0, 60) + (cleaned.length > 60 ? '...' : '');
-    }
-    return '';
-  };
-
-  // 获取工作目录显示
-  const getWorkDir = () => {
-    if (trace.projectPath) {
-      return trace.projectPath;
-    }
-    // 从 raw 数据中提取
-    if (trace.raw?.cwd) {
-      return trace.raw.cwd;
-    }
-    if (trace.raw?.message?.cwd) {
-      return trace.raw.message.cwd;
-    }
-    return null;
-  };
-
-  const workDir = getWorkDir();
-  const displayPath = workDir ? workDir.split('/').slice(-2).join('/') : null;
-  const promptPreview = getPromptPreview();
+}) {
+  const promptPreview =
+    cleanSessionText(trace.llmCalls[0]?.prompt || trace.prompt || '').replace(/\n/g, ' ').slice(0, 100) ||
+    'No prompt preview';
+  const projectLabel = shortProjectPath(trace.projectPath);
 
   return (
-    <div
-      onClick={(e) => {
-        e.stopPropagation();
-        console.log('TraceListItem clicked, calling onClick');
-        onClick();
-      }}
-      className={`p-3 rounded-lg cursor-pointer transition-all ${
+    <button
+      onClick={onClick}
+      className={`w-full text-left rounded-xl border p-3 transition-all ${
         isSelected
-          ? 'bg-blue-600 text-white shadow-lg'
-          : 'bg-slate-800 hover:bg-slate-700 border border-slate-700/50'
+          ? 'bg-blue-600/20 border-blue-500 shadow-lg shadow-blue-900/20'
+          : 'bg-slate-800/70 hover:bg-slate-800 border-slate-700/60 hover:border-slate-600'
       }`}
     >
-      <div className="flex items-center justify-between">
-        <span className={`font-medium truncate ${isSelected ? 'text-white' : 'text-gray-200'}`}>
-          {trace.agentName}
-        </span>
-        <span
-          className={`text-xs px-2 py-0.5 rounded ${
-            trace.status === 'completed'
-              ? isSelected ? 'bg-emerald-400 text-emerald-900' : 'bg-emerald-900 text-emerald-300'
-              : trace.status === 'failed'
-              ? isSelected ? 'bg-red-400 text-red-900' : 'bg-red-900 text-red-300'
-              : isSelected ? 'bg-yellow-400 text-yellow-900' : 'bg-yellow-900 text-yellow-300'
-          }`}
-        >
-          {trace.status}
-        </span>
-      </div>
-
-      {/* Prompt preview */}
-      {promptPreview && (
-        <div className={`text-xs mt-1 truncate ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
-          💬 {promptPreview}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className={`font-medium truncate ${isSelected ? 'text-white' : 'text-gray-100'}`}>Claude Code</span>
+            <span className="text-[11px] text-slate-400">·</span>
+            <span className={`truncate text-sm ${isSelected ? 'text-blue-100' : 'text-slate-300'}`}>{trace.agentName}</span>
+          </div>
+          <div className={`text-xs mt-2 leading-5 ${isSelected ? 'text-blue-100' : 'text-slate-300'}`}>💬 {promptPreview}</div>
+          {projectLabel && (
+            <div className={`text-xs mt-2 truncate ${isSelected ? 'text-blue-200' : 'text-slate-500'}`}>📁 {projectLabel}</div>
+          )}
         </div>
-      )}
-
-      {/* 工作目录 */}
-      {displayPath && (
-        <div className={`text-xs mt-1 truncate ${isSelected ? 'text-blue-200' : 'text-gray-500'}`}>
-          📁 {displayPath}
-        </div>
-      )}
-
-      <div className={`text-xs mt-1 ${isSelected ? 'text-blue-100' : 'text-gray-400'}`}>
-        {formatTime(trace.lastRequestTime || trace.startTime)} · {trace.platform}
+        <StatusBadge status={trace.status} compact selected={isSelected} />
       </div>
-      <div className={`flex gap-3 mt-2 text-xs ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
-        <span>{trace.llmCalls?.length || 0} LLM</span>
-        <span>{trace.tools?.length || 0} 工具</span>
-        <span>{trace.totalTokens.toLocaleString()} tokens</span>
-        <span className={isSelected ? 'text-emerald-200' : 'text-emerald-400'}>
-          ${trace.cost.toFixed(4)}
-        </span>
+
+      <div className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
+        <span>🆔 {trace.sessionId}</span>
+        <span>{trace.llmCalls.length} LLM</span>
+        <span>{trace.tools.length} tools</span>
+        <span>{formatTokens(trace.totalTokens)}</span>
+        <span className={isSelected ? 'text-emerald-200' : 'text-emerald-400'}>${trace.cost.toFixed(4)}</span>
       </div>
-    </div>
+    </button>
   );
-};
+}
 
-// Stats Card
-const StatsCard = ({
+function StatsCard({
   title,
   value,
   subtext,
   icon: Icon,
   color,
+  detail,
 }: {
   title: string;
   value: string;
   subtext: string;
-  icon: any;
+  icon: ComponentType<{ className?: string }>;
   color: string;
-}) => (
-  <div className="bg-slate-800 rounded-lg p-4 border border-slate-700/50">
-    <div className="flex items-center justify-between">
-      <div>
-        <p className="text-sm text-gray-400">{title}</p>
-        <p className="text-2xl font-bold mt-1">{value}</p>
-        <p className="text-xs text-gray-500 mt-1">{subtext}</p>
-      </div>
-      <div className={`p-3 rounded-lg ${color}`}>
-        <Icon className="w-6 h-6 text-white" />
+  detail?: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-700/60 bg-slate-800/80 px-4 py-3 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{title}</p>
+          <p className="mt-1 text-2xl font-bold leading-none text-white md:text-[2rem]">{value}</p>
+          <p className="mt-2 text-sm text-slate-400">{subtext}</p>
+          {detail && <p className="mt-1 text-xs text-slate-500 line-clamp-2">{detail}</p>}
+        </div>
+        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${color}`}>
+          <Icon className="h-5 w-5 text-white" />
+        </div>
       </div>
     </div>
-  </div>
-);
-
-// View Mode Type
-type ViewMode = 'list' | 'interactions' | 'realtime';
+  );
+}
 
 function App() {
-  const [selectedTrace, setSelectedTrace] = useState<(Trace & { raw?: any }) | null>(null);
-  const [traces, setTraces] = useState<(Trace & { raw?: any })[]>([]);
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [traces, setTraces] = useState<TraceWithRaw[]>([]);
+  const [stats, setStats] = useState<OverviewStats | null>(null);
+  const [projects, setProjects] = useState<ProjectStats[]>([]);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [searchQuery, setSearchQuery] = useState('');
-  const [platformFilter, setPlatformFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
-
-      const [tracesRes, statsRes] = await Promise.all([
-        fetch(`${API_URL}/api/v1/traces?limit=100`),
-        fetch(`${API_URL}/api/v1/stats`),
+      const [sessionsRes, statsRes, projectsRes] = await Promise.all([
+        fetch(`${API_URL}/api/v1/sessions?limit=200`),
+        fetch(`${API_URL}/api/v1/stats/overview`),
+        fetch(`${API_URL}/api/v1/stats/projects`),
       ]);
 
-      const tracesData = await tracesRes.json();
-      const statsData = await statsRes.json();
-
-      const transformedTraces = (tracesData.traces || []).map((t: any) => {
-        // Parse tool_calls from API response
-        const tools = (t.tool_calls || []).map((tool: any, idx: number) => ({
-          id: tool.tool_use_id || `tool-${idx}`,
-          name: tool.name || 'Unknown',
-          startTime: tool.timestamp ? new Date(tool.timestamp * 1000).getTime() : new Date(t.start_time).getTime(),
-          endTime: tool.timestamp ? new Date(tool.timestamp * 1000).getTime() : new Date(t.end_time || t.start_time).getTime(),
-          duration: 0,
-          // If tool has a timestamp and the trace is completed, consider it success
-          status: t.status === 'success' || t.status === 'completed' ? 'success' : 
-                  tool.error ? 'error' : 'success',
-          input: tool.input,
-          output: tool.output,
-        }));
-
-        // Parse llm_calls from API response
-        let llmCalls: any[] = [];
-        
-        // API returns llm_calls as an array directly
-        const rawLLMCalls = t.llm_calls || [];
-        
-        if (rawLLMCalls.length > 0) {
-          llmCalls = rawLLMCalls.map((call: any, idx: number) => ({
-            id: call.id || `llm-${idx}`,
-            model: call.model || 'unknown',
-            startTime: call.start_time ? new Date(call.start_time).getTime() : new Date(t.start_time).getTime(),
-            endTime: call.start_time ? new Date(call.start_time).getTime() : new Date(t.end_time || t.start_time).getTime(),
-            duration: 0,
-            inputTokens: call.input_tokens || 0,
-            outputTokens: call.output_tokens || 0,
-            totalTokens: (call.input_tokens || 0) + (call.output_tokens || 0),
-            cost: 0,
-            status: call.response ? 'success' : 'streaming',
-            prompt: call.prompt || '',
-            response: call.response || '',
-          }));
-        }
-
-        // 计算最后请求时间（从 LLM 调用或工具调用中获取）
-        const lastLLMTime = llmCalls.length > 0
-          ? Math.max(...llmCalls.map((c: any) => c.endTime || c.startTime))
-          : 0;
-        const lastToolTime = tools.length > 0
-          ? Math.max(...tools.map((tool: any) => tool.endTime || tool.startTime))
-          : 0;
-        const lastRequestTime = Math.max(lastLLMTime, lastToolTime, new Date(t.start_time).getTime());
-
-        return {
-          id: t.trace_id || String(t.id),
-          agentId: t.agent_name,
-          agentName: t.agent_name,
-          platform: t.platform,
-          status: t.status === 'error' ? 'failed' : t.status || 'completed',
-          startTime: new Date(t.start_time).getTime(),
-          endTime: t.end_time ? new Date(t.end_time).getTime() : undefined,
-          lastRequestTime,
-          duration: t.duration_ms,
-          tools,
-          llmCalls,
-          totalTokens: (t.input_tokens || 0) + (t.output_tokens || 0),
-          cost: t.cost_usd || 0,
-          projectPath: t.project_path,
-          raw: t,
-        };
-      });
-
-      // 按最后请求时间排序（最新的在前）
-      transformedTraces.sort((a: any, b: any) => b.lastRequestTime - a.lastRequestTime);
-
-      setTraces(transformedTraces);
-      setStats(statsData);
-      setError(null);
-      
-      // 保持当前选中的 trace 更新
-      if (selectedTrace) {
-        const updatedSelected = transformedTraces.find((t: any) => t.id === selectedTrace.id);
-        if (updatedSelected) {
-          setSelectedTrace(updatedSelected);
-        }
+      if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
+        throw new Error('API request failed');
       }
-    } catch (err) {
-      setError('无法连接到 API 服务器');
+
+      const sessionsData = (await sessionsRes.json()) as SessionsResponse;
+      const statsData = (await statsRes.json()) as OverviewStats;
+      const projectsData = (await projectsRes.json()) as ProjectsResponse;
+
+      const transformed = (sessionsData.sessions || []).map(transformSession);
+      transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
+
+      setTraces(transformed);
+      setStats(statsData);
+      setProjects(projectsData.projects || []);
+      setError(null);
+
+      setSelectedTraceId((current) => {
+        if (current) {
+          return transformed.find((trace) => trace.id === current)?.id || transformed[0]?.id || null;
+        }
+        return transformed[0]?.id || null;
+      });
+    } catch {
+      setError('无法连接到 AgentLens API 服务器');
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
   }, []);
 
-  // Filter traces
+  useEffect(() => {
+    setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
+  }, [traces]);
+
+  const selectedTrace = useMemo(
+    () => traces.find((trace) => trace.id === selectedTraceId) || null,
+    [selectedTraceId, traces],
+  );
+
   const filteredTraces = useMemo(() => {
     return traces.filter((trace) => {
       const matchesSearch =
         !searchQuery ||
         trace.agentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        trace.id.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesPlatform =
-        platformFilter === 'all' || trace.platform === platformFilter;
-      return matchesSearch && matchesPlatform;
+        trace.sessionId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (trace.projectPath || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        cleanSessionText(trace.prompt || '').toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || trace.status === statusFilter;
+      return matchesSearch && matchesStatus;
     });
-  }, [traces, searchQuery, platformFilter]);
+  }, [traces, searchQuery, statusFilter]);
+  const hasActiveFilters = searchQuery.length > 0 || statusFilter !== 'all';
+  const selectedTraceVisible = selectedTrace && filteredTraces.some((trace) => trace.id === selectedTrace.id);
 
-  // Get unique platforms
-  const platforms = useMemo(() => {
-    const set = new Set(traces.map((t) => t.platform));
-    return Array.from(set);
-  }, [traces]);
+  const selectedProjectCount = useMemo(() => new Set(filteredTraces.map((trace) => trace.projectPath || '(unknown)')).size, [filteredTraces]);
 
   if (error) {
     return (
-      <div className="min-h-screen bg-slate-900 text-white flex items-center justify-center">
-        <div className="text-center">
+      <div className="min-h-screen bg-slate-950 text-white flex items-center justify-center p-6">
+        <div className="max-w-md rounded-2xl border border-red-900/40 bg-slate-900 p-8 text-center shadow-xl">
           <h1 className="text-2xl font-bold text-red-400 mb-4">连接错误</h1>
-          <p className="text-gray-400 mb-4">{error}</p>
-          <button
-            onClick={fetchData}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-          >
+          <p className="text-slate-300 mb-4">{error}</p>
+          <button onClick={() => void fetchData()} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
             重试
           </button>
         </div>
@@ -335,235 +357,285 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white">
-      {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <LayoutDashboard className="w-7 h-7 text-blue-500" />
-              <h1 className="text-xl font-bold">AgentLens</h1>
-              {stats && (
-                <span className="text-sm text-gray-400 hidden sm:inline">
-                  {stats.total_traces} traces · {stats.total_tokens?.toLocaleString()} tokens · $
-                  {stats.total_cost?.toFixed(2)}
-                </span>
-              )}
+    <div className="min-h-screen bg-slate-950 text-white">
+      <header className="sticky top-0 z-50 border-b border-slate-800/80 bg-slate-950/95 backdrop-blur">
+        <div className="mx-auto max-w-7xl px-4 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-600/15 text-blue-400 ring-1 ring-blue-500/20">
+                <LayoutDashboard className="h-6 w-6" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-2xl font-bold text-white">AgentLens</h1>
+                <p className="text-sm text-slate-400">Local-first Claude Code session intelligence</p>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={fetchData}
-                className="p-2 rounded-lg hover:bg-slate-700 transition-colors"
-                disabled={loading}
-              >
-                <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+
+            <div className="flex items-center gap-2 text-sm text-slate-400">
+              {stats && <span className="hidden xl:inline">{formatInteger(stats.total_sessions)} sessions tracked</span>}
+              <button onClick={() => void fetchData()} className="rounded-xl border border-slate-700/70 bg-slate-900/70 p-2 hover:border-slate-600 hover:bg-slate-800 transition-colors" disabled={loading}>
+                <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
             </div>
           </div>
         </div>
       </header>
 
-      {/* Stats Bar */}
       {stats && (
-        <div className="bg-slate-800/50 border-b border-slate-700">
-          <div className="max-w-7xl mx-auto px-4 py-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <section className="border-b border-slate-900/50 bg-slate-950">
+          <div className="mx-auto max-w-7xl px-4 py-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <StatsCard
-                title="总 Traces"
-                value={stats.total_traces.toString()}
-                subtext="最近 24 小时"
+                title="Sessions"
+                value={formatInteger(stats.total_sessions)}
+                subtext="Recent imported sessions"
+                detail={`${selectedProjectCount} visible projects in current view`}
                 icon={Activity}
                 color="bg-blue-500"
               />
               <StatsCard
-                title="总 Tokens"
-                value={stats.total_tokens?.toLocaleString() || '0'}
-                subtext="输入 + 输出"
+                title="Tokens"
+                value={formatTokens(stats.total_tokens)}
+                subtext={`${formatInteger(stats.total_llm_calls)} LLM calls observed`}
+                detail="Prompt + completion usage across imported sessions"
                 icon={BarChart3}
                 color="bg-violet-500"
               />
               <StatsCard
-                title="总成本"
-                value={`$${stats.total_cost?.toFixed(2) || '0'}`}
-                subtext="USD"
+                title="Cost"
+                value={`$${stats.total_cost.toFixed(2)}`}
+                subtext={`${formatInteger(stats.total_tool_calls)} tool events captured`}
+                detail="Local forensic view of spend, not a billing source of truth"
                 icon={LayoutDashboard}
                 color="bg-emerald-500"
               />
               <StatsCard
-                title="平均耗时"
-                value={formatDuration(stats.avg_duration_ms)}
-                subtext="每次调用"
+                title="Avg duration"
+                value={formatCompactDuration(stats.avg_duration_ms)}
+                subtext={`${stats.active_days.length} active days in this window`}
+                detail="Derived from imported session timestamps"
                 icon={Terminal}
                 color="bg-orange-500"
               />
             </div>
           </div>
-        </div>
+        </section>
       )}
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-6">
-        {/* View Mode Tabs */}
-        <div className="flex flex-wrap items-center gap-4 mb-6">
-          <div className="flex bg-slate-800 rounded-lg p-1">
-            {[
-              { id: 'list', label: '列表视图', icon: Activity },
-              { id: 'interactions', label: '交互图', icon: Network },
-              { id: 'realtime', label: '实时状态', icon: Terminal },
-            ].map((mode) => (
-              <button
-                key={mode.id}
-                onClick={() => setViewMode(mode.id as ViewMode)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors ${
-                  viewMode === mode.id
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-slate-700'
-                }`}
-              >
-                <mode.icon className="w-4 h-4" />
-                {mode.label}
-              </button>
-            ))}
-          </div>
+      <main className="mx-auto max-w-7xl px-4 py-5 space-y-5">
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-3 shadow-lg shadow-slate-950/40">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { id: 'sessions', label: 'Sessions Inbox', icon: Activity },
+                { id: 'analytics', label: 'Analytics', icon: Network },
+                { id: 'activity', label: 'Recent Activity', icon: Terminal },
+              ].map((mode) => (
+                <button
+                  key={mode.id}
+                  onClick={() => setViewMode(mode.id as ViewMode)}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
+                    viewMode === mode.id
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-950/40'
+                      : 'bg-slate-800/70 text-slate-300 hover:bg-slate-800 hover:text-white'
+                  }`}
+                >
+                  <mode.icon className="h-4 w-4" />
+                  {mode.label}
+                </button>
+              ))}
+            </div>
 
-          {/* Search & Filter */}
-          {viewMode === 'list' && (
-            <>
-              <div className="flex-1 min-w-[200px] max-w-md">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+            {viewMode === 'sessions' && (
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end xl:min-w-[28rem]">
+                <div className="relative flex-1 xl:min-w-[22rem]">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
                   <input
                     type="text"
-                    placeholder="搜索 Agent..."
+                    placeholder="Search session, project, or prompt…"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm focus:outline-none focus:border-blue-500"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-950/80 py-2 pl-10 pr-4 text-sm text-white placeholder:text-slate-500 focus:border-blue-500 focus:outline-none"
                   />
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Filter className="w-4 h-4 text-gray-500" />
-                <select
-                  value={platformFilter}
-                  onChange={(e) => setPlatformFilter(e.target.value)}
-                  className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
-                >
-                  <option value="all">所有平台</option>
-                  {platforms.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </>
-          )}
-        </div>
 
-        {/* Content Area */}
-        {viewMode === 'list' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Left - Trace List */}
-            <div className="lg:col-span-1">
-              <div className="bg-slate-800 rounded-lg p-4 border border-slate-700/50">
-                <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-blue-500" />
-                  执行记录 ({filteredTraces.length})
-                </h2>
-                <div className="max-h-[calc(100vh-400px)] overflow-auto space-y-2">
-                  {filteredTraces.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                      <Terminal className="w-12 h-12 mx-auto mb-3 opacity-30" />
-                      <p>暂无数据</p>
-                    </div>
-                  ) : (
-                    filteredTraces.map((trace) => (
-                      <TraceListItem
-                        key={trace.id}
-                        trace={trace}
-                        isSelected={selectedTrace?.id === trace.id}
-                        onClick={() => {
-                          console.log('Trace clicked:', trace.id);
-                          setSelectedTrace(trace);
-                        }}
-                      />
-                    ))
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm text-slate-400">
+                    <Filter className="h-4 w-4" />
+                    <span className="text-slate-200">Claude Code only</span>
+                  </div>
+                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-sm text-slate-400">
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent focus:outline-none text-slate-200">
+                      <option value="all">All status</option>
+                      <option value="completed">completed</option>
+                      <option value="failed">failed</option>
+                      <option value="running">running</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                  </div>
+                  {hasActiveFilters && (
+                    <button
+                      onClick={() => {
+                        setSearchQuery('');
+                        setStatusFilter('all');
+                      }}
+                      className="inline-flex items-center gap-1 rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-2 text-sm text-slate-300 hover:border-slate-600 hover:text-white"
+                    >
+                      <X className="h-3.5 w-3.5" /> Clear
+                    </button>
                   )}
                 </div>
               </div>
-            </div>
-
-            {/* Right - Detail */}
-            <div className="lg:col-span-2">
-              {selectedTrace ? (
-                <EnhancedTraceDetail trace={selectedTrace} />
-              ) : (
-                <div className="bg-slate-800 rounded-lg p-12 text-center text-gray-400 border border-slate-700/50 border-dashed">
-                  <Terminal className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                  <p className="text-lg">选择一个 Trace 查看详细调用过程</p>
-                  <p className="text-sm text-gray-500 mt-2">
-                    包括工具参数、提示词、响应内容等
-                  </p>
-                </div>
-              )}
-            </div>
+            )}
           </div>
-        )}
 
-        {viewMode === 'interactions' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2">
-              <AgentInteractionGraph
-                traces={traces}
-                selectedTraceId={selectedTrace?.id}
-                onSelectTrace={setSelectedTrace}
-              />
+          {viewMode === 'sessions' && (
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-400">
+              <span>
+                Showing <span className="text-slate-100">{formatInteger(filteredTraces.length)}</span> of{' '}
+                <span className="text-slate-100">{formatInteger(traces.length)}</span> imported sessions
+              </span>
+              {hasActiveFilters && <span className="rounded-full bg-blue-500/10 px-3 py-1 text-blue-300">Filters active</span>}
             </div>
-            <div className="lg:col-span-1">
-              {selectedTrace ? (
-                <EnhancedTraceDetail trace={selectedTrace} />
-              ) : (
-                <div className="bg-slate-800 rounded-lg p-8 text-center text-gray-400 border border-slate-700/50 border-dashed">
-                  <Network className="w-12 h-12 mx-auto mb-3 text-gray-600" />
-                  <p>点击交互图中的 Agent 查看详情</p>
+          )}
+        </section>
+
+        {viewMode === 'sessions' && (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30 xl:sticky xl:top-[13rem] xl:self-start">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Sessions Inbox</h2>
+                  <p className="text-sm text-slate-400">Imported local agent sessions ready for replay and debugging</p>
                 </div>
-              )}
-            </div>
-          </div>
-        )}
+                <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">{formatInteger(filteredTraces.length)}</span>
+              </div>
 
-        {viewMode === 'realtime' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-1">
-              <RealtimeStatusPanel
-                traces={traces}
-                selectedTraceId={selectedTrace?.id}
-                onSelectTrace={setSelectedTrace}
-              />
-            </div>
-            <div className="lg:col-span-2">
-              {selectedTrace ? (
+              <div className="space-y-3 max-h-[calc(100vh-21rem)] overflow-auto pr-1">
+                {filteredTraces.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/70 p-8 text-center text-slate-400">
+                    <Terminal className="mx-auto mb-3 h-10 w-10 text-slate-600" />
+                    <p className="text-base font-medium text-slate-200">No sessions match the current filters</p>
+                    <p className="mt-2 text-sm">Click the refresh button to load the latest Claude Code sessions.</p>
+                  </div>
+                ) : (
+                  filteredTraces.map((trace) => (
+                    <TraceListItem key={trace.id} trace={trace} isSelected={selectedTrace?.id === trace.id} onClick={() => setSelectedTraceId(trace.id)} />
+                  ))
+                )}
+              </div>
+            </section>
+
+            <section className="space-y-6">
+              {selectedTraceVisible && selectedTrace ? (
                 <>
                   <EnhancedTraceDetail trace={selectedTrace} />
-                  <div className="mt-6">
-                    <h3 className="text-lg font-semibold mb-4">执行时序</h3>
-                    <div className="bg-slate-800 rounded-lg p-4 border border-slate-700/50">
-                      <EnhancedTraceTimeline trace={selectedTrace} />
-                    </div>
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30">
+                    <h3 className="mb-4 text-lg font-semibold text-white">Execution Timeline</h3>
+                    <EnhancedTraceTimeline trace={selectedTrace} />
                   </div>
                 </>
               ) : (
-                <div className="bg-slate-800 rounded-lg p-12 text-center text-gray-400 border border-slate-700/50 border-dashed">
-                  <Terminal className="w-16 h-16 mx-auto mb-4 text-gray-600" />
-                  <p className="text-lg">选择一个运行中的任务查看详情</p>
+                <div className="flex min-h-[34rem] items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/50 p-10 text-center shadow-inner shadow-slate-950/20">
+                  <div className="max-w-md">
+                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-800/70 text-slate-500">
+                      <Terminal className="h-8 w-8" />
+                    </div>
+                    <h3 className="text-xl font-semibold text-white">{DEFAULT_EMPTY_SELECTION.title}</h3>
+                    <p className="mt-3 text-sm leading-6 text-slate-400">{DEFAULT_EMPTY_SELECTION.description}</p>
+                  </div>
                 </div>
               )}
+            </section>
+          </div>
+        )}
+
+        {viewMode === 'analytics' && (
+          <div className="space-y-6">
+            <AgentInteractionGraph traces={traces} selectedTraceId={selectedTrace?.id} onSelectTrace={(trace) => setSelectedTraceId(trace.id)} />
+
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg shadow-slate-950/30">
+                <h3 className="text-lg font-semibold text-white">Top Tools</h3>
+                <p className="mt-1 text-sm text-slate-400">Most frequently observed tool calls across imported sessions.</p>
+                <div className="mt-4 space-y-2">
+                  {(stats?.top_tools || []).map((tool) => (
+                    <div key={tool.name} className="flex items-center justify-between rounded-xl border border-slate-800 bg-slate-950/60 px-3 py-3 text-sm">
+                      <span className="text-slate-200">{tool.name}</span>
+                      <span className="text-slate-400">{formatInteger(tool.count)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg shadow-slate-950/30">
+                <h3 className="text-lg font-semibold text-white">Project Rollups</h3>
+                <p className="mt-1 text-sm text-slate-400">Project-level usage, activity, and spend for the imported sessions.</p>
+                <div className="mt-4 space-y-3 max-h-96 overflow-auto pr-1">
+                  {projects.slice(0, 12).map((project) => (
+                    <div key={project.project_path} className="rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-4 text-sm">
+                      <div className="font-medium text-white break-all">{project.project_path}</div>
+                      <div className="mt-2 text-slate-400">
+                        {project.session_count} sessions · {formatTokens(project.total_tokens)} · ${project.total_cost.toFixed(4)}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">Average duration {formatCompactDuration(project.avg_duration_ms)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
+          </div>
+        )}
+
+        {viewMode === 'activity' && (
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+            <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30">
+              <RealtimeStatusPanel traces={traces} selectedTraceId={selectedTrace?.id} onSelectTrace={(trace) => setSelectedTraceId(trace.id)} />
+            </section>
+            <section className="space-y-6">
+              {selectedTrace ? (
+                <>
+                  <EnhancedTraceDetail trace={selectedTrace} />
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30">
+                    <h3 className="mb-4 text-lg font-semibold text-white">Execution Timeline</h3>
+                    <EnhancedTraceTimeline trace={selectedTrace} />
+                  </div>
+                </>
+              ) : (
+                <div className="flex min-h-[34rem] items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/50 p-10 text-center shadow-inner shadow-slate-950/20">
+                  <div className="max-w-md">
+                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-800/70 text-slate-500">
+                      <Terminal className="h-8 w-8" />
+                    </div>
+                    <h3 className="text-xl font-semibold text-white">Review recent session activity</h3>
+                    <p className="mt-3 text-sm leading-6 text-slate-400">Choose a recent session to inspect the latest tool and model activity in context.</p>
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         )}
       </main>
     </div>
   );
+}
+
+function StatusBadge({
+  status,
+  compact = false,
+  selected = false,
+}: {
+  status: Trace['status'];
+  compact?: boolean;
+  selected?: boolean;
+}) {
+  const classes: Record<Trace['status'], string> = {
+    completed: selected ? 'bg-emerald-300 text-emerald-950' : 'bg-emerald-500/15 text-emerald-300',
+    failed: selected ? 'bg-red-300 text-red-950' : 'bg-red-500/15 text-red-300',
+    running: selected ? 'bg-yellow-300 text-yellow-950' : 'bg-yellow-500/15 text-yellow-300',
+    cancelled: selected ? 'bg-slate-300 text-slate-900' : 'bg-slate-500/15 text-slate-300',
+  };
+  return <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${classes[status]} ${compact ? '' : ''}`}>{status}</span>;
 }
 
 export default App;
