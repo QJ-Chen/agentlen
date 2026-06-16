@@ -28,7 +28,7 @@ interface EnhancedTraceDetailProps {
   trace: Trace;
 }
 
-type TabType = 'overview' | 'timeline' | 'tools' | 'llm' | 'raw';
+type TabType = 'overview' | 'tools' | 'llm' | 'raw';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
 
 const PLATFORM_CONFIG = {
@@ -103,7 +103,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
-    { id: 'timeline', label: '时序', icon: Clock },
     { id: 'tools', label: `工具 (${allTools.length})`, icon: Wrench },
     { id: 'llm', label: `LLM (${groupedLLMCalls.length}组)`, icon: MessageSquare },
     { id: 'raw', label: '原始', icon: Code },
@@ -189,65 +188,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
             </div>
           </div>
         )}
-      </div>
-    );
-  };
-
-  const renderTimeline = () => {
-    const events = [
-      { type: 'start', name: '开始', time: trace.startTime, duration: 0 },
-      ...allTools.map((tool) => ({ type: 'tool', name: tool.name, time: tool.startTime, duration: tool.duration })),
-      ...allLLMCalls.map((call) => ({ type: 'llm', name: call.model, time: call.startTime, duration: call.duration })),
-      ...(trace.endTime ? [{ type: 'end', name: trace.status === 'completed' ? '完成' : '结束', time: trace.endTime, duration: 0 }] : []),
-    ].sort((a, b) => a.time - b.time);
-
-    const totalDuration = trace.duration || 1;
-
-    return (
-      <div className="space-y-4">
-        <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-          <div className="relative">
-            <div className="h-8 bg-slate-900 rounded-full overflow-hidden mb-4">
-              {events
-                .filter((event) => event.type !== 'start' && event.type !== 'end')
-                .map((event, idx) => {
-                  const left = ((event.time - trace.startTime) / totalDuration) * 100;
-                  const width = Math.max((event.duration / totalDuration) * 100, 0.5);
-                  return (
-                    <div
-                      key={idx}
-                      className={`absolute top-1 bottom-1 rounded ${event.type === 'tool' ? 'bg-violet-500/60' : 'bg-cyan-500/60'}`}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                      title={`${event.name} (${formatDuration(event.duration)})`}
-                    />
-                  );
-                })}
-            </div>
-
-            <div className="space-y-2">
-              {events.map((event, idx) => (
-                <div key={idx} className="flex items-center gap-3 text-sm">
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      event.type === 'start'
-                        ? 'bg-blue-500'
-                        : event.type === 'end'
-                          ? trace.status === 'completed'
-                            ? 'bg-emerald-500'
-                            : 'bg-red-500'
-                          : event.type === 'tool'
-                            ? 'bg-violet-500'
-                            : 'bg-cyan-500'
-                    }`}
-                  />
-                  <span className="text-gray-400 w-24">{formatTime(event.time)}</span>
-                  <span className="flex-1">{event.name}</span>
-                  {event.duration > 0 && <span className="text-gray-500">{formatDuration(event.duration)}</span>}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
       </div>
     );
   };
@@ -516,7 +456,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
       <div className="p-4">
         {activeTab === 'overview' && renderOverview()}
-        {activeTab === 'timeline' && renderTimeline()}
         {activeTab === 'tools' && renderTools()}
         {activeTab === 'llm' && renderLLM()}
         {activeTab === 'raw' && renderRaw()}

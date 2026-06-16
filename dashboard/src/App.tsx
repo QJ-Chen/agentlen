@@ -13,7 +13,6 @@ import {
 } from 'lucide-react';
 import type { OverviewStats, ProjectStats, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
-import { EnhancedTraceTimeline } from './components/EnhancedTraceTimeline';
 import { AgentInteractionGraph } from './components/AgentInteractionGraph';
 import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
 import {
@@ -528,13 +527,7 @@ function App() {
 
             <section className="space-y-6">
               {selectedTraceVisible && selectedTrace ? (
-                <>
-                  <EnhancedTraceDetail trace={selectedTrace} />
-                  <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30">
-                    <h3 className="mb-4 text-lg font-semibold text-white">Execution Timeline</h3>
-                    <EnhancedTraceTimeline trace={selectedTrace} />
-                  </div>
-                </>
+                <EnhancedTraceDetail trace={selectedTrace} />
               ) : (
                 <div className="flex min-h-[34rem] items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/50 p-10 text-center shadow-inner shadow-slate-950/20">
                   <div className="max-w-md">
@@ -594,13 +587,7 @@ function App() {
             </section>
             <section className="space-y-6">
               {selectedTrace ? (
-                <>
-                  <EnhancedTraceDetail trace={selectedTrace} />
-                  <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30">
-                    <h3 className="mb-4 text-lg font-semibold text-white">Execution Timeline</h3>
-                    <EnhancedTraceTimeline trace={selectedTrace} />
-                  </div>
-                </>
+                <EnhancedTraceDetail trace={selectedTrace} />
               ) : (
                 <div className="flex min-h-[34rem] items-center justify-center rounded-2xl border border-dashed border-slate-800 bg-slate-900/50 p-10 text-center shadow-inner shadow-slate-950/20">
                   <div className="max-w-md">
