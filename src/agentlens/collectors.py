@@ -15,6 +15,7 @@ import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from collections import Counter
 
 CLAUDE_CODE_PLATFORM = "claude-code"
 CLAUDE_CODE_PRICING = {"input_per_1m": 3.0, "output_per_1m": 15.0}
@@ -58,6 +59,8 @@ class SessionAggregator:
                 "total_output_tokens": 0,
                 "total_cost": 0.0,
                 "project_path": "",
+                "project_group": "",
+                "cwd_counts": Counter(),
                 "platform": CLAUDE_CODE_PLATFORM,
                 "agent_name": CLAUDE_CODE_PLATFORM,
                 "first_prompt": None,
@@ -80,8 +83,12 @@ class SessionAggregator:
                 session["start_time"] = message["start_time"]
             session["end_time"] = message["start_time"]
 
-        if message.get("project_path"):
-            session["project_path"] = message["project_path"]
+        major_cwd = message.get("major_cwd") or message.get("project_path") or ""
+        if major_cwd:
+            session["cwd_counts"][major_cwd] += 1
+            session["project_path"] = major_cwd
+        if message.get("project_group") and not session.get("project_group"):
+            session["project_group"] = message["project_group"]
         session["platform"] = CLAUDE_CODE_PLATFORM
         session["agent_name"] = CLAUDE_CODE_PLATFORM
 
@@ -131,6 +138,11 @@ class SessionAggregator:
                 tool_call_with_output["output"] = tool_outputs[tool_use_id]
             merged_tool_calls.append(tool_call_with_output)
 
+        cwd_counts = session.get("cwd_counts") or Counter()
+        project_path = session.get("project_path") or ""
+        if cwd_counts:
+            project_path = cwd_counts.most_common(1)[0][0]
+
         return {
             "trace_id": f"session_{session_id[:20]}",
             "platform": CLAUDE_CODE_PLATFORM,
@@ -153,10 +165,12 @@ class SessionAggregator:
             "tool_calls": merged_tool_calls,
             "llm_calls": session["llm_calls"],
             "status": "success",
-            "project_path": session["project_path"],
+            "project_path": project_path,
             "metadata": {
                 "message_count": session["message_count"],
                 "llm_call_count": len(session["llm_calls"]),
+                "project_group": session.get("project_group") or "",
+                "major_cwd": project_path,
             },
         }
 
@@ -367,6 +381,7 @@ class ClaudeCodeCollector(LogCollector):
         return {
             "session_id": session_id,
             "project_path": project_path,
+            "project_group": log_path.parent.name,
             "pending_command": {},
             "aggregator": aggregator,
         }
@@ -511,6 +526,8 @@ class ClaudeCodeCollector(LogCollector):
             "cost_usd": 0,
             "tool_calls": tool_calls,
             "project_path": cwd or state["project_path"],
+            "major_cwd": cwd or state["project_path"],
+            "project_group": state["project_group"],
         }
         state["aggregator"].add_message(state["session_id"], msg_data)
 

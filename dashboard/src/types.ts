@@ -43,6 +43,7 @@ export interface Trace {
   totalTokens: number;
   cost: number;
   projectPath?: string;
+  projectGroup?: string;
   sessionFilePath?: string;
   prompt?: string;
   response?: string;

@@ -415,6 +415,25 @@ class SQLiteStorage(Storage):
                 for key, value in meta.items():
                     metadata.setdefault(key, value)
 
+            project_group = next(
+                (
+                    meta.get("project_group")
+                    for meta in metadata_items
+                    if isinstance(meta.get("project_group"), str) and meta.get("project_group")
+                ),
+                "",
+            )
+            major_cwd = next(
+                (
+                    meta.get("major_cwd")
+                    for meta in metadata_items
+                    if isinstance(meta.get("major_cwd"), str) and meta.get("major_cwd")
+                ),
+                project_paths[-1] if project_paths else "",
+            )
+            metadata["project_group"] = project_group
+            metadata["major_cwd"] = major_cwd
+
             sessions.append(
                 {
                     "id": session_id,
@@ -436,7 +455,7 @@ class SQLiteStorage(Storage):
                     "llm_calls": llm_calls,
                     "status": status,
                     "error_message": error_messages[-1] if error_messages else "",
-                    "project_path": project_paths[-1] if project_paths else "",
+                    "project_path": major_cwd,
                     "session_file_path": file_paths[-1] if file_paths else "",
                     "metadata": metadata,
                     "created_at": last.get("created_at") or first.get("created_at"),

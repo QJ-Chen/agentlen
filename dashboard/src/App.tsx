@@ -3,6 +3,8 @@ import type { ComponentType } from 'react';
 import {
   Activity,
   BarChart3,
+  ChevronDown,
+  ChevronRight,
   Filter,
   LayoutDashboard,
   Network,
@@ -176,6 +178,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
     totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
     cost: record.cost_usd || 0,
     projectPath: record.project_path || '',
+    projectGroup: typeof record.metadata?.project_group === 'string' ? record.metadata.project_group : '',
     sessionFilePath: record.session_file_path || '',
     prompt: record.prompt || '',
     response: record.response || '',
@@ -189,10 +192,12 @@ function TraceListItem({
   trace,
   isSelected,
   onClick,
+  hideProjectLabel = false,
 }: {
   trace: TraceWithRaw;
   isSelected: boolean;
   onClick: () => void;
+  hideProjectLabel?: boolean;
 }) {
   const promptPreview =
     cleanSessionText(trace.llmCalls[0]?.prompt || trace.prompt || '').replace(/\n/g, ' ').slice(0, 100) ||
@@ -216,7 +221,7 @@ function TraceListItem({
             <span className={`truncate text-sm ${isSelected ? 'text-blue-100' : 'text-slate-300'}`}>{trace.agentName}</span>
           </div>
           <div className={`text-xs mt-2 leading-5 ${isSelected ? 'text-blue-100' : 'text-slate-300'}`}>💬 {promptPreview}</div>
-          {projectLabel && (
+          {!hideProjectLabel && projectLabel && (
             <div className={`text-xs mt-2 truncate ${isSelected ? 'text-blue-200' : 'text-slate-500'}`}>📁 {projectLabel}</div>
           )}
         </div>
@@ -276,6 +281,7 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
   const fetchData = useCallback(async () => {
     try {
@@ -331,11 +337,49 @@ function App() {
         trace.agentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         trace.sessionId.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (trace.projectPath || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (trace.projectGroup || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
         cleanSessionText(trace.prompt || '').toLowerCase().includes(searchQuery.toLowerCase());
       const matchesStatus = statusFilter === 'all' || trace.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
   }, [traces, searchQuery, statusFilter]);
+  const groupedTraces = useMemo(() => {
+    const groups = new Map<string, { key: string; label: string; traces: TraceWithRaw[] }>();
+
+    filteredTraces.forEach((trace) => {
+      const groupKey = trace.projectGroup || '(unknown-project-folder)';
+      const groupLabel = shortProjectPath(trace.projectPath) || trace.projectPath || 'Unknown project';
+      const existing = groups.get(groupKey);
+      if (existing) {
+        existing.traces.push(trace);
+      } else {
+        groups.set(groupKey, { key: groupKey, label: groupLabel, traces: [trace] });
+      }
+    });
+
+    return Array.from(groups.values()).sort((a, b) => {
+      const aTime = a.traces[0]?.lastRequestTime || a.traces[0]?.startTime || 0;
+      const bTime = b.traces[0]?.lastRequestTime || b.traces[0]?.startTime || 0;
+      return bTime - aTime;
+    });
+  }, [filteredTraces]);
+
+  const toggleGroupCollapsed = useCallback((groupKey: string) => {
+    setCollapsedGroups((current) => ({
+      ...current,
+      [groupKey]: !current[groupKey],
+    }));
+  }, []);
+
+  const collapseAllGroups = useCallback(() => {
+    setCollapsedGroups(
+      Object.fromEntries(groupedTraces.map((group) => [group.key, true])) as Record<string, boolean>,
+    );
+  }, [groupedTraces]);
+
+  const expandAllGroups = useCallback(() => {
+    setCollapsedGroups({});
+  }, []);
   const hasActiveFilters = searchQuery.length > 0 || statusFilter !== 'all';
   const selectedTraceVisible = selectedTrace && filteredTraces.some((trace) => trace.id === selectedTrace.id);
 
@@ -507,7 +551,21 @@ function App() {
                   <h2 className="text-lg font-semibold text-white">Sessions Inbox</h2>
                   <p className="text-sm text-slate-400">Imported local agent sessions ready for replay and debugging</p>
                 </div>
-                <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">{formatInteger(filteredTraces.length)}</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={expandAllGroups}
+                    className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-600 hover:text-white"
+                  >
+                    Expand all
+                  </button>
+                  <button
+                    onClick={collapseAllGroups}
+                    className="rounded-xl border border-slate-700 bg-slate-900/70 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-600 hover:text-white"
+                  >
+                    Collapse all
+                  </button>
+                  <span className="rounded-full bg-slate-800 px-3 py-1 text-xs text-slate-300">{formatInteger(filteredTraces.length)}</span>
+                </div>
               </div>
 
               <div className="space-y-3 max-h-[calc(100vh-21rem)] overflow-auto pr-1">
@@ -518,9 +576,41 @@ function App() {
                     <p className="mt-2 text-sm">Click the refresh button to load the latest Claude Code sessions.</p>
                   </div>
                 ) : (
-                  filteredTraces.map((trace) => (
-                    <TraceListItem key={trace.id} trace={trace} isSelected={selectedTrace?.id === trace.id} onClick={() => setSelectedTraceId(trace.id)} />
-                  ))
+                  groupedTraces.map((group) => {
+                    const isCollapsed = !!collapsedGroups[group.key];
+                    return (
+                      <div key={group.key} className="rounded-2xl border border-slate-800/80 bg-slate-950/40 p-3">
+                        <button
+                          onClick={() => toggleGroupCollapsed(group.key)}
+                          className="mb-3 flex w-full items-start justify-between gap-3 text-left"
+                        >
+                          <div className="min-w-0 flex items-start gap-2">
+                            <div className="mt-0.5 text-slate-400">
+                              {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-white truncate">{group.label}</div>
+                              <div className="text-[11px] text-slate-500 truncate font-mono">{group.key}</div>
+                            </div>
+                          </div>
+                          <span className="rounded-full bg-slate-800 px-2.5 py-1 text-[11px] text-slate-300">{formatInteger(group.traces.length)}</span>
+                        </button>
+                        {!isCollapsed && (
+                          <div className="space-y-3">
+                            {group.traces.map((trace) => (
+                              <TraceListItem
+                                key={trace.id}
+                                trace={trace}
+                                isSelected={selectedTrace?.id === trace.id}
+                                onClick={() => setSelectedTraceId(trace.id)}
+                                hideProjectLabel
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </section>
