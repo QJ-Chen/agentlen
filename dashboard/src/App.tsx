@@ -113,14 +113,67 @@ function toTimestamp(value?: string | number | null): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-function transformSession(record: RawSessionRecord): TraceWithRaw {
-  const recordStartTime = toTimestamp(record.start_time) ?? 0;
+function buildMergedTools(record: RawSessionRecord, recordStartTime: number) {
+  const merged = new Map<string, {
+    id: string;
+    name: string;
+    startTime: number;
+    endTime: number;
+    duration: number;
+    status: 'success' | 'error' | 'pending';
+    input?: Record<string, unknown>;
+    output?: unknown;
+    error?: string;
+  }>();
 
-  const tools = (record.tool_calls || []).map((tool, idx) => {
+  (record.tool_calls || []).forEach((tool, idx) => {
     const startTime = toTimestamp(tool.timestamp) ?? recordStartTime;
     const duration = tool.duration_ms || 0;
-    return {
-      id: tool.tool_use_id || `tool-${idx}`,
+    const toolId = tool.tool_use_id || `${tool.name || tool.tool_name || 'tool'}-${idx}`;
+    const existing = merged.get(toolId);
+
+    if (tool.input || tool.input_args || tool.name || tool.tool_name) {
+      const base = existing || {
+        id: toolId,
+        name: tool.name || tool.tool_name || 'Unknown',
+        startTime,
+        endTime: startTime + duration,
+        duration,
+        status: tool.is_error || tool.error ? 'error' as const : 'success' as const,
+        input: tool.input || tool.input_args,
+        output: tool.output ?? tool.output_result,
+        error: tool.error || tool.error_message,
+      };
+
+      base.name = tool.name || tool.tool_name || base.name;
+      base.input = tool.input || tool.input_args || base.input;
+      base.startTime = Math.min(base.startTime, startTime);
+      base.endTime = Math.max(base.endTime, startTime + duration);
+      base.duration = Math.max(base.duration, base.endTime - base.startTime, duration);
+      if (tool.is_error || tool.error || tool.error_message) {
+        base.status = 'error';
+        base.error = tool.error || tool.error_message || base.error;
+      }
+      if (tool.output !== undefined || tool.output_result !== undefined) {
+        base.output = tool.output ?? tool.output_result;
+      }
+      merged.set(toolId, base);
+      return;
+    }
+
+    if (existing) {
+      existing.output = tool.output ?? tool.output_result;
+      if (tool.is_error || tool.error || tool.error_message) {
+        existing.status = 'error';
+        existing.error = tool.error || tool.error_message || existing.error;
+      }
+      existing.endTime = Math.max(existing.endTime, startTime + duration);
+      existing.duration = Math.max(existing.duration, existing.endTime - existing.startTime, duration);
+      return;
+    }
+
+    merged.set(toolId, {
+      id: toolId,
       name: tool.name || tool.tool_name || 'Unknown',
       startTime,
       endTime: startTime + duration,
@@ -129,8 +182,16 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
       input: tool.input || tool.input_args,
       output: tool.output ?? tool.output_result,
       error: tool.error || tool.error_message,
-    } as const;
+    });
   });
+
+  return Array.from(merged.values()).sort((a, b) => a.startTime - b.startTime);
+}
+
+function transformSession(record: RawSessionRecord): TraceWithRaw {
+  const recordStartTime = toTimestamp(record.start_time) ?? 0;
+
+  const tools = buildMergedTools(record, recordStartTime);
 
   const llmCalls = (record.llm_calls || []).map((call, idx) => {
     const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;

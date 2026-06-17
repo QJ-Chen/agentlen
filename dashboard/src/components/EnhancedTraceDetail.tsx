@@ -87,6 +87,52 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     });
   };
 
+  const classifyCallResponse = (call: LLMCall, relatedTools: ToolCall[]) => {
+    const response = cleanSessionText(call.response || '');
+    if (!response) {
+      return {
+        kind: 'empty' as const,
+        label: '无响应',
+        icon: Clock,
+        accent: 'text-slate-400',
+        badge: 'bg-slate-500/15 text-slate-300',
+        preview: '无响应内容',
+      };
+    }
+    if (response.startsWith('[thinking]')) {
+      return {
+        kind: 'thinking' as const,
+        label: '思考',
+        icon: Sparkles,
+        accent: 'text-amber-300',
+        badge: 'bg-amber-500/15 text-amber-300',
+        preview: response.replace(/^\[thinking\]\s*/, ''),
+      };
+    }
+    const toolResponseMatch = response.match(/^\[([^\]]+)\]\s*/);
+    if (toolResponseMatch) {
+      return {
+        kind: 'tool' as const,
+        label: '工具调用',
+        icon: Wrench,
+        accent: 'text-violet-300',
+        badge: 'bg-violet-500/15 text-violet-300',
+        preview:
+          relatedTools.length > 0
+            ? relatedTools.map((tool) => tool.name).join(' · ')
+            : toolResponseMatch[1],
+      };
+    }
+    return {
+      kind: 'text' as const,
+      label: '文本响应',
+      icon: MessageSquare,
+      accent: 'text-cyan-300',
+      badge: 'bg-cyan-500/15 text-cyan-300',
+      preview: response,
+    };
+  };
+
   const toggleTool = (idx: number) => {
     const newSet = new Set(expandedTools);
     if (newSet.has(idx)) newSet.delete(idx);
@@ -359,17 +405,36 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                       const callKey = `call-${groupIdx}-${callIdx}`;
                       const isCallExpanded = expandedLLMs.has(callKey);
                       const relatedTools = getRelatedToolCalls(call);
+                      const responseStyle = classifyCallResponse(call, relatedTools);
+                      const formattedToolResponse =
+                        responseStyle.kind === 'tool'
+                          ? relatedTools.map((tool) => ({
+                              name: tool.name,
+                              input: tool.input,
+                            }))
+                          : null;
+                      const toolResultAppendix =
+                        formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
+                          ? relatedTools.map((tool) => ({
+                              name: tool.name,
+                              result: tool.output,
+                              error: tool.error,
+                            }))
+                          : null;
                       return (
                         <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
                           <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
-                            <div className="w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center">
-                              <span className="text-xs text-blue-400 font-mono">{callIdx + 1}</span>
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${responseStyle.badge}`}>
+                              <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="text-sm text-gray-300 truncate">
-                                {call.response
-                                  ? `${cleanSessionText(call.response).replace(/\n/g, ' ').slice(0, 60)}${cleanSessionText(call.response).length > 60 ? '...' : ''}`
-                                  : '无响应内容'}
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span className={`text-[11px] px-1.5 py-0.5 rounded ${responseStyle.badge}`}>{responseStyle.label}</span>
+                                <div className={`text-sm truncate ${responseStyle.accent}`}>
+                                  {responseStyle.preview
+                                    ? `${responseStyle.preview.replace(/\n/g, ' ').slice(0, 60)}${responseStyle.preview.length > 60 ? '...' : ''}`
+                                    : '无响应内容'}
+                                </div>
                               </div>
                               <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
                                 <span>{call.model}</span>
@@ -384,16 +449,42 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
                           {isCallExpanded && (
                             <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
-                              {call.response && (
+                              {call.response && !formattedToolResponse && (
                                 <JsonOrTextBlock
-                                  title="模型响应"
-                                  value={cleanSessionText(call.response)}
+                                  title={responseStyle.label}
+                                  value={
+                                    responseStyle.kind === 'thinking'
+                                      ? cleanSessionText(call.response).replace(/^\[thinking\]\s*/, '')
+                                      : cleanSessionText(call.response)
+                                  }
                                   copyId={`llm-response-${callKey}`}
                                   copiedId={copiedId}
                                   onCopy={copyToClipboard}
                                 />
                               )}
-                              {relatedTools.length > 0 && (
+                              {formattedToolResponse && (
+                                <StructuredResponseBlock
+                                  title="工具调用"
+                                  color="violet"
+                                  icon={Wrench}
+                                  value={formattedToolResponse}
+                                  copyId={`llm-tool-calls-${callKey}`}
+                                  copiedId={copiedId}
+                                  onCopy={copyToClipboard}
+                                />
+                              )}
+                              {toolResultAppendix && (
+                                <StructuredResponseBlock
+                                  title="工具结果"
+                                  color="emerald"
+                                  icon={FileText}
+                                  value={toolResultAppendix}
+                                  copyId={`llm-tool-results-${callKey}`}
+                                  copiedId={copiedId}
+                                  onCopy={copyToClipboard}
+                                />
+                              )}
+                              {relatedTools.length > 0 && !formattedToolResponse && (
                                 <div>
                                   <div className="text-xs font-medium text-violet-400 mb-2">相关工具调用</div>
                                   <div className="space-y-2">
@@ -622,6 +713,57 @@ function JsonOrTextBlock({
       </div>
       <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
         <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">{text}</pre>
+      </div>
+    </div>
+  );
+}
+
+function StructuredResponseBlock({
+  title,
+  color,
+  icon: Icon,
+  value,
+  copyId,
+  copiedId,
+  onCopy,
+}: {
+  title: string;
+  color: 'violet' | 'emerald';
+  icon: ComponentType<{ className?: string }>;
+  value: unknown;
+  copyId: string;
+  copiedId: string | null;
+  onCopy: (text: string, id: string) => void;
+}) {
+  const palette =
+    color === 'violet'
+      ? {
+          label: 'text-violet-300',
+          border: 'border-violet-500/30',
+          bg: 'bg-violet-500/10',
+          text: 'text-violet-100',
+        }
+      : {
+          label: 'text-emerald-300',
+          border: 'border-emerald-500/30',
+          bg: 'bg-emerald-500/10',
+          text: 'text-emerald-100',
+        };
+
+  return (
+    <div className={`mt-3 rounded-lg border ${palette.border} ${palette.bg} p-3`}>
+      <div className="flex items-center justify-between mb-2">
+        <span className={`text-xs font-medium flex items-center gap-1 ${palette.label}`}>
+          <Icon className="w-3 h-3" />
+          {title}
+        </span>
+        <button onClick={() => onCopy(JSON.stringify(value, null, 2), copyId)} className="text-xs text-gray-500 hover:text-white flex items-center gap-1">
+          {copiedId === copyId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          {copiedId === copyId ? '已复制' : '复制'}
+        </button>
+      </div>
+      <div className="bg-slate-950/70 rounded border border-slate-800 overflow-hidden">
+        <pre className={`p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap font-mono ${palette.text}`}>{JSON.stringify(value, null, 2)}</pre>
       </div>
     </div>
   );
