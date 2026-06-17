@@ -1,6 +1,21 @@
-# AgentLens for Claude Code - 使用指南
+# AgentLens for Claude Code - 历史兼容指南
 
-## 🚀 快速开始
+> 该文档描述的是早期基于 `agentlens_observer.py` 的手动嵌入式观测方式。
+> 当前推荐运行路径不是把 observer 复制到其他项目中，而是直接让 AgentLens 读取 Claude Code 本地 session 日志。
+
+当前推荐方式：
+- `python3 -m src.agentlens.api`
+- `python3 session_scanner.py`
+- `cd dashboard && npm run dev`
+
+如果你只是想使用当前产品，请优先参考：
+- `README.md`
+- `CLAUDE.md`
+- `dashboard/README.md`
+
+以下内容仅作为旧兼容方案保留。
+
+## 🚀 旧兼容方案
 
 ### 1. 启动 AgentLens 服务
 

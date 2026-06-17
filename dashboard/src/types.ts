@@ -78,33 +78,3 @@ export interface ProjectStats {
   models: Record<string, number>;
   last_updated?: string;
 }
-
-export interface AgentStats {
-  agentId: string;
-  agentName: string;
-  platform: Platform;
-  totalExecutions: number;
-  successRate: number;
-  avgDuration: number;
-  totalTokens: number;
-  totalCost: number;
-  lastActive: number;
-}
-
-export interface CostMetrics {
-  date: string;
-  cost: number;
-  tokens: number;
-  requests: number;
-}
-
-export interface RealtimeExecution {
-  id: string;
-  agentName: string;
-  platform: Platform;
-  status: 'running' | 'completed' | 'failed';
-  currentTool?: string;
-  progress: number;
-  startTime: number;
-  estimatedEndTime?: number;
-}

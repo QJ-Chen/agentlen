@@ -83,7 +83,7 @@ Answer questions like:
 ### Secondary ingestion path
 - **Manual Claude-oriented trace ingestion** through the compatibility API endpoints
 
-> The local Claude Code session-log pipeline is the main product. Compatibility ingestion remains available, but the supported runtime is Claude Code only.
+> The local Claude Code session-log pipeline is the main product. Compatibility ingestion remains available only through the existing API contract; old manual tracing modules are no longer part of the supported runtime.
 
 ---
 
@@ -167,6 +167,10 @@ python3 session_scanner.py --watch
 cd dashboard && npm run dev
 ```
 
+### Removed experimental paths
+
+The old manual tracing / orchestration experiment files have been removed from the supported repo surface. AgentLens should now be understood primarily as a Claude Code session-log ingestion and inspection tool.
+
 ---
 
 ## Project structure
@@ -178,8 +182,7 @@ agentlen/
 │   ├── storage.py          # SQLite storage + query helpers
 │   ├── collectors.py       # canonical Claude Code ingestion pipeline
 │   ├── realtime.py         # collector watch service
-│   ├── collector.py        # optional compatibility/manual tracing path
-│   └── adapters/           # Claude-oriented adapters / experiments
+│   └── adapters/           # optional adapters / experiments
 ├── dashboard/
 │   └── src/
 │       ├── App.tsx         # main dashboard shell

@@ -11,9 +11,9 @@
 - [ ] 非 Claude 数据会被拒绝或清理
 
 ### API 服务
-- [ ] `/api/v1/traces` 返回正确数据格式
-- [ ] `/api/v1/stats` 返回正确统计信息
 - [ ] `/api/v1/sessions` 返回正确 session 数据
+- [ ] `/api/v1/stats/overview` 返回正确统计信息
+- [ ] `/api/v1/stats/projects` 返回正确项目汇总
 - [ ] `/api/v1/platforms` 仅返回 `claude-code`
 - [ ] 支持 `limit` 参数
 - [ ] 支持时间范围过滤
@@ -59,24 +59,17 @@
 ## Dashboard UI 检查
 
 ### Session 列表
-- [ ] 显示 Agent 名称
-- [ ] 显示 Claude Code 标识
-- [ ] 显示工作目录（简短形式）
+- [ ] 显示 Session 预览
+- [ ] 显示项目分组/路径
 - [ ] 显示状态
 - [ ] 点击可选中
 
 ### Session 详情面板
 - [ ] Overview Tab 正常
-- [ ] Timeline Tab 正常
-- [ ] Tools Tab 正常
-  - [ ] Tool calls 可展开/折叠
-  - [ ] 显示 input/output
 - [ ] LLM Tab 正常
   - [ ] 显示所有 LLM calls
-  - [ ] 每个 LLM call 显示 prompt
-  - [ ] 每个 LLM call 显示 response
-  - [ ] 支持代码高亮
-  - [ ] 支持复制
+  - [ ] 能区分文本 / thinking / tool-call 响应
+  - [ ] 工具调用和工具结果显示正确
 - [ ] Raw Tab 正常
 
 ### 状态筛选
@@ -101,24 +94,14 @@ python3 session_scanner.py
 # 2. 启动 API
 python3 -m src.agentlens.api
 
-# 3. 检查 API 数据
-curl -s "http://localhost:8080/api/v1/traces?limit=5" | python3 -m json.tool
+# 3. 检查 Sessions 数据
+curl -s "http://localhost:8080/api/v1/sessions?limit=5" | python3 -m json.tool
 
 # 4. 检查平台输出
 curl -s "http://localhost:8080/api/v1/platforms" | python3 -m json.tool
 
-# 5. 检查 LLM calls
-curl -s "http://localhost:8080/api/v1/traces?limit=1" | python3 -c "
-import json,sys
-d=json.load(sys.stdin)
-t = d['traces'][0]
-print(f'Platform: {t["platform"]}')
-print(f'LLM calls: {len(t.get("llm_calls", []))}')
-if t.get('llm_calls'):
-    first = t['llm_calls'][0]
-    print(f'First prompt: {first.get("prompt", "None")[:50]}...')
-    print(f'First response: {first.get("response", "None")[:50]}...')
-"
+# 5. 检查 Overview 统计
+curl -s "http://localhost:8080/api/v1/stats/overview" | python3 -m json.tool
 ```
 
 ## 已知问题
@@ -128,4 +111,4 @@ if t.get('llm_calls'):
 ## 版本记录
 
 - **2026-03-31**: 创建检查清单
-- **2026-06-16**: 收缩为 Claude Code only 检查项
+- **2026-06-17**: 收缩为 Claude Code only 检查项并改为 session-first 验证

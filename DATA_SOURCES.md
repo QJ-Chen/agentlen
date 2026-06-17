@@ -84,7 +84,6 @@ Dashboard / CLI / analytics
 相关入口：
 - `POST /api/v1/traces`
 - `POST /api/v1/traces/batch`
-- `src/agentlens/collector.py`
 
 这类数据源仍然可用，但支持范围应与 Claude Code 运行时保持一致。核心产品仍应优先优化**真实本地 Claude Code session 日志**的解析与可视化。
 

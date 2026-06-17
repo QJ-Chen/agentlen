@@ -14,7 +14,6 @@ structlog = "^24.1"
 python-dotenv = "^1.0"
 click = "^8.1"
 rich = "^13.0"
-pyyaml = "^6.0"
 fastapi = "^0.115.0"
 uvicorn = {extras = ["standard"], version = "^0.32.0"}
 

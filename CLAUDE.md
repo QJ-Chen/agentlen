@@ -96,11 +96,7 @@ There is also a secondary pushed-trace path through `POST /api/v1/traces` and `P
 ## Experimental / non-core areas
 
 Treat these as secondary unless the task explicitly targets them:
-- `src/agentlens/collector.py`
-- `src/agentlens/adapters/claude_code.py`
-- `src/agentlens/models.py`
-- `src/agentlens/tracer.py`
-- `src/agentlens/orchestrator.py`
+- `src/agentlens/adapters/`
 - `configs/*.yaml`
 - simulation/demo scripts or files under `tests/` that are not normal pytest coverage
 
