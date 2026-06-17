@@ -239,7 +239,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
     totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
     cost: record.cost_usd || 0,
     projectPath: record.project_path || '',
-    projectGroup: typeof record.metadata?.project_group === 'string' ? record.metadata.project_group : '',
+    projectGroup: typeof record.metadata?.project_group === 'string' ? (record.metadata.project_group || record.project_path || '') : (record.project_path || ''),
     sessionFilePath: record.session_file_path || '',
     prompt: record.prompt || '',
     response: record.response || '',
@@ -276,17 +276,12 @@ function TraceListItem({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className={`font-medium truncate ${isSelected ? 'text-white' : 'text-gray-100'}`}>Claude Code</span>
-            <span className="text-[11px] text-slate-400">·</span>
-            <span className={`truncate text-sm ${isSelected ? 'text-blue-100' : 'text-slate-300'}`}>{trace.agentName}</span>
-          </div>
-          <div className={`text-xs mt-2 leading-5 ${isSelected ? 'text-blue-100' : 'text-slate-300'}`}>💬 {promptPreview}</div>
+          <div className={`text-sm font-medium leading-6 ${isSelected ? 'text-white' : 'text-gray-100'}`}>💬 {promptPreview}</div>
           {!hideProjectLabel && projectLabel && (
             <div className={`text-xs mt-2 truncate ${isSelected ? 'text-blue-200' : 'text-slate-500'}`}>📁 {projectLabel}</div>
           )}
         </div>
-        <StatusBadge status={trace.status} compact selected={isSelected} />
+        {trace.status !== 'completed' && <StatusBadge status={trace.status} compact selected={isSelected} />}
       </div>
 
       <div className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
@@ -408,7 +403,7 @@ function App() {
     const groups = new Map<string, { key: string; label: string; traces: TraceWithRaw[] }>();
 
     filteredTraces.forEach((trace) => {
-      const groupKey = trace.projectGroup || '(unknown-project-folder)';
+      const groupKey = trace.projectGroup || trace.projectPath || '(unknown-project-folder)';
       const groupLabel = shortProjectPath(trace.projectPath) || trace.projectPath || 'Unknown project';
       const existing = groups.get(groupKey);
       if (existing) {

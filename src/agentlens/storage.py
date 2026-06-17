@@ -415,14 +415,6 @@ class SQLiteStorage(Storage):
                 for key, value in meta.items():
                     metadata.setdefault(key, value)
 
-            project_group = next(
-                (
-                    meta.get("project_group")
-                    for meta in metadata_items
-                    if isinstance(meta.get("project_group"), str) and meta.get("project_group")
-                ),
-                "",
-            )
             major_cwd = next(
                 (
                     meta.get("major_cwd")
@@ -430,6 +422,14 @@ class SQLiteStorage(Storage):
                     if isinstance(meta.get("major_cwd"), str) and meta.get("major_cwd")
                 ),
                 project_paths[-1] if project_paths else "",
+            )
+            project_group = next(
+                (
+                    meta.get("project_group")
+                    for meta in metadata_items
+                    if isinstance(meta.get("project_group"), str) and meta.get("project_group")
+                ),
+                major_cwd,
             )
             metadata["project_group"] = project_group
             metadata["major_cwd"] = major_cwd

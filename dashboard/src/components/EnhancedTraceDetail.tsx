@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import type { ComponentType } from 'react';
 import {
   Activity,
-  AlertCircle,
   Bot,
   Box,
   Check,
@@ -17,7 +16,6 @@ import {
   Layers,
   MessageSquare,
   Sparkles,
-  Terminal,
   User,
   Wrench,
 } from 'lucide-react';
@@ -28,7 +26,7 @@ interface EnhancedTraceDetailProps {
   trace: Trace;
 }
 
-type TabType = 'overview' | 'tools' | 'llm' | 'raw';
+type TabType = 'overview' | 'llm' | 'raw';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
 
 const PLATFORM_CONFIG = {
@@ -38,7 +36,6 @@ const PLATFORM_CONFIG = {
 export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace }) => {
   const typedTrace = trace as TraceWithRaw;
   const [activeTab, setActiveTab] = useState<TabType>('overview');
-  const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set([0]));
   const [expandedLLMs, setExpandedLLMs] = useState<Set<string>>(new Set(['group-0']));
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
@@ -133,13 +130,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     };
   };
 
-  const toggleTool = (idx: number) => {
-    const newSet = new Set(expandedTools);
-    if (newSet.has(idx)) newSet.delete(idx);
-    else newSet.add(idx);
-    setExpandedTools(newSet);
-  };
-
   const toggleLLM = (key: string) => {
     const newSet = new Set(expandedLLMs);
     if (newSet.has(key)) newSet.delete(key);
@@ -149,7 +139,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
-    { id: 'tools', label: `工具 (${allTools.length})`, icon: Wrench },
     { id: 'llm', label: `LLM (${groupedLLMCalls.length}组)`, icon: MessageSquare },
     { id: 'raw', label: '原始', icon: Code },
   ] as const;
@@ -237,110 +226,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       </div>
     );
   };
-
-  const getToolSummary = (tool: ToolCall): string => {
-    const input = tool.input || {};
-    switch (tool.name) {
-      case 'Agent':
-        return typeof input.description === 'string' ? input.description : typeof input.prompt === 'string' ? input.prompt : '';
-      case 'Bash':
-        return typeof input.command === 'string' ? input.command : '';
-      case 'Write':
-      case 'Edit':
-      case 'Read':
-        return typeof input.file_path === 'string' ? input.file_path : typeof input.path === 'string' ? input.path : '';
-      default: {
-        const keys = Object.keys(input);
-        if (!keys.length) return '';
-        const firstKey = keys[0];
-        const value = input[firstKey];
-        if (typeof value === 'string' && value.length < 80) return `${firstKey}: ${value}`;
-        return firstKey;
-      }
-    }
-  };
-
-  const renderTools = () => (
-    <div className="space-y-2">
-      {allTools.length === 0 ? (
-        <EmptyState icon={Wrench} label="无工具调用记录" />
-      ) : (
-        allTools.map((tool, idx) => {
-          const isExpanded = expandedTools.has(idx);
-          const summary = getToolSummary(tool);
-          const displaySummary = summary.length > 60 ? `${summary.slice(0, 60)}...` : summary;
-
-          return (
-            <div
-              key={idx}
-              className={`rounded-lg border transition-all ${
-                isExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
-              }`}
-            >
-              <button onClick={() => toggleTool(idx)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
-                <div
-                  className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                    tool.status === 'success'
-                      ? 'bg-emerald-500/20'
-                      : tool.status === 'error'
-                        ? 'bg-red-500/20'
-                        : 'bg-yellow-500/20'
-                  }`}
-                >
-                  <Wrench
-                    className={`w-4 h-4 ${
-                      tool.status === 'success'
-                        ? 'text-emerald-400'
-                        : tool.status === 'error'
-                          ? 'text-red-400'
-                          : 'text-yellow-400'
-                    }`}
-                  />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="font-medium">{tool.name}</span>
-                    {displaySummary && (
-                      <span className="text-xs text-gray-500 truncate flex-1" title={summary}>
-                        {displaySummary}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-gray-400 mt-0.5">
-                    <span>{tool.status}</span>
-                    <span>·</span>
-                    <span>{formatDuration(tool.duration)}</span>
-                    <span>·</span>
-                    <span>{formatTime(tool.startTime)}</span>
-                  </div>
-                </div>
-                {isExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-              </button>
-
-              {isExpanded && (
-                <div className="px-4 pb-4 border-t border-slate-700/50 space-y-4">
-                  {tool.input && Object.keys(tool.input).length > 0 && (
-                    <JsonBlock title="输入参数" value={tool.input} copyId={`tool-input-${idx}`} copiedId={copiedId} onCopy={copyToClipboard} />
-                  )}
-                  {tool.output != null && (
-                    <JsonOrTextBlock title="输出结果" value={tool.output} copyId={`tool-output-${idx}`} copiedId={copiedId} onCopy={copyToClipboard} />
-                  )}
-                  {tool.error && (
-                    <div className="bg-red-950/30 border border-red-900/30 rounded p-3">
-                      <div className="flex items-center gap-1 mb-2 text-red-400 text-xs font-medium">
-                        <AlertCircle className="w-3 h-3" /> 错误信息
-                      </div>
-                      <pre className="text-xs text-red-300 whitespace-pre-wrap">{tool.error}</pre>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })
-      )}
-    </div>
-  );
 
   const renderLLM = () => (
     <div className="space-y-4">
@@ -547,7 +432,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
       <div className="p-4">
         {activeTab === 'overview' && renderOverview()}
-        {activeTab === 'tools' && renderTools()}
         {activeTab === 'llm' && renderLLM()}
         {activeTab === 'raw' && renderRaw()}
       </div>
@@ -649,38 +533,6 @@ function EmptyState({ icon: Icon, label }: { icon: ComponentType<{ className?: s
     <div className="text-center py-8 text-gray-500">
       <Icon className="w-12 h-12 mx-auto mb-3 opacity-30" />
       <p>{label}</p>
-    </div>
-  );
-}
-
-function JsonBlock({
-  title,
-  value,
-  copyId,
-  copiedId,
-  onCopy,
-}: {
-  title: string;
-  value: unknown;
-  copyId: string;
-  copiedId: string | null;
-  onCopy: (text: string, id: string) => void;
-}) {
-  return (
-    <div className="mt-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-green-400 flex items-center gap-1">
-          <Terminal className="w-3 h-3" />
-          {title}
-        </span>
-        <button onClick={() => onCopy(JSON.stringify(value, null, 2), copyId)} className="text-xs text-gray-500 hover:text-white flex items-center gap-1">
-          {copiedId === copyId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copiedId === copyId ? '已复制' : '复制'}
-        </button>
-      </div>
-      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
-        <pre className="p-3 text-xs text-green-400 overflow-auto max-h-60 whitespace-pre-wrap font-mono">{JSON.stringify(value, null, 2)}</pre>
-      </div>
     </div>
   );
 }

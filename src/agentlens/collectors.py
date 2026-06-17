@@ -169,7 +169,7 @@ class SessionAggregator:
             "metadata": {
                 "message_count": session["message_count"],
                 "llm_call_count": len(session["llm_calls"]),
-                "project_group": session.get("project_group") or "",
+                "project_group": session.get("project_group") or project_path,
                 "major_cwd": project_path,
             },
         }
