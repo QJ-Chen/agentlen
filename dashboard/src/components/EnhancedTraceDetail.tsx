@@ -27,7 +27,7 @@ interface EnhancedTraceDetailProps {
   trace: Trace;
 }
 
-type TabType = 'overview' | 'llm' | 'raw';
+type TabType = 'overview' | 'llm' | 'taskStatus' | 'raw';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
 
 const PLATFORM_CONFIG = {
@@ -161,6 +161,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
     { id: 'llm', label: `LLM (${groupedLLMCalls.length}组)`, icon: MessageSquare },
+    { id: 'taskStatus', label: '任务状态', icon: Layers },
     { id: 'raw', label: '原始', icon: Code },
   ] as const;
 
@@ -419,6 +420,69 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     </div>
   );
 
+  const renderTaskStatus = () => {
+    const taskSummary = typedTrace.metadata?.task_summary as
+      | {
+          created?: number;
+          updated?: number;
+          listed?: number;
+          got?: number;
+          latest_statuses?: Array<{ taskId: string; status: string }>;
+          latest?: { taskId?: string; status?: string; subject?: string; description?: string } | null;
+          tasks?: Array<{
+            taskId: string;
+            status?: string;
+            subject?: string;
+            description?: string;
+            created_prompt_idx?: number;
+            latest_status_prompt_idx?: number;
+          }>;
+        }
+      | undefined;
+
+    const tasks = taskSummary?.tasks || [];
+    const hasTaskData = tasks.length > 0;
+
+    if (!hasTaskData || !taskSummary) {
+      return <EmptyState icon={Layers} label="无任务状态摘要" />;
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+          <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
+            <Layers className="w-4 h-4" />
+            任务状态
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <MetricCard icon={Check} color="text-emerald-400" value={String(taskSummary.created || 0)} label="创建" />
+            <MetricCard icon={MessageSquare} color="text-cyan-400" value={String(taskSummary.updated || 0)} label="更新" />
+            <MetricCard icon={Hash} color="text-violet-400" value={String(taskSummary.listed || 0)} label="列表" />
+            <MetricCard icon={Code} color="text-orange-400" value={String(taskSummary.got || 0)} label="获取" />
+          </div>
+          <div className="mt-4 space-y-2">
+            {tasks.map((task) => (
+              <div key={task.taskId} className="rounded-xl border border-slate-700/50 bg-slate-900/40 p-3 space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-mono text-xs text-slate-300 truncate">{task.taskId}</span>
+                  <span className="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs text-blue-300">{task.status || 'unknown'}</span>
+                </div>
+                {task.subject && <div className="text-sm text-slate-200">{task.subject}</div>}
+                {task.description && <div className="text-xs text-slate-400 whitespace-pre-wrap">{task.description}</div>}
+                {task.created_prompt_idx != null && (
+                  <div className="text-[11px] text-slate-500">created at user prompt #{task.created_prompt_idx}</div>
+                )}
+                {task.latest_status_prompt_idx != null && task.latest_status_prompt_idx !== task.created_prompt_idx && (
+                  <div className="text-[11px] text-slate-500">latest status updated at user prompt #{task.latest_status_prompt_idx}</div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderRaw = () => (
     <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
       <div className="flex items-center justify-between px-3 py-2 bg-slate-900/50 border-b border-slate-800">
@@ -455,6 +519,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       <div className="p-4">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'llm' && renderLLM()}
+        {activeTab === 'taskStatus' && renderTaskStatus()}
         {activeTab === 'raw' && renderRaw()}
       </div>
     </div>

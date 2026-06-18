@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from collections import Counter
 
+CLAUDE_TASKS_DIR = Path.home() / ".claude" / "tasks"
+
 CLAUDE_CODE_PLATFORM = "claude-code"
 CLAUDE_CODE_PRICING = {"input_per_1m": 3.0, "output_per_1m": 15.0}
 
@@ -29,6 +31,136 @@ def calc_cost(platform: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens / 1_000_000) * CLAUDE_CODE_PRICING["input_per_1m"] + (
         output_tokens / 1_000_000
     ) * CLAUDE_CODE_PRICING["output_per_1m"]
+
+
+def summarize_task_tools(session_id: str, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    task_dir = CLAUDE_TASKS_DIR / session_id
+    summary = {
+        "created": 0,
+        "updated": 0,
+        "listed": 0,
+        "got": 0,
+        "latest_statuses": [],
+        "latest": None,
+        "tasks": [],
+        "task_source": "tool_calls",
+    }
+
+    if task_dir.exists() and task_dir.is_dir():
+        tasks = []
+        for task_file in sorted(task_dir.glob('*.json'), key=lambda p: int(p.stem) if p.stem.isdigit() else 10**9):
+            try:
+                payload = json.loads(task_file.read_text())
+            except Exception:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            task_id = str(payload.get('id') or task_file.stem)
+            tasks.append({
+                'taskId': task_id,
+                'status': payload.get('status') or 'unknown',
+                'subject': payload.get('subject') or '',
+                'description': payload.get('description') or '',
+                'activeForm': payload.get('activeForm') or '',
+                'blocks': payload.get('blocks') or [],
+                'blockedBy': payload.get('blockedBy') or [],
+            })
+
+        if tasks:
+            summary['task_source'] = 'claude_tasks'
+            summary['tasks'] = tasks
+            summary['created'] = len(tasks)
+            summary['updated'] = len([task for task in tasks if task.get('status') not in {'created', 'unknown'}])
+            summary['latest_statuses'] = [
+                {'taskId': task['taskId'], 'status': task.get('status', 'unknown')}
+                for task in tasks
+            ]
+            summary['latest'] = tasks[-1]
+            return summary
+
+    latest_statuses: Dict[str, str] = {}
+    latest_status_timestamps: Dict[str, Any] = {}
+    latest_status_prompt_idxs: Dict[str, int] = {}
+    latest_create: Dict[str, Dict[str, Any]] = {}
+    pending_create_without_id: List[Dict[str, Any]] = []
+
+    for tool_call in tool_calls:
+        name = tool_call.get("name")
+        input_data = tool_call.get("input") or {}
+        if not isinstance(input_data, dict):
+            input_data = {}
+        if name == "TaskCreate":
+            summary["created"] += 1
+            output_value = tool_call.get("output")
+            output_data = output_value or {}
+            if not isinstance(output_data, dict):
+                output_data = {}
+            task_id = str(output_data.get("id") or input_data.get("taskId") or "")
+            if not task_id and isinstance(output_value, str):
+                match = re.search(r"Task\s+#?(\d+)\s+created successfully", output_value)
+                if match:
+                    task_id = match.group(1)
+            subject = input_data.get("subject") or ""
+            description = input_data.get("description") or ""
+            create_payload = {
+                "taskId": task_id,
+                "subject": subject,
+                "description": description,
+                "created_prompt_idx": tool_call.get("prompt_idx"),
+            }
+            if task_id:
+                latest_create[task_id] = create_payload
+            elif subject or description:
+                pending_create_without_id.append(create_payload)
+        elif name == "TaskUpdate":
+            summary["updated"] += 1
+            task_id = str(input_data.get("taskId") or "")
+            status = input_data.get("status")
+            if task_id and isinstance(status, str):
+                latest_statuses[task_id] = status
+                latest_status_timestamps[task_id] = tool_call.get("timestamp")
+                if tool_call.get("prompt_idx") is not None:
+                    latest_status_prompt_idxs[task_id] = tool_call.get("prompt_idx")
+        elif name == "TaskList":
+            summary["listed"] += 1
+        elif name == "TaskGet":
+            summary["got"] += 1
+
+    summary["latest_statuses"] = [
+        {"taskId": task_id, "status": status}
+        for task_id, status in latest_statuses.items()
+    ]
+
+    ordered_task_ids = list(dict.fromkeys([*latest_create.keys(), *latest_statuses.keys()]))
+    tasks = []
+    pending_create_iter = iter(pending_create_without_id)
+    for task_id in ordered_task_ids:
+        task = {"taskId": task_id, "status": latest_statuses.get(task_id, "created")}
+        task.update(latest_create.get(task_id, {}))
+        if task_id not in latest_create:
+            fallback_create = next(pending_create_iter, None)
+            if fallback_create:
+                task.update({
+                    "subject": fallback_create.get("subject", ""),
+                    "description": fallback_create.get("description", ""),
+                    "created_prompt_idx": fallback_create.get("created_prompt_idx"),
+                })
+        if task_id in latest_status_prompt_idxs:
+            task["latest_status_prompt_idx"] = latest_status_prompt_idxs[task_id]
+        tasks.append(task)
+    summary["tasks"] = tasks
+
+    if tasks:
+        latest_task = max(
+            tasks,
+            key=lambda task: (
+                str(latest_status_timestamps.get(task.get("taskId"), "")),
+                int(task.get("taskId") or 0) if str(task.get("taskId") or "").isdigit() else -1,
+            ),
+        )
+        summary["latest"] = latest_task
+
+    return summary
 
 
 class SessionAggregator:
@@ -97,7 +229,14 @@ class SessionAggregator:
         session["total_cost"] += float(message.get("cost_usd") or 0.0)
 
         if message.get("tool_calls"):
-            session["tool_calls"].extend(message["tool_calls"])
+            prompt_idx = len(session.get("llm_calls", [])) + 1 if session.get("last_user_prompt") else None
+            enriched_tool_calls = []
+            for tool_call in message["tool_calls"]:
+                item = dict(tool_call)
+                if item.get("prompt_idx") is None and prompt_idx is not None:
+                    item["prompt_idx"] = prompt_idx
+                enriched_tool_calls.append(item)
+            session["tool_calls"].extend(enriched_tool_calls)
 
         if message.get("role") == "user" and message.get("prompt"):
             prompt = message["prompt"]
@@ -171,6 +310,7 @@ class SessionAggregator:
                 "llm_call_count": len(session["llm_calls"]),
                 "project_group": session.get("project_group") or project_path,
                 "major_cwd": project_path,
+                "task_summary": summarize_task_tools(session_id, merged_tool_calls),
             },
         }
 
@@ -403,6 +543,8 @@ class ClaudeCodeCollector(LogCollector):
 
         if isinstance(content, list):
             for item in content:
+                if not isinstance(item, dict):
+                    continue
                 if item.get("type") == "tool_use":
                     tool_calls.append(
                         {
