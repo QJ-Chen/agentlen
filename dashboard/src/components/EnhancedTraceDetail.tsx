@@ -11,6 +11,7 @@ import {
   Code,
   Copy,
   DollarSign,
+  ExternalLink,
   FileText,
   Hash,
   Layers,
@@ -38,6 +39,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [expandedLLMs, setExpandedLLMs] = useState<Set<string>>(new Set(['group-0']));
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [openingTarget, setOpeningTarget] = useState<'project' | 'session_folder' | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
 
   const formatTime = (timestamp: number) =>
     new Date(timestamp).toLocaleTimeString('zh-CN', {
@@ -51,6 +54,24 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     await navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const openPath = async (target: 'project' | 'session_folder') => {
+    setOpeningTarget(target);
+    setOpenError(null);
+    try {
+      const response = await fetch(`http://localhost:8080/api/v1/sessions/${trace.sessionId}/open?target=${target}`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(payload?.detail || 'Failed to open path');
+      }
+    } catch (error) {
+      setOpenError(error instanceof Error ? error.message : 'Failed to open path');
+    } finally {
+      setOpeningTarget(null);
+    }
   };
 
   const allTools = useMemo(() => trace.tools || [], [trace.tools]);
@@ -180,8 +201,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
             <InfoField label="模型" value={trace.model || models.join(', ') || 'unknown'} />
             <InfoField label="Session ID" value={trace.sessionId} mono />
           </div>
-          {trace.projectPath && <PathField label="项目路径" value={trace.projectPath} />}
-          {trace.sessionFilePath && <PathField label="Session 文件" value={trace.sessionFilePath} />}
+          {trace.projectPath && <PathField label="项目路径" value={trace.projectPath} actionLabel="Open project" actionIcon={ExternalLink} actionPending={openingTarget === 'project'} onAction={() => void openPath('project')} />}
+          {trace.sessionFilePath && <PathField label="Session 文件" value={trace.sessionFilePath} actionLabel="Open folder" actionIcon={ExternalLink} actionPending={openingTarget === 'session_folder'} onAction={() => void openPath('session_folder')} />}
+          {openError && <div className="mt-3 text-xs text-red-300 bg-red-950/30 border border-red-900/30 rounded px-3 py-2">{openError}</div>}
         </div>
 
         {(cleanedPrompt || cleanedResponse) && (
@@ -483,11 +505,37 @@ function InfoField({ label, value, mono = false }: { label: string; value: strin
   );
 }
 
-function PathField({ label, value }: { label: string; value: string }) {
+function PathField({
+  label,
+  value,
+  actionLabel,
+  actionIcon: ActionIcon,
+  actionPending = false,
+  onAction,
+}: {
+  label: string;
+  value: string;
+  actionLabel?: string;
+  actionIcon?: ComponentType<{ className?: string }>;
+  actionPending?: boolean;
+  onAction?: () => void;
+}) {
   return (
-    <div className="mt-3 flex items-start gap-2">
-      <span className="text-xs text-gray-500 shrink-0">{label}:</span>
-      <code className="text-xs text-gray-300 font-mono break-all">{value}</code>
+    <div className="mt-3 flex items-start justify-between gap-3">
+      <div className="min-w-0 flex items-start gap-2">
+        <span className="text-xs text-gray-500 shrink-0">{label}:</span>
+        <code className="text-xs text-gray-300 font-mono break-all">{value}</code>
+      </div>
+      {actionLabel && ActionIcon && onAction && (
+        <button
+          onClick={onAction}
+          disabled={actionPending}
+          className="shrink-0 inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-600 hover:text-white disabled:opacity-60"
+        >
+          <ActionIcon className="w-3 h-3" />
+          {actionPending ? 'Opening…' : actionLabel}
+        </button>
+      )}
     </div>
   );
 }

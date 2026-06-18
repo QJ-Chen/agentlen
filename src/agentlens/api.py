@@ -8,6 +8,9 @@ for compatibility with existing Claude Code collectors and SDK-style integration
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 import uvicorn
@@ -172,6 +175,35 @@ def get_session(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@app.post("/api/v1/sessions/{session_id}/open")
+def open_session_path(session_id: str, target: Literal["project", "session_folder"] = Query(...)):
+    session = storage.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if target == "project":
+        raw_path = session.get("project_path") or ""
+    else:
+        session_file_path = session.get("session_file_path") or ""
+        raw_path = str(Path(session_file_path).parent) if session_file_path else ""
+
+    if not raw_path:
+        raise HTTPException(status_code=400, detail="Requested path is unavailable for this session")
+
+    path = Path(raw_path).expanduser()
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Path does not exist: {path}")
+
+    if shutil.which("open"):
+        subprocess.Popen(["open", str(path)])
+    elif shutil.which("xdg-open"):
+        subprocess.Popen(["xdg-open", str(path)])
+    else:
+        raise HTTPException(status_code=501, detail="Opening paths is not supported on this platform")
+
+    return {"status": "ok", "target": target, "opened_path": str(path)}
 
 
 @app.get("/api/v1/stats")
