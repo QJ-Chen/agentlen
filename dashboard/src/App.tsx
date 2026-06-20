@@ -13,7 +13,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { OverviewStats, ProjectStats, Trace } from './types';
+import type { OverviewStats, ProjectStats, SubagentLog, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
 import { AgentInteractionGraph } from './components/AgentInteractionGraph';
 import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
@@ -57,6 +57,32 @@ interface RawLLMCall {
   cost_usd?: number;
   prompt?: string;
   response?: string;
+}
+
+interface RawSubagentLog {
+  id?: string;
+  agent_id?: string;
+  agent_type?: string;
+  description?: string;
+  tool_use_id?: string;
+  launch_batch_id?: string;
+  launch_timestamp?: string | number;
+  launch_order?: number;
+  launch_prompt_id?: string;
+  session_file_path?: string;
+  start_time?: string | number;
+  end_time?: string | number;
+  duration_ms?: number;
+  status?: string;
+  model?: string;
+  prompt?: string;
+  response?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  tool_calls?: RawToolCall[];
+  llm_calls?: RawLLMCall[];
+  meta?: Record<string, unknown>;
 }
 
 interface RawSessionRecord {
@@ -104,6 +130,10 @@ function normalizeStatus(status: string): Trace['status'] {
   return 'completed';
 }
 
+function normalizeSubagentStatus(status: string): SubagentLog['status'] {
+  return normalizeStatus(status) as SubagentLog['status'];
+}
+
 function toTimestamp(value?: string | number | null): number | undefined {
   if (value === null || value === undefined || value === '') return undefined;
   if (typeof value === 'number') {
@@ -113,7 +143,7 @@ function toTimestamp(value?: string | number | null): number | undefined {
   return Number.isNaN(parsed) ? undefined : parsed;
 }
 
-function buildMergedTools(record: RawSessionRecord, recordStartTime: number) {
+function buildMergedTools(record: RawSessionRecord | RawSubagentLog, recordStartTime: number) {
   const merged = new Map<string, {
     id: string;
     name: string;
@@ -188,12 +218,8 @@ function buildMergedTools(record: RawSessionRecord, recordStartTime: number) {
   return Array.from(merged.values()).sort((a, b) => a.startTime - b.startTime);
 }
 
-function transformSession(record: RawSessionRecord): TraceWithRaw {
-  const recordStartTime = toTimestamp(record.start_time) ?? 0;
-
-  const tools = buildMergedTools(record, recordStartTime);
-
-  const llmCalls = (record.llm_calls || []).map((call, idx) => {
+function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTime: number) {
+  return (record.llm_calls || []).map((call, idx) => {
     const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
     const duration = call.duration_ms || 0;
     const inputTokens = call.input_tokens || 0;
@@ -213,6 +239,54 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
       response: call.response || '',
     } as const;
   });
+}
+
+function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
+  const startTime = toTimestamp(subagent.start_time) ?? 0;
+  const endTime = toTimestamp(subagent.end_time);
+  const duration = subagent.duration_ms || (endTime ? Math.max(0, endTime - startTime) : 0);
+  const toolCalls = buildMergedTools(subagent, startTime);
+  const llmCalls = buildLLMCalls(subagent, startTime);
+  const inputTokens = subagent.input_tokens || 0;
+  const outputTokens = subagent.output_tokens || 0;
+
+  return {
+    id: subagent.id || subagent.agent_id || `subagent-${startTime}`,
+    agentId: subagent.agent_id || subagent.id || 'unknown',
+    agentType: subagent.agent_type || 'unknown',
+    description: subagent.description || '',
+    toolUseId: subagent.tool_use_id || '',
+    launchBatchId: subagent.launch_batch_id || subagent.tool_use_id || '',
+    launchTimestamp: toTimestamp(subagent.launch_timestamp),
+    launchOrder: subagent.launch_order,
+    launchPromptId: subagent.launch_prompt_id || '',
+    sessionFilePath: subagent.session_file_path || '',
+    startTime,
+    endTime,
+    duration,
+    status: normalizeSubagentStatus(subagent.status || (endTime ? 'completed' : 'running')),
+    model: subagent.model || 'unknown',
+    prompt: subagent.prompt || '',
+    response: subagent.response || '',
+    inputTokens,
+    outputTokens,
+    totalTokens: inputTokens + outputTokens,
+    cost: subagent.cost_usd || 0,
+    toolCalls,
+    llmCalls,
+    meta: subagent.meta || {},
+  };
+}
+
+function transformSession(record: RawSessionRecord): TraceWithRaw {
+  const recordStartTime = toTimestamp(record.start_time) ?? 0;
+
+  const tools = buildMergedTools(record, recordStartTime);
+  const llmCalls = buildLLMCalls(record, recordStartTime);
+  const rawSubagentLogs = Array.isArray(record.metadata?.subagent_logs)
+    ? (record.metadata?.subagent_logs as RawSubagentLog[])
+    : [];
+  const subagentLogs = rawSubagentLogs.map(normalizeSubagentLog);
 
   const startTime = recordStartTime || Date.now();
   const endTime = toTimestamp(record.end_time);
@@ -236,6 +310,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
     duration: record.duration_ms || 0,
     tools,
     llmCalls,
+    subagentLogs,
     totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
     cost: record.cost_usd || 0,
     projectPath: record.project_path || '',

@@ -19,6 +19,7 @@ import {
   Sparkles,
   User,
   Wrench,
+  X as XIcon,
 } from 'lucide-react';
 import type { LLMCall, ToolCall, Trace } from '../types';
 import { cleanSessionText, formatDuration, truncateText } from '../lib/sessionUtils';
@@ -27,7 +28,7 @@ interface EnhancedTraceDetailProps {
   trace: Trace;
 }
 
-type TabType = 'overview' | 'llm' | 'taskStatus' | 'raw';
+type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'raw';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
 
 const PLATFORM_CONFIG = {
@@ -76,6 +77,47 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   const allTools = useMemo(() => trace.tools || [], [trace.tools]);
   const allLLMCalls = useMemo(() => trace.llmCalls || [], [trace.llmCalls]);
+  const subagentLogs = useMemo(() => trace.subagentLogs || [], [trace.subagentLogs]);
+
+  const groupedSubagentLogs = useMemo(() => {
+    const groups = new Map<
+      string,
+      {
+        batchId: string;
+        launchTimestamp?: number;
+        subagents: typeof subagentLogs;
+      }
+    >();
+
+    for (const subagent of subagentLogs) {
+      const batchId = subagent.launchBatchId || subagent.toolUseId || subagent.id;
+      const existing = groups.get(batchId);
+      if (existing) {
+        existing.subagents.push(subagent);
+        if (subagent.launchTimestamp && (!existing.launchTimestamp || subagent.launchTimestamp < existing.launchTimestamp)) {
+          existing.launchTimestamp = subagent.launchTimestamp;
+        }
+      } else {
+        groups.set(batchId, {
+          batchId,
+          launchTimestamp: subagent.launchTimestamp,
+          subagents: [subagent],
+        });
+      }
+    }
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        subagents: [...group.subagents].sort((a, b) => {
+          const orderA = a.launchOrder ?? Number.MAX_SAFE_INTEGER;
+          const orderB = b.launchOrder ?? Number.MAX_SAFE_INTEGER;
+          if (orderA !== orderB) return orderA - orderB;
+          return (a.startTime || 0) - (b.startTime || 0);
+        }),
+      }))
+      .sort((a, b) => (a.launchTimestamp || a.subagents[0]?.startTime || 0) - (b.launchTimestamp || b.subagents[0]?.startTime || 0));
+  }, [subagentLogs]);
 
   const groupedLLMCalls = useMemo(() => {
     const groups: { prompt: string; calls: LLMCall[] }[] = [];
@@ -161,6 +203,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
     { id: 'llm', label: `LLM (${groupedLLMCalls.length}组)`, icon: MessageSquare },
+    { id: 'subagents', label: `Subagents (${subagentLogs.length})`, icon: Bot },
     { id: 'taskStatus', label: '任务状态', icon: Layers },
     { id: 'raw', label: '原始', icon: Code },
   ] as const;
@@ -420,6 +463,394 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     </div>
   );
 
+  const renderSubagentCallGroup = (subagentId: string, group: { prompt: string; calls: LLMCall[] }, groupIdx: number) => {
+    const groupKey = `subagent-${subagentId}-group-${groupIdx}`;
+    const isGroupExpanded = expandedLLMs.has(groupKey);
+    const cleanedPrompt = cleanSessionText(group.prompt || '');
+    const promptPreview = cleanedPrompt
+      ? `${cleanedPrompt.replace(/\n/g, ' ').slice(0, 80)}${cleanedPrompt.length > 80 ? '...' : ''}`
+      : '无提示词';
+
+    return (
+      <div
+        key={groupKey}
+        className={`rounded-lg border transition-all ${
+          isGroupExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
+        }`}
+      >
+        <button onClick={() => toggleLLM(groupKey)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
+          <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center">
+            <span className="text-xs text-cyan-400 font-mono">{groupIdx + 1}</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm text-gray-200 truncate">{promptPreview}</div>
+            <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
+              <span>{group.calls.length} 次调用</span>
+              <span>·</span>
+              <span>
+                {group.calls.reduce((sum, call) => sum + call.inputTokens, 0).toLocaleString()} →{' '}
+                {group.calls.reduce((sum, call) => sum + call.outputTokens, 0).toLocaleString()} tokens
+              </span>
+            </div>
+          </div>
+          {isGroupExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+        </button>
+
+        {isGroupExpanded && (
+          <div className="border-t border-slate-700/50">
+            {group.prompt && (
+              <div className="px-4 py-3 bg-slate-900/30 border-b border-slate-700/50">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
+                    <MessageSquare className="w-3 h-3" /> 用户提示词
+                  </span>
+                  <button
+                    onClick={() => copyToClipboard(group.prompt, `${groupKey}-prompt`)}
+                    className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
+                  >
+                    {copiedId === `${groupKey}-prompt` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                    {copiedId === `${groupKey}-prompt` ? '已复制' : '复制'}
+                  </button>
+                </div>
+                <div className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-auto">{cleanedPrompt}</div>
+              </div>
+            )}
+
+            <div className="space-y-2 p-4">
+              {group.calls.map((call, callIdx) => {
+                const callKey = `${groupKey}-call-${callIdx}`;
+                const isCallExpanded = expandedLLMs.has(callKey);
+                const relatedTools = (subagentLogs.find((item) => item.id === subagentId)?.toolCalls || []).filter((tool) => {
+                  if (!tool.startTime) return false;
+                  const callIndex = group.calls.findIndex((candidate) => candidate.id === call.id);
+                  const nextCall = group.calls[callIndex + 1];
+                  const afterThisCall = tool.startTime >= call.startTime;
+                  const beforeNextCall = !nextCall || tool.startTime < nextCall.startTime;
+                  return afterThisCall && beforeNextCall;
+                });
+                const responseStyle = classifyCallResponse(call, relatedTools);
+                const formattedToolResponse =
+                  responseStyle.kind === 'tool'
+                    ? relatedTools.map((tool) => ({
+                        name: tool.name,
+                        input: tool.input,
+                      }))
+                    : null;
+                const toolResultAppendix =
+                  formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
+                    ? relatedTools.map((tool) => ({
+                        name: tool.name,
+                        result: tool.output,
+                        error: tool.error,
+                      }))
+                    : null;
+
+                return (
+                  <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
+                    <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
+                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${responseStyle.badge}`}>
+                        <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`text-[11px] px-1.5 py-0.5 rounded ${responseStyle.badge}`}>{responseStyle.label}</span>
+                          <div className={`text-sm truncate ${responseStyle.accent}`}>
+                            {responseStyle.preview
+                              ? `${responseStyle.preview.replace(/\n/g, ' ').slice(0, 60)}${responseStyle.preview.length > 60 ? '...' : ''}`
+                              : '无响应内容'}
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
+                          <span>{call.model}</span>
+                          <span>·</span>
+                          <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
+                          <span>·</span>
+                          <span>{formatDuration(call.duration)}</span>
+                        </div>
+                      </div>
+                      {isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                    </button>
+
+                    {isCallExpanded && (
+                      <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
+                        {call.response && !formattedToolResponse && (
+                          <JsonOrTextBlock
+                            title={responseStyle.label}
+                            value={
+                              responseStyle.kind === 'thinking'
+                                ? cleanSessionText(call.response).replace(/^\[thinking\]\s*/, '')
+                                : cleanSessionText(call.response)
+                            }
+                            copyId={`${callKey}-response`}
+                            copiedId={copiedId}
+                            onCopy={copyToClipboard}
+                          />
+                        )}
+                        {formattedToolResponse && (
+                          <StructuredResponseBlock
+                            title="工具调用"
+                            color="violet"
+                            icon={Wrench}
+                            value={formattedToolResponse}
+                            copyId={`${callKey}-tool-calls`}
+                            copiedId={copiedId}
+                            onCopy={copyToClipboard}
+                          />
+                        )}
+                        {toolResultAppendix && (
+                          <StructuredResponseBlock
+                            title="工具结果"
+                            color="emerald"
+                            icon={FileText}
+                            value={toolResultAppendix}
+                            copyId={`${callKey}-tool-results`}
+                            copiedId={copiedId}
+                            onCopy={copyToClipboard}
+                          />
+                        )}
+                        {relatedTools.length > 0 && !formattedToolResponse && (
+                          <div>
+                            <div className="text-xs font-medium text-violet-400 mb-2">相关工具调用</div>
+                            <div className="space-y-2">
+                              {relatedTools.map((tool) => (
+                                <div key={`${callKey}-${tool.id}`} className="rounded bg-slate-900/40 border border-slate-800 p-2 text-xs text-gray-300">
+                                  <div className="font-medium text-violet-300">{tool.name}</div>
+                                  {tool.input && <pre className="mt-1 whitespace-pre-wrap text-gray-400">{JSON.stringify(tool.input, null, 2)}</pre>}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderSubagents = () => {
+    if (subagentLogs.length === 0) {
+      return <EmptyState icon={Bot} label="无 Subagent 日志" />;
+    }
+
+    const completedCount = subagentLogs.filter((item) => item.status === 'completed').length;
+    const failedCount = subagentLogs.filter((item) => item.status === 'failed').length;
+    const runningCount = subagentLogs.filter((item) => item.status === 'running').length;
+
+    return (
+      <div className="space-y-4">
+        <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
+          <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
+            <Bot className="w-4 h-4" />
+            Subagent 概览
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            <MetricCard icon={Bot} color="text-cyan-400" value={String(subagentLogs.length)} label="Subagents" />
+            <MetricCard icon={Check} color="text-emerald-400" value={String(completedCount)} label="已完成" />
+            <MetricCard icon={Clock} color="text-amber-400" value={String(runningCount)} label="运行中" />
+            <MetricCard icon={XIcon} color="text-red-400" value={String(failedCount)} label="失败" />
+          </div>
+        </div>
+
+        <div className="space-y-4">
+          {groupedSubagentLogs.map((group, groupIdx) => {
+            const groupKey = `subagent-batch-${group.batchId}`;
+            const isGroupExpanded = expandedLLMs.has(groupKey);
+            const totalInputTokens = group.subagents.reduce((sum, item) => sum + item.inputTokens, 0);
+            const totalOutputTokens = group.subagents.reduce((sum, item) => sum + item.outputTokens, 0);
+            const totalCost = group.subagents.reduce((sum, item) => sum + item.cost, 0);
+            const groupFailedCount = group.subagents.filter((item) => item.status === 'failed').length;
+            const groupRunningCount = group.subagents.filter((item) => item.status === 'running').length;
+            const launchTime = group.launchTimestamp || group.subagents[0]?.startTime || 0;
+
+            return (
+              <div
+                key={group.batchId}
+                className={`overflow-hidden rounded-xl border transition-all ${
+                  isGroupExpanded ? 'border-slate-600 bg-slate-800/55 shadow-sm shadow-slate-950/30' : 'border-slate-700/50 bg-slate-900/35 hover:border-slate-600/70 hover:bg-slate-900/45'
+                }`}
+              >
+                <button onClick={() => toggleLLM(groupKey)} className="w-full px-4 py-3.5 text-left">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-cyan-500/20 bg-cyan-500/10 text-[11px] font-mono text-cyan-300">
+                      {groupIdx + 1}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="truncate text-sm font-medium text-slate-100">Fan-out batch</div>
+                        <span className="rounded-full bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-300">
+                          {group.subagents.length} subagents
+                        </span>
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+                        <span>{formatTime(launchTime)}</span>
+                        <span>·</span>
+                        <span>{totalInputTokens.toLocaleString()} → {totalOutputTokens.toLocaleString()} tokens</span>
+                        <span>·</span>
+                        <span>${totalCost.toFixed(4)}</span>
+                        {groupRunningCount > 0 && (
+                          <>
+                            <span>·</span>
+                            <span className="text-amber-300">{groupRunningCount} running</span>
+                          </>
+                        )}
+                        {groupFailedCount > 0 && (
+                          <>
+                            <span>·</span>
+                            <span className="text-red-300">{groupFailedCount} failed</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-400">
+                      {isGroupExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                    </div>
+                  </div>
+                </button>
+
+                {isGroupExpanded && (
+                  <div className="border-t border-slate-700/50 px-3 py-3 space-y-2.5 bg-slate-950/10">
+                    {group.subagents.map((subagent, subagentIdx) => {
+                      const subagentKey = `${groupKey}-subagent-${subagent.id}`;
+                      const isSubagentExpanded = expandedLLMs.has(subagentKey);
+                      const groupedCalls = (() => {
+                        const groups: { prompt: string; calls: LLMCall[] }[] = [];
+                        let current: { prompt: string; calls: LLMCall[] } | null = null;
+                        for (const call of subagent.llmCalls) {
+                          if (!current || current.prompt !== call.prompt) {
+                            current = { prompt: call.prompt || '', calls: [] };
+                            groups.push(current);
+                          }
+                          current.calls.push(call);
+                        }
+                        return groups;
+                      })();
+                      const cleanedPrompt = cleanSessionText(subagent.prompt || '');
+                      const responseStyle = classifyCallResponse(
+                        subagent.llmCalls[subagent.llmCalls.length - 1] || {
+                          id: `${subagent.id}-fallback`,
+                          model: subagent.model || 'unknown',
+                          startTime: subagent.startTime,
+                          endTime: subagent.endTime || subagent.startTime,
+                          duration: subagent.duration,
+                          inputTokens: subagent.inputTokens,
+                          outputTokens: subagent.outputTokens,
+                          totalTokens: subagent.totalTokens,
+                          cost: subagent.cost,
+                          status: subagent.response ? 'success' : 'streaming',
+                          prompt: subagent.prompt || '',
+                          response: subagent.response || '',
+                        },
+                        subagent.toolCalls,
+                      );
+                      const statusTone = statusBadgeTone(subagent.status);
+
+                      return (
+                        <div key={subagent.id} className={`overflow-hidden rounded-xl border transition-all ${isSubagentExpanded ? 'border-slate-600 bg-slate-800/65 shadow-sm shadow-slate-950/20' : 'border-slate-700/50 bg-slate-900/30 hover:border-slate-600/70 hover:bg-slate-900/40'}`}>
+                          <button onClick={() => toggleLLM(subagentKey)} className="w-full px-3.5 py-3 text-left">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10 text-[10px] font-mono text-violet-300">
+                                {subagentIdx + 1}
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${responseStyle.badge}`}>{responseStyle.label}</span>
+                                  <div className="min-w-0 truncate text-sm font-medium text-slate-100">{subagent.description || subagent.agentType || subagent.agentId}</div>
+                                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusTone}`}>{statusLabel(subagent.status)}</span>
+                                </div>
+                                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400">
+                                  <span>{subagent.agentType || 'unknown'}</span>
+                                  <span>·</span>
+                                  <span>{subagent.model || 'unknown'}</span>
+                                  <span>·</span>
+                                  <span>{subagent.inputTokens.toLocaleString()} → {subagent.outputTokens.toLocaleString()} tokens</span>
+                                  <span>·</span>
+                                  <span>{formatDuration(subagent.duration)}</span>
+                                  <span>·</span>
+                                  <span>{subagent.toolCalls.length} tools</span>
+                                  <span>·</span>
+                                  <span>{subagent.llmCalls.length} LLM</span>
+                                </div>
+                              </div>
+                              <div className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-400">
+                                {isSubagentExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                              </div>
+                            </div>
+                          </button>
+
+                          {isSubagentExpanded && (
+                            <div className="border-t border-slate-700/50 px-3.5 pb-3 pt-3 space-y-4 bg-slate-950/10">
+                              {cleanedPrompt && (
+                                <PreviewBlock icon={User} label="用户输入" content={truncateText(cleanedPrompt, 800)} />
+                              )}
+                              {groupedCalls.length > 0 ? (
+                                <div className="space-y-3">
+                                  {groupedCalls.map((groupedCall, callGroupIdx) =>
+                                    renderSubagentCallGroup(subagent.id, groupedCall, callGroupIdx),
+                                  )}
+                                </div>
+                              ) : subagent.response ? (
+                                <JsonOrTextBlock
+                                  title={responseStyle.label}
+                                  value={cleanSessionText(subagent.response)}
+                                  copyId={`subagent-response-${subagent.id}`}
+                                  copiedId={copiedId}
+                                  onCopy={copyToClipboard}
+                                />
+                              ) : null}
+                              {subagent.toolCalls.length > 0 && (
+                                <StructuredResponseBlock
+                                  title="全部工具调用"
+                                  color="violet"
+                                  icon={Wrench}
+                                  value={subagent.toolCalls.map((tool) => ({
+                                    name: tool.name,
+                                    input: tool.input,
+                                    output: tool.output,
+                                    error: tool.error,
+                                  }))}
+                                  copyId={`subagent-tools-${subagent.id}`}
+                                  copiedId={copiedId}
+                                  onCopy={copyToClipboard}
+                                />
+                              )}
+                              {((subagent.sessionFilePath && subagent.sessionFilePath.length > 0) || (subagent.toolUseId && subagent.toolUseId.length > 0)) && (
+                                <div className="rounded-lg border border-slate-700/50 bg-slate-900/40 p-3 space-y-2">
+                                  {subagent.sessionFilePath && <PathField label="Subagent 文件" value={subagent.sessionFilePath} />}
+                                  {subagent.toolUseId && (
+                                    <div className="text-[11px] text-slate-500 font-mono">toolUseId: {subagent.toolUseId}</div>
+                                  )}
+                                </div>
+                              )}
+                              <StructuredResponseBlock
+                                title="Subagent 元数据"
+                                color="emerald"
+                                icon={FileText}
+                                value={subagent.meta || {}}
+                                copyId={`subagent-meta-${subagent.id}`}
+                                copiedId={copiedId}
+                                onCopy={copyToClipboard}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderTaskStatus = () => {
     const taskSummary = typedTrace.metadata?.task_summary as
       | {
@@ -519,6 +950,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       <div className="p-4">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'llm' && renderLLM()}
+        {activeTab === 'subagents' && renderSubagents()}
         {activeTab === 'taskStatus' && renderTaskStatus()}
         {activeTab === 'raw' && renderRaw()}
       </div>
@@ -538,6 +970,21 @@ function statusLabel(status: Trace['status']): string {
       return '已取消';
     default:
       return status;
+  }
+}
+
+function statusBadgeTone(status: Trace['status']): string {
+  switch (status) {
+    case 'completed':
+      return 'bg-emerald-500/15 text-emerald-300';
+    case 'failed':
+      return 'bg-red-500/15 text-red-300';
+    case 'running':
+      return 'bg-amber-500/15 text-amber-300';
+    case 'cancelled':
+      return 'bg-slate-500/15 text-slate-300';
+    default:
+      return 'bg-slate-500/15 text-slate-300';
   }
 }
 

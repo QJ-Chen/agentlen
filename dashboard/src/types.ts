@@ -27,6 +27,33 @@ export interface LLMCall {
   response?: string;
 }
 
+export interface SubagentLog {
+  id: string;
+  agentId: string;
+  agentType: string;
+  description?: string;
+  toolUseId?: string;
+  launchBatchId?: string;
+  launchTimestamp?: number;
+  launchOrder?: number;
+  launchPromptId?: string;
+  sessionFilePath?: string;
+  startTime: number;
+  endTime?: number;
+  duration: number;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  model?: string;
+  prompt?: string;
+  response?: string;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+  toolCalls: ToolCall[];
+  llmCalls: LLMCall[];
+  meta?: Record<string, unknown>;
+}
+
 export interface Trace {
   id: string;
   sessionId: string;
@@ -40,6 +67,7 @@ export interface Trace {
   duration?: number;
   tools: ToolCall[];
   llmCalls: LLMCall[];
+  subagentLogs?: SubagentLog[];
   totalTokens: number;
   cost: number;
   projectPath?: string;

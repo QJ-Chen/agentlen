@@ -13,9 +13,10 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from collections import Counter
 
 CLAUDE_TASKS_DIR = Path.home() / ".claude" / "tasks"
 
@@ -31,6 +32,34 @@ def calc_cost(platform: str, input_tokens: int, output_tokens: int) -> float:
     return (input_tokens / 1_000_000) * CLAUDE_CODE_PRICING["input_per_1m"] + (
         output_tokens / 1_000_000
     ) * CLAUDE_CODE_PRICING["output_per_1m"]
+
+
+def parse_iso_timestamp(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def duration_ms_from_times(start_time: Any, end_time: Any) -> int:
+    start = parse_iso_timestamp(start_time)
+    end = parse_iso_timestamp(end_time)
+    if not start or not end:
+        return 0
+    return max(0, int((end - start).total_seconds() * 1000))
+
+
+def normalize_subagent_status(status: Any, has_end_time: bool) -> str:
+    value = str(status or "").strip().lower()
+    if value in {"completed", "success", "ok"}:
+        return "completed"
+    if value in {"failed", "error", "timeout"}:
+        return "failed"
+    if value in {"cancelled", "canceled"}:
+        return "cancelled"
+    return "completed" if has_end_time else "running"
 
 
 def summarize_task_tools(session_id: str, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -350,7 +379,16 @@ class LogCollector(ABC):
         pass
 
     def finalize_state(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
-        return state["aggregator"].get_traces()
+        traces = state["aggregator"].get_traces()
+        source_path = state.get("source_log_path")
+        if not source_path:
+            return traces
+        if self._is_subagent_log(source_path):
+            parent_log_path = source_path.parent.parent.with_suffix(".jsonl")
+            if parent_log_path.exists():
+                return self.parse_session_file(parent_log_path)
+            return traces
+        return self._inject_subagent_metadata(traces, source_path)
 
     def _consume_file(self, log_path: Path, state: Dict[str, Any], start_offset: int = 0) -> None:
         with open(log_path, "r", encoding="utf-8") as handle:
@@ -493,6 +531,175 @@ class ClaudeCodeCollector(LogCollector):
     def get_name(self) -> str:
         return CLAUDE_CODE_PLATFORM
 
+    def _is_subagent_log(self, log_path: Path) -> bool:
+        return log_path.parent.name == "subagents"
+
+    def _parent_session_id_for_log(self, log_path: Path) -> str:
+        if self._is_subagent_log(log_path):
+            return log_path.parent.parent.name
+        return log_path.stem
+
+    def _encoded_project_dir_for_log(self, log_path: Path) -> Optional[Path]:
+        if self._is_subagent_log(log_path):
+            project_dir = log_path.parent.parent.parent
+        else:
+            project_dir = log_path.parent
+        return project_dir if project_dir.is_dir() else None
+
+    def _subagent_dir_for_log(self, log_path: Path) -> Optional[Path]:
+        if self._is_subagent_log(log_path):
+            return log_path.parent
+        session_dir = log_path.with_suffix("")
+        subagent_dir = session_dir / "subagents"
+        if subagent_dir.exists() and subagent_dir.is_dir():
+            return subagent_dir
+        return None
+
+    def _subagent_meta_path(self, log_path: Path) -> Path:
+        return log_path.with_suffix("").with_suffix(".meta.json")
+
+    def _parse_log_traces(self, log_path: Path) -> List[Dict[str, Any]]:
+        state = self.create_incremental_state(log_path)
+        self._consume_file(log_path, state)
+        return state["aggregator"].get_traces()
+
+    def _collect_subagent_launch_metadata(self, parent_log_path: Path) -> Dict[str, Dict[str, Any]]:
+        launches: Dict[str, Dict[str, Any]] = {}
+        launch_orders: Dict[str, int] = {}
+
+        try:
+            with open(parent_log_path, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    try:
+                        data = json.loads(line.strip())
+                    except json.JSONDecodeError:
+                        continue
+
+                    if data.get("type") != "assistant":
+                        continue
+
+                    message = data.get("message") or {}
+                    if not isinstance(message, dict):
+                        continue
+
+                    content = message.get("content") or []
+                    if not isinstance(content, list):
+                        continue
+
+                    batch_id = str(message.get("id") or "")
+                    launch_prompt_id = str(data.get("promptId") or "")
+                    launch_timestamp = data.get("timestamp")
+                    launch_order = launch_orders.get(batch_id, 0)
+
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        if item.get("type") != "tool_use" or item.get("name") != "Agent":
+                            continue
+
+                        tool_use_id = str(item.get("id") or "")
+                        if not tool_use_id:
+                            continue
+
+                        launches[tool_use_id] = {
+                            "launch_batch_id": batch_id or tool_use_id,
+                            "launch_timestamp": launch_timestamp,
+                            "launch_order": launch_order,
+                            "launch_prompt_id": launch_prompt_id,
+                        }
+                        launch_order += 1
+
+                    if batch_id:
+                        launch_orders[batch_id] = launch_order
+        except OSError:
+            return {}
+
+        return launches
+
+    def _build_subagent_summary(
+        self,
+        parent_session_id: str,
+        log_path: Path,
+        launch_lookup: Dict[str, Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        traces = self._parse_log_traces(log_path)
+        if not traces:
+            return None
+
+        trace = traces[0]
+        meta_path = self._subagent_meta_path(log_path)
+        meta: Dict[str, Any] = {}
+        if meta_path.exists():
+            try:
+                payload = json.loads(meta_path.read_text())
+                if isinstance(payload, dict):
+                    meta = payload
+            except Exception:
+                meta = {}
+
+        end_time = trace.get("end_time")
+        status = normalize_subagent_status(trace.get("status"), bool(end_time))
+        start_time = trace.get("start_time")
+        tool_use_id = str(meta.get("toolUseId") or "")
+        launch_meta = launch_lookup.get(tool_use_id, {})
+        return {
+            "id": log_path.stem,
+            "agent_id": log_path.stem.replace("agent-", "", 1),
+            "parent_session_id": parent_session_id,
+            "agent_type": meta.get("agentType") or "unknown",
+            "description": meta.get("description") or "",
+            "tool_use_id": tool_use_id,
+            "launch_batch_id": launch_meta.get("launch_batch_id") or tool_use_id,
+            "launch_timestamp": launch_meta.get("launch_timestamp"),
+            "launch_order": launch_meta.get("launch_order"),
+            "launch_prompt_id": launch_meta.get("launch_prompt_id") or "",
+            "session_file_path": str(log_path),
+            "start_time": start_time,
+            "end_time": end_time,
+            "duration_ms": duration_ms_from_times(start_time, end_time),
+            "status": status,
+            "model": trace.get("model") or "unknown",
+            "prompt": trace.get("prompt") or "",
+            "response": trace.get("response") or "",
+            "input_tokens": int(trace.get("input_tokens") or 0),
+            "output_tokens": int(trace.get("output_tokens") or 0),
+            "cost_usd": float(trace.get("cost_usd") or 0.0),
+            "tool_calls": trace.get("tool_calls") or [],
+            "llm_calls": trace.get("llm_calls") or [],
+            "meta": meta,
+        }
+
+    def _collect_subagent_summaries(self, parent_log_path: Path) -> List[Dict[str, Any]]:
+        parent_session_id = parent_log_path.stem
+        subagent_dir = self._subagent_dir_for_log(parent_log_path)
+        if not subagent_dir:
+            return []
+
+        launch_lookup = self._collect_subagent_launch_metadata(parent_log_path)
+        summaries = []
+        for subagent_log in sorted(subagent_dir.glob("agent-*.jsonl")):
+            summary = self._build_subagent_summary(parent_session_id, subagent_log, launch_lookup)
+            if summary:
+                summaries.append(summary)
+        return summaries
+
+    def _inject_subagent_metadata(self, traces: List[Dict[str, Any]], parent_log_path: Path) -> List[Dict[str, Any]]:
+        if self._is_subagent_log(parent_log_path):
+            return traces
+
+        subagent_logs = self._collect_subagent_summaries(parent_log_path)
+        if not subagent_logs:
+            return traces
+
+        updated_traces = []
+        for trace in traces:
+            metadata = dict(trace.get("metadata") or {})
+            metadata["subagent_logs"] = subagent_logs
+            trace_with_subagents = dict(trace)
+            trace_with_subagents["metadata"] = metadata
+            updated_traces.append(trace_with_subagents)
+        return updated_traces
+
     def get_log_paths(self) -> List[Path]:
         base_path = Path.home() / ".claude" / "projects"
         paths: List[Path] = []
@@ -501,6 +708,8 @@ class ClaudeCodeCollector(LogCollector):
                 if project_dir.is_dir():
                     for session_file in project_dir.glob("*.jsonl"):
                         paths.append(session_file)
+                    for subagent_log in project_dir.glob("*/subagents/agent-*.jsonl"):
+                        paths.append(subagent_log)
         return paths
 
     def _decode_path(self, encoded_name: str) -> str:
@@ -510,20 +719,28 @@ class ClaudeCodeCollector(LogCollector):
         return decoded
 
     def create_incremental_state(self, log_path: Path) -> Dict[str, Any]:
-        session_id = log_path.stem
+        session_id = self._parent_session_id_for_log(log_path)
         aggregator = SessionAggregator()
-        aggregator.set_session_file_path(session_id, str(log_path))
+        session_file_path = log_path
+        if self._is_subagent_log(log_path):
+            session_file_path = log_path.parent.parent.with_suffix(".jsonl")
+        aggregator.set_session_file_path(session_id, str(session_file_path))
         project_path = ""
-        try:
-            project_path = self._decode_path(log_path.parent.name)
-        except Exception:
-            project_path = ""
+        project_group = ""
+        project_dir = self._encoded_project_dir_for_log(log_path)
+        if project_dir is not None:
+            project_group = project_dir.name
+            try:
+                project_path = self._decode_path(project_dir.name)
+            except Exception:
+                project_path = ""
         return {
             "session_id": session_id,
             "project_path": project_path,
-            "project_group": log_path.parent.name,
+            "project_group": project_group,
             "pending_command": {},
             "aggregator": aggregator,
+            "source_log_path": log_path,
         }
 
     def process_line(self, state: Dict[str, Any], line: str) -> None:
