@@ -1,0 +1,23 @@
+# TODOLIST
+
+- [ ] Custom session listing windows in frontend
+- [ ] Auto-load dashboard data on first render and make live refresh actually refetch server data
+- [ ] Remove the silent 200-session frontend ceiling and align inbox data with overview totals
+- [ ] Centralize frontend API fetching with env-based config and partial-failure handling
+- [ ] Auto-select the first visible session after filter/search changes to avoid blank detail panes
+- [ ] Extract frontend session normalization and API types out of `App.tsx`
+- [ ] Tighten session detail readability and provenance/cost surfacing in `EnhancedTraceDetail.tsx`
+- [ ] Strengthen recent-activity freshness cues and reduce unnecessary 1-second recomputation
+- [ ] Move session aggregation/querying out of Python-side collapse logic and remove silent backend caps
+- [ ] Harden SQLite for concurrent watcher writes and API reads
+- [ ] Fix cost accounting to preserve cache-token usage and actual session totals
+- [ ] Preserve richer session provenance for replay and long-session inspection
+- [ ] Populate real session status and error state instead of hardcoding success
+- [ ] Centralize ingestion lifecycle to avoid drift between API, scanner, and realtime modes
+- [ ] Expose ingest health, lag, parse quality, and last-error observability
+- [ ] Fix install/run entrypoints so the packaged app matches the docs and working CLI surface
+- [ ] Resolve the API-vs-scanner watcher workflow contradiction in docs and runtime guidance
+- [ ] Add a real non-destructive verification path with fixture-based ingestion/API smoke tests
+- [ ] Quarantine or demote legacy docs/scripts that compete with the current product story
+- [ ] Add explicit prerequisites and configurable frontend backend URL setup docs
+- [ ] Clarify which scripts and entrypoints are canonical versus compatibility utilities

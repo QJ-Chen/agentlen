@@ -43,7 +43,7 @@ React dashboard for inbox / inspector / analytics
   - canonical ingestion pipeline
   - historical backfill + polling watch mode
   - Claude Code log parsing
-  - session aggregation of tool calls, LLM calls, token counts, and provenance
+  - session aggregation of tool calls, LLM calls, token counts, provenance, and task summaries
 - `src/agentlens/storage.py`
   - canonical SQLite persistence
   - keeps a backward-compatible `traces` table even though the product is session-centric
@@ -55,6 +55,9 @@ React dashboard for inbox / inspector / analytics
 - `session_scanner.py`
   - standalone CLI wrapper around `CollectorManager`
   - use for one-shot backfills or a dedicated local watch process outside the API server
+- `src/agentlens/realtime.py`
+  - thin background wrapper around the same collector pipeline
+  - secondary helper, not the main product entrypoint
 
 ### Frontend
 - `dashboard/src/main.tsx`
@@ -62,7 +65,7 @@ React dashboard for inbox / inspector / analytics
   - mounts `App.tsx`
 - `dashboard/src/App.tsx`
   - current dashboard shell
-  - fetches API data, normalizes records for the UI, and drives sessions / analytics / activity views
+  - fetches API data, normalizes session records for the UI, and drives sessions / analytics / activity views
 - `dashboard/src/components/EnhancedTraceDetail.tsx`
   - session inspector
 - `dashboard/src/components/RealtimeStatusPanel.tsx`
@@ -73,34 +76,32 @@ React dashboard for inbox / inspector / analytics
 ## Important architecture distinctions
 
 ### 1. The product is session-centric, but storage is still trace-shaped
-The current backend stores data in a backward-compatible `traces` table with JSON columns such as `tool_calls` and `llm_calls`. The UI and higher-level API treat those rows as **session records**. When refactoring, preserve both:
+The backend stores data in a backward-compatible `traces` table with JSON columns such as `tool_calls` and `llm_calls`. The UI and higher-level API treat those rows as **session records**. Preserve both:
 - session-centric UX and queries
 - compatibility for existing trace ingestion paths
 
 ### 2. API startup already runs ingestion watchers
-`src/agentlens/api.py` does a historical backfill and then starts collector watch mode on boot. Do not add a second parallel watcher unless you intentionally want duplicate work.
+`src/agentlens/api.py` does a historical backfill and then starts collector watch mode on boot. `session_scanner.py --watch` and `src/agentlens/realtime.py` use the same underlying collector flow. Do not add a second parallel watcher unless duplicate work is intentional.
 
 ### 3. The active dashboard is `App.tsx`, not every dashboard-looking file
-`dashboard/src/main.tsx` mounts `App.tsx`. If you find alternate dashboard files, verify whether they are actually wired into the app before changing product behavior around them.
+`dashboard/src/main.tsx` mounts `App.tsx`. If you find alternate UI ideas or older dashboard code, verify they are actually wired into `main.tsx` before changing product behavior around them.
 
 ### 4. The frontend assumes the backend is on port 8080
 `dashboard/src/App.tsx` hardcodes `API_URL = 'http://localhost:8080'`. Backend port changes require matching frontend changes.
+
+### 5. `src/agentlens/cli.py` is not the main app workflow
+The Poetry console script points at `agentlens.cli:main`, but that file is a small Rich terminal monitor that reads from a running API. It is secondary to the main backend + dashboard flow and should not drive product architecture decisions.
 
 ## Supported source
 
 The canonical ingestion path is local Claude Code session-log parsing from:
 - `~/.claude/projects/.../*.jsonl`
 
-There is also a secondary pushed-trace path through `POST /api/v1/traces` and `POST /api/v1/traces/batch`. Keep those compatibility endpoints working when changing backend models.
+There is also a secondary pushed-trace path through:
+- `POST /api/v1/traces`
+- `POST /api/v1/traces/batch`
 
-## Experimental / non-core areas
-
-Treat these as secondary unless the task explicitly targets them:
-- `src/agentlens/adapters/`
-- `configs/*.yaml`
-- simulation/demo scripts or files under `tests/` that are not normal pytest coverage
-
-Do not let these modules drive repository-wide product wording or architectural decisions unless they are being actively integrated into the main ingestion + API + dashboard flow.
+Keep those compatibility endpoints working when changing backend models, but treat local Claude Code log parsing as the primary product path.
 
 ## Common commands
 
@@ -148,12 +149,24 @@ npm run build
 npm run preview
 ```
 
+## Reference docs worth reading first
+
+- `README.md`
+  - current product framing and quick-start flow
+- `docs/architecture.md`
+  - session-centric architecture and product-boundary rationale
+- `docs/session-log-formats.md`
+  - concrete Claude Code log examples and extraction targets
+- `docs/PLATFORM_LOGS.md`
+  - source-log notes and platform-specific context
+
 ## Refactor guardrails
 
 Preserve these behaviors during backend or UI changes:
 - real parser support for Claude Code logs
 - provenance fields such as `session_file_path` and `project_path`
 - fidelity of tool-call and LLM-call detail
+- task-summary extraction from session tool activity
 - compatibility for `POST /api/v1/traces` ingestion
 - local-first operation without requiring external services
 
@@ -161,4 +174,4 @@ Prefer simplifying:
 - duplicate or stale dashboard variants
 - overlapping ingestion entrypoints when one canonical path is enough
 - product language that implies remote control instead of local session inspection
-- experimental orchestration code leaking into the main product story
+- secondary monitor/CLI surfaces trying to become the main product story
