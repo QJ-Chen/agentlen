@@ -57,6 +57,7 @@ interface RawLLMCall {
   cost_usd?: number;
   prompt?: string;
   response?: string;
+  prompt_id?: string;
 }
 
 interface RawSubagentLog {
@@ -69,6 +70,7 @@ interface RawSubagentLog {
   launch_timestamp?: string | number;
   launch_order?: number;
   launch_prompt_id?: string;
+  launch_user_prompt?: string;
   session_file_path?: string;
   start_time?: string | number;
   end_time?: string | number;
@@ -237,6 +239,7 @@ function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTim
       status: call.response ? 'success' : 'streaming',
       prompt: call.prompt || '',
       response: call.response || '',
+      promptId: call.prompt_id || '',
     } as const;
   });
 }
@@ -260,6 +263,7 @@ function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
     launchTimestamp: toTimestamp(subagent.launch_timestamp),
     launchOrder: subagent.launch_order,
     launchPromptId: subagent.launch_prompt_id || '',
+    launchUserPrompt: subagent.launch_user_prompt || '',
     sessionFilePath: subagent.session_file_path || '',
     startTime,
     endTime,

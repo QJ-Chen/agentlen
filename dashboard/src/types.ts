@@ -25,6 +25,7 @@ export interface LLMCall {
   status: 'success' | 'error' | 'streaming';
   prompt?: string;
   response?: string;
+  promptId?: string;
 }
 
 export interface SubagentLog {
@@ -37,6 +38,7 @@ export interface SubagentLog {
   launchTimestamp?: number;
   launchOrder?: number;
   launchPromptId?: string;
+  launchUserPrompt?: string;
   sessionFilePath?: string;
   startTime: number;
   endTime?: number;

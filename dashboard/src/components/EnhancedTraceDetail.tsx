@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
 import {
   Activity,
@@ -42,6 +42,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [openingTarget, setOpeningTarget] = useState<'project' | 'session_folder' | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
+  const [pendingLaunchPromptId, setPendingLaunchPromptId] = useState<string | null>(null);
+  const llmGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const formatTime = (timestamp: number) =>
     new Date(timestamp).toLocaleTimeString('zh-CN', {
@@ -120,12 +122,19 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   }, [subagentLogs]);
 
   const groupedLLMCalls = useMemo(() => {
-    const groups: { prompt: string; calls: LLMCall[] }[] = [];
-    let currentGroup: { prompt: string; calls: LLMCall[] } | null = null;
+    const groups: { key: string; prompt: string; promptId?: string; calls: LLMCall[] }[] = [];
+    let currentGroup: { key: string; prompt: string; promptId?: string; calls: LLMCall[] } | null = null;
 
-    for (const call of allLLMCalls) {
-      if (!currentGroup || currentGroup.prompt !== call.prompt) {
-        currentGroup = { prompt: call.prompt || '', calls: [] };
+    for (let index = 0; index < allLLMCalls.length; index += 1) {
+      const call = allLLMCalls[index];
+      const promptId = call.promptId || '';
+      const groupKey = promptId || `group-${index}`;
+      if (
+        !currentGroup ||
+        (promptId && currentGroup.promptId !== promptId) ||
+        (!promptId && currentGroup.prompt !== (call.prompt || ''))
+      ) {
+        currentGroup = { key: groupKey, prompt: call.prompt || '', promptId, calls: [] };
         groups.push(currentGroup);
       }
       currentGroup.calls.push(call);
@@ -198,6 +207,29 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     if (newSet.has(key)) newSet.delete(key);
     else newSet.add(key);
     setExpandedLLMs(newSet);
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'llm' || !pendingLaunchPromptId) {
+      return;
+    }
+    const target = llmGroupRefs.current[pendingLaunchPromptId];
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setPendingLaunchPromptId(null);
+  }, [activeTab, pendingLaunchPromptId, groupedLLMCalls]);
+
+  const jumpToLaunchPrompt = (promptId?: string) => {
+    if (!promptId) return;
+    setExpandedLLMs((current) => {
+      const next = new Set(current);
+      next.add(promptId);
+      return next;
+    });
+    setPendingLaunchPromptId(promptId);
+    setActiveTab('llm');
   };
 
   const tabs = [
@@ -299,7 +331,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
         <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />
       ) : (
         groupedLLMCalls.map((group, groupIdx) => {
-          const groupKey = `group-${groupIdx}`;
+          const groupKey = group.key;
           const isGroupExpanded = expandedLLMs.has(groupKey);
           const cleanedPrompt = cleanSessionText(group.prompt || '');
           const promptPreview = cleanedPrompt
@@ -309,6 +341,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
           return (
             <div
               key={groupKey}
+              ref={(node) => {
+                llmGroupRefs.current[groupKey] = node;
+              }}
               className={`rounded-lg border transition-all ${
                 isGroupExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
               }`}
@@ -682,7 +717,18 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="truncate text-sm font-medium text-slate-100">Fan-out batch</div>
+                        <div className="truncate text-sm font-medium text-slate-100">
+                          {(() => {
+                            const launchPrompt = cleanSessionText(group.subagents[0]?.launchUserPrompt || '').replace(/\n/g, ' ').trim();
+                            if (launchPrompt) {
+                              return `${launchPrompt.slice(0, 96)}${launchPrompt.length > 96 ? '...' : ''}`;
+                            }
+                            if (group.subagents.length === 1) {
+                              return group.subagents[0]?.description || group.subagents[0]?.agentType || 'Subagent';
+                            }
+                            return `${group.subagents.length} subagents launched together`;
+                          })()}
+                        </div>
                         <span className="rounded-full bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-300">
                           {group.subagents.length} subagents
                         </span>
@@ -707,6 +753,17 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                         )}
                       </div>
                     </div>
+                    {group.subagents[0]?.launchPromptId && (
+                      <button
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          jumpToLaunchPrompt(group.subagents[0]?.launchPromptId);
+                        }}
+                        className="shrink-0 rounded-lg border border-slate-700/80 bg-slate-900/70 px-2.5 py-1 text-[11px] text-slate-300 hover:border-slate-600 hover:text-white"
+                      >
+                        Go to prompt
+                      </button>
+                    )}
                     <div className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-400">
                       {isGroupExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                     </div>

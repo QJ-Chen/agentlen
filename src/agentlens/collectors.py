@@ -62,6 +62,21 @@ def normalize_subagent_status(status: Any, has_end_time: bool) -> str:
     return "completed" if has_end_time else "running"
 
 
+def extract_user_prompt_text(content: Any) -> Optional[str]:
+    if isinstance(content, str):
+        text = content.strip()
+        return text or None
+    if isinstance(content, list):
+        text_parts = [
+            item.get("text", "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+        ]
+        prompt = "\n".join(text_parts).strip()
+        return prompt or None
+    return None
+
+
 def summarize_task_tools(session_id: str, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
     task_dir = CLAUDE_TASKS_DIR / session_id
     summary = {
@@ -291,6 +306,7 @@ class SessionAggregator:
                         if isinstance(message.get("response"), str)
                         else None
                     ),
+                    "prompt_id": message.get("prompt_id") or message.get("promptId"),
                 }
             )
             if len(session["llm_calls"]) > 500:
@@ -566,6 +582,7 @@ class ClaudeCodeCollector(LogCollector):
     def _collect_subagent_launch_metadata(self, parent_log_path: Path) -> Dict[str, Dict[str, Any]]:
         launches: Dict[str, Dict[str, Any]] = {}
         launch_orders: Dict[str, int] = {}
+        latest_user_prompt: Optional[str] = None
 
         try:
             with open(parent_log_path, "r", encoding="utf-8") as handle:
@@ -575,11 +592,18 @@ class ClaudeCodeCollector(LogCollector):
                     except json.JSONDecodeError:
                         continue
 
-                    if data.get("type") != "assistant":
-                        continue
-
+                    record_type = data.get("type")
                     message = data.get("message") or {}
                     if not isinstance(message, dict):
+                        continue
+
+                    if record_type == "user" and message.get("role") == "user":
+                        extracted_prompt = extract_user_prompt_text(message.get("content"))
+                        if extracted_prompt:
+                            latest_user_prompt = extracted_prompt
+                        continue
+
+                    if record_type != "assistant":
                         continue
 
                     content = message.get("content") or []
@@ -606,6 +630,7 @@ class ClaudeCodeCollector(LogCollector):
                             "launch_timestamp": launch_timestamp,
                             "launch_order": launch_order,
                             "launch_prompt_id": launch_prompt_id,
+                            "launch_user_prompt": latest_user_prompt or "",
                         }
                         launch_order += 1
 
@@ -653,6 +678,7 @@ class ClaudeCodeCollector(LogCollector):
             "launch_timestamp": launch_meta.get("launch_timestamp"),
             "launch_order": launch_meta.get("launch_order"),
             "launch_prompt_id": launch_meta.get("launch_prompt_id") or "",
+            "launch_user_prompt": launch_meta.get("launch_user_prompt") or "",
             "session_file_path": str(log_path),
             "start_time": start_time,
             "end_time": end_time,
@@ -887,6 +913,7 @@ class ClaudeCodeCollector(LogCollector):
             "project_path": cwd or state["project_path"],
             "major_cwd": cwd or state["project_path"],
             "project_group": state["project_group"],
+            "prompt_id": data.get("promptId") or message.get("prompt_id") or message.get("promptId"),
         }
         state["aggregator"].add_message(state["session_id"], msg_data)
 
