@@ -62,7 +62,8 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
 
 export function shortProjectPath(path?: string | null): string | null {
   if (!path) return null;
-  const segments = path.split('/').filter(Boolean);
+  const separator = path.includes('\\') ? '\\' : '/';
+  const segments = path.split(/[/\\]+/).filter(Boolean);
   if (segments.length <= 2) return path;
-  return segments.slice(-2).join('/');
+  return segments.slice(-2).join(separator);
 }

@@ -14,11 +14,11 @@
 
 ### 日志位置
 
-```
+```text
 ~/.claude/projects/{encoded_path}/{session_id}.jsonl
 ```
 
-其中 `{encoded_path}` 是工作目录的编码形式（`/` 替换为 `-`）。
+其中 `{encoded_path}` 是工作目录的编码形式。当前常见的 Claude Code 目录编码会将路径分段连接为 `-` 分隔的目录名；对于 Unix 风格路径，效果通常接近“把 `/` 变成 `-`”。在 Windows 上也可能出现驱动器号与路径段被编码进目录名的情况，因此 AgentLens 会优先使用日志里的 `cwd`，仅在缺失时再做回退解码。
 
 ### 日志结构
 
@@ -61,11 +61,21 @@
 
 ```python
 def _decode_path(encoded_name: str) -> str:
-    decoded = encoded_name.replace("-", "/")
-    if decoded.startswith("/"):
-        decoded = decoded[1:]
-    return decoded
+    parts = [part for part in encoded_name.split("-") if part]
+    if not parts:
+        return ""
+
+    drive_match = re.fullmatch(r"([A-Za-z]):?", parts[0])
+    if drive_match:
+        drive = drive_match.group(1).upper()
+        return str(PureWindowsPath(f"{drive}:/", *parts[1:]))
+
+    if os.name == "nt":
+        return str(PureWindowsPath("/", *parts))
+    return "/" + "/".join(parts)
 ```
+
+AgentLens 会优先信任日志中的 `cwd`，只有在缺失时才用目录名回退解码，因此这里的逻辑主要用于补齐历史/边缘日志，而不是覆盖原始工作目录。
 
 ---
 

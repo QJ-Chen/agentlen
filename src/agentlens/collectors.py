@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
 from abc import ABC, abstractmethod
 from collections import Counter
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
 CLAUDE_TASKS_DIR = Path.home() / ".claude" / "tasks"
@@ -739,10 +740,18 @@ class ClaudeCodeCollector(LogCollector):
         return paths
 
     def _decode_path(self, encoded_name: str) -> str:
-        decoded = encoded_name.replace("-", "/")
-        if decoded.startswith("/"):
-            decoded = decoded[1:]
-        return decoded
+        parts = [part for part in encoded_name.split("-") if part]
+        if not parts:
+            return ""
+
+        drive_match = re.fullmatch(r"([A-Za-z]):?", parts[0])
+        if drive_match:
+            drive = drive_match.group(1).upper()
+            return str(PureWindowsPath(f"{drive}:/", *parts[1:]))
+
+        if os.name == "nt":
+            return str(PureWindowsPath("/", *parts))
+        return "/" + "/".join(parts)
 
     def create_incremental_state(self, log_path: Path) -> Dict[str, Any]:
         session_id = self._parent_session_id_for_log(log_path)

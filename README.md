@@ -78,7 +78,7 @@ Answer questions like:
 ## Supported source
 
 ### Local session-log ingestion (core path)
-- **Claude Code** — `~/.claude/projects/.../*.jsonl`
+- **Claude Code** — `~/.claude/projects/.../*.jsonl` (same logical location on Windows, under the current user's home directory)
 
 ### Secondary ingestion path
 - **Manual Claude-oriented trace ingestion** through the compatibility API endpoints
@@ -132,6 +132,8 @@ pip install -e .
 cd dashboard && npm install && cd ..
 ```
 
+> On Windows, use PowerShell or CMD equivalents as needed. `python` or `py -3` may be available instead of `python3`.
+
 ### 2. Start the backend API
 
 ```bash
@@ -154,6 +156,8 @@ python3 session_scanner.py --watch --interval 5
 Then open:
 - API: `http://localhost:8080`
 - Dashboard: check the Vite dev server URL printed by `npm run dev`
+
+On native Windows, the dashboard's **Open project** / **Open folder** actions now use the backend to launch Explorer for valid local session paths.
 
 ---
 

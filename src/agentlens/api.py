@@ -8,8 +8,10 @@ for compatibility with existing Claude Code collectors and SDK-style integration
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -177,6 +179,22 @@ def get_session(session_id: str):
     return session
 
 
+def _open_local_path(path: Path) -> None:
+    if sys.platform.startswith("win"):
+        os.startfile(str(path))
+        return
+
+    if shutil.which("open"):
+        subprocess.Popen(["open", str(path)])
+        return
+
+    if shutil.which("xdg-open"):
+        subprocess.Popen(["xdg-open", str(path)])
+        return
+
+    raise HTTPException(status_code=501, detail="Opening paths is not supported on this platform")
+
+
 @app.post("/api/v1/sessions/{session_id}/open")
 def open_session_path(session_id: str, target: Literal["project", "session_folder"] = Query(...)):
     session = storage.get_session(session_id)
@@ -196,12 +214,7 @@ def open_session_path(session_id: str, target: Literal["project", "session_folde
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Path does not exist: {path}")
 
-    if shutil.which("open"):
-        subprocess.Popen(["open", str(path)])
-    elif shutil.which("xdg-open"):
-        subprocess.Popen(["xdg-open", str(path)])
-    else:
-        raise HTTPException(status_code=501, detail="Opening paths is not supported on this platform")
+    _open_local_path(path)
 
     return {"status": "ok", "target": target, "opened_path": str(path)}
 
