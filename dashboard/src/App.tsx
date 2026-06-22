@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentType } from 'react';
 import {
   Activity,
@@ -417,44 +417,64 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
+  const fetchInFlightRef = useRef<Promise<void> | null>(null);
+  const hasLoadedInitiallyRef = useRef(false);
 
   const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      const [sessionsRes, statsRes, projectsRes] = await Promise.all([
-        fetch(`${API_URL}/api/v1/sessions?limit=200`),
-        fetch(`${API_URL}/api/v1/stats/overview`),
-        fetch(`${API_URL}/api/v1/stats/projects`),
-      ]);
-
-      if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
-        throw new Error('API request failed');
-      }
-
-      const sessionsData = (await sessionsRes.json()) as SessionsResponse;
-      const statsData = (await statsRes.json()) as OverviewStats;
-      const projectsData = (await projectsRes.json()) as ProjectsResponse;
-
-      const transformed = (sessionsData.sessions || []).map(transformSession);
-      transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
-
-      setTraces(transformed);
-      setStats(statsData);
-      setProjects(projectsData.projects || []);
-      setError(null);
-
-      setSelectedTraceId((current) => {
-        if (current) {
-          return transformed.find((trace) => trace.id === current)?.id || transformed[0]?.id || null;
-        }
-        return transformed[0]?.id || null;
-      });
-    } catch {
-      setError('无法连接到 AgentLens API 服务器');
-    } finally {
-      setLoading(false);
+    if (fetchInFlightRef.current) {
+      return fetchInFlightRef.current;
     }
+
+    const request = (async () => {
+      try {
+        setLoading(true);
+        const [sessionsRes, statsRes, projectsRes] = await Promise.all([
+          fetch(`${API_URL}/api/v1/sessions?limit=200`),
+          fetch(`${API_URL}/api/v1/stats/overview`),
+          fetch(`${API_URL}/api/v1/stats/projects`),
+        ]);
+
+        if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
+          throw new Error('API request failed');
+        }
+
+        const sessionsData = (await sessionsRes.json()) as SessionsResponse;
+        const statsData = (await statsRes.json()) as OverviewStats;
+        const projectsData = (await projectsRes.json()) as ProjectsResponse;
+
+        const transformed = (sessionsData.sessions || []).map(transformSession);
+        transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
+
+        setTraces(transformed);
+        setStats(statsData);
+        setProjects(projectsData.projects || []);
+        setError(null);
+        setLastFetchedAt(Date.now());
+
+        setSelectedTraceId((current) => {
+          if (current) {
+            return transformed.find((trace) => trace.id === current)?.id || transformed[0]?.id || null;
+          }
+          return transformed[0]?.id || null;
+        });
+      } catch {
+        setError('无法连接到 AgentLens API 服务器');
+      } finally {
+        setLoading(false);
+        fetchInFlightRef.current = null;
+      }
+    })();
+
+    fetchInFlightRef.current = request;
+    return request;
   }, []);
+
+  useEffect(() => {
+    if (hasLoadedInitiallyRef.current) return;
+    hasLoadedInitiallyRef.current = true;
+    void fetchData();
+  }, [fetchData]);
 
   useEffect(() => {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
@@ -808,7 +828,13 @@ function App() {
         {viewMode === 'activity' && (
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
             <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-950/30">
-              <RealtimeStatusPanel traces={traces} selectedTraceId={selectedTrace?.id} onSelectTrace={(trace) => setSelectedTraceId(trace.id)} />
+              <RealtimeStatusPanel
+                traces={traces}
+                selectedTraceId={selectedTrace?.id}
+                onSelectTrace={(trace) => setSelectedTraceId(trace.id)}
+                lastFetchedAt={lastFetchedAt}
+                isRefreshing={loading}
+              />
             </section>
             <section className="space-y-6">
               {selectedTrace ? (

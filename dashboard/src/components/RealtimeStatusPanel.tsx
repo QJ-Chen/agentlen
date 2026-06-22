@@ -6,7 +6,6 @@ import {
   Clock,
   Loader2,
   MessageSquare,
-  PauseCircle,
   Terminal,
   Wrench,
   XCircle,
@@ -18,6 +17,8 @@ interface RealtimeStatusPanelProps {
   traces: Trace[];
   onSelectTrace?: (trace: Trace) => void;
   selectedTraceId?: string;
+  lastFetchedAt?: number | null;
+  isRefreshing?: boolean;
 }
 
 interface FreshTrace {
@@ -31,17 +32,16 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
   traces,
   onSelectTrace,
   selectedTraceId,
+  lastFetchedAt,
+  isRefreshing = false,
 }) => {
   const [freshTraces, setFreshTraces] = useState<FreshTrace[]>([]);
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date(0));
-  const [isLive, setIsLive] = useState(true);
-  const [nowMs, setNowMs] = useState<number>(0);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
   useEffect(() => {
     const interval = setInterval(() => {
       const currentNow = Date.now();
       setNowMs(currentNow);
-      if (!isLive) return;
 
       const active = traces
         .filter((trace) => currentNow - (trace.lastRequestTime || trace.startTime) < 15 * 60_000)
@@ -65,11 +65,13 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
         .sort((a, b) => (b.trace.lastRequestTime || b.trace.startTime) - (a.trace.lastRequestTime || a.trace.startTime));
 
       setFreshTraces(active);
-      setLastUpdate(new Date(currentNow));
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [traces, isLive]);
+  }, [traces]);
+
+  const lastRefreshTimestamp = lastFetchedAt ?? 0;
+  const lastRefreshLabel = lastRefreshTimestamp > 0 ? relativeTime(lastRefreshTimestamp, nowMs) : 'never';
 
   const recentCompleted = useMemo(
     () =>
@@ -93,20 +95,11 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-slate-400">Newest updated sessions from the last manual refresh, with a bias toward fresh activity.</p>
+          <p className="mt-1 text-sm text-slate-400">Newest updated sessions from the latest server refresh, with a bias toward fresh activity.</p>
         </div>
 
         <div className="flex items-center gap-2 text-xs text-slate-400">
-          <button
-            onClick={() => setIsLive(!isLive)}
-            className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 transition-colors ${
-              isLive ? 'bg-green-500/15 text-green-300' : 'bg-slate-700 text-slate-300'
-            }`}
-          >
-            {isLive ? <Activity className="h-3.5 w-3.5" /> : <PauseCircle className="h-3.5 w-3.5" />}
-            {isLive ? 'Live refresh' : 'Paused'}
-          </button>
-          <span>Updated {relativeTime(lastUpdate.getTime(), nowMs)}</span>
+          <span>{isRefreshing ? 'Refreshing…' : `Updated ${lastRefreshLabel}`}</span>
         </div>
       </div>
 
@@ -163,7 +156,7 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
         <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center text-slate-400">
           <CheckCircle className="mx-auto mb-3 h-10 w-10 text-slate-600" />
           <p className="text-base font-medium text-slate-200">No recent session activity</p>
-          <p className="mt-2 text-sm">AgentLens will update this view as local session logs change.</p>
+          <p className="mt-2 text-sm">Use the top-right refresh button to pull the latest server data after local session logs change.</p>
         </div>
       )}
 
