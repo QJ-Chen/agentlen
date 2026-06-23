@@ -56,7 +56,7 @@ def test_process_line_uses_decoded_path_when_cwd_missing(tmp_path: Path):
     assert traces[0]["project_path"] == "C:\\Users\\real\\repo"
 
 
-def test_consecutive_assistant_records_with_same_message_id_merge_into_one_turn(tmp_path: Path):
+def test_consecutive_assistant_records_with_same_message_id_group_under_one_parent_turn(tmp_path: Path):
     project_dir = tmp_path / "-Users-example-repo"
     project_dir.mkdir()
     log_path = project_dir / "session-1.jsonl"
@@ -85,21 +85,27 @@ def test_consecutive_assistant_records_with_same_message_id_merge_into_one_turn(
     trace = traces[0]
 
     assert len(trace["llm_calls"]) == 1
-    llm_call = trace["llm_calls"][0]
-    assert llm_call["id"] == "msg_same_turn"
-    assert llm_call["message_id"] == "msg_same_turn"
-    assert llm_call["input_tokens"] == 27581
-    assert llm_call["output_tokens"] == 630
+    parent_turn = trace["llm_calls"][0]
+    assert parent_turn["id"] == "msg_same_turn"
+    assert parent_turn["message_id"] == "msg_same_turn"
+    assert parent_turn["child_record_count"] == 3
+    assert len(parent_turn["child_records"]) == 3
+    assert [child["id"] for child in parent_turn["child_records"]] == [
+        "44991d4d-b06c-4144-aaae-cccd91d77bd5",
+        "59961901-e3d9-48a8-b5ad-b8cc9fee9817",
+        "4474d629-0815-43fc-93c6-b3abca88e659",
+    ]
     assert trace["input_tokens"] == 27581
     assert trace["output_tokens"] == 630
-    assert len(llm_call["source_event_ids"]) == 3
-    assert len(llm_call["content_blocks"]) == 3
-    assert llm_call["response"].startswith("[Bash]")
     assert len(trace["tool_calls"]) == 2
-    assert {tool["assistant_message_id"] for tool in trace["tool_calls"]} == {"msg_same_turn"}
+    assert {tool["assistant_turn_id"] for tool in trace["tool_calls"]} == {"msg_same_turn"}
+    assert {tool["assistant_record_id"] for tool in trace["tool_calls"]} == {
+        "59961901-e3d9-48a8-b5ad-b8cc9fee9817",
+        "4474d629-0815-43fc-93c6-b3abca88e659",
+    }
 
 
-def test_same_message_id_after_user_message_does_not_merge(tmp_path: Path):
+def test_same_message_id_after_user_message_creates_new_parent_turn(tmp_path: Path):
     project_dir = tmp_path / "-Users-example-repo"
     project_dir.mkdir()
     log_path = project_dir / "session-1.jsonl"
@@ -128,5 +134,6 @@ def test_same_message_id_after_user_message_does_not_merge(tmp_path: Path):
     trace = traces[0]
 
     assert len(trace["llm_calls"]) == 2
+    assert [turn["child_record_count"] for turn in trace["llm_calls"]] == [1, 1]
     assert trace["input_tokens"] == 22
     assert trace["output_tokens"] == 5

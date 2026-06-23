@@ -13,7 +13,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { OverviewStats, ProjectStats, SubagentLog, Trace } from './types';
+import type { AssistantTurn, OverviewStats, ProjectStats, SubagentLog, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
 import { AgentInteractionGraph } from './components/AgentInteractionGraph';
 import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
@@ -50,7 +50,9 @@ interface RawLLMCall {
   id?: string;
   message_id?: string;
   source_event_ids?: string[];
-  content_blocks?: Array<Record<string, unknown>>;
+  child_records?: RawLLMCall[];
+  child_record_count?: number;
+  is_assistant_turn?: boolean;
   model?: string;
   start_time?: string | number;
   end_time?: string | number;
@@ -225,20 +227,46 @@ function buildMergedTools(record: RawSessionRecord | RawSubagentLog, recordStart
 }
 
 function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTime: number) {
-  return (record.llm_calls || []).map((call, idx) => {
+  return (record.llm_calls || []).flatMap((call, idx) => {
+    if (call.is_assistant_turn && Array.isArray(call.child_records)) {
+      return call.child_records.map((child, childIdx) => {
+        const startTime = toTimestamp(child.start_time || child.timestamp) ?? recordStartTime;
+        const endTime = toTimestamp(child.end_time) ?? startTime + (child.duration_ms || 0);
+        const duration = child.duration_ms || Math.max(0, endTime - startTime);
+        const inputTokens = child.input_tokens || 0;
+        const outputTokens = child.output_tokens || 0;
+        return {
+          id: child.id || `${call.id || call.message_id || `llm-${idx}`}-child-${childIdx}`,
+          messageId: child.message_id || '',
+          sourceEventIds: Array.isArray(child.source_event_ids)
+            ? child.source_event_ids.filter((item): item is string => typeof item === 'string')
+            : [],
+          model: child.model || call.model || record.model || 'unknown',
+          startTime,
+          endTime,
+          duration,
+          inputTokens,
+          outputTokens,
+          totalTokens: inputTokens + outputTokens,
+          cost: child.cost_usd || 0,
+          status: child.response ? 'success' : 'streaming',
+          prompt: child.prompt || call.prompt || '',
+          response: child.response || '',
+          promptId: child.prompt_id || call.prompt_id || '',
+        } as const;
+      });
+    }
+
     const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
     const endTime = toTimestamp(call.end_time) ?? startTime + (call.duration_ms || 0);
     const duration = call.duration_ms || Math.max(0, endTime - startTime);
     const inputTokens = call.input_tokens || 0;
     const outputTokens = call.output_tokens || 0;
-    return {
+    return [{
       id: call.id || call.message_id || `llm-${idx}`,
       messageId: call.message_id || '',
       sourceEventIds: Array.isArray(call.source_event_ids)
         ? call.source_event_ids.filter((item): item is string => typeof item === 'string')
-        : [],
-      contentBlocks: Array.isArray(call.content_blocks)
-        ? call.content_blocks.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
         : [],
       model: call.model || record.model || 'unknown',
       startTime,
@@ -252,7 +280,63 @@ function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTim
       prompt: call.prompt || '',
       response: call.response || '',
       promptId: call.prompt_id || '',
-    } as const;
+    } as const];
+  });
+}
+
+function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, recordStartTime: number): AssistantTurn[] {
+  return (record.llm_calls || []).flatMap((call, idx) => {
+    if (!call.is_assistant_turn || !Array.isArray(call.child_records)) {
+      return [];
+    }
+    const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
+    const endTime = toTimestamp(call.end_time) ?? startTime + (call.duration_ms || 0);
+    const inputTokens = call.input_tokens || 0;
+    const outputTokens = call.output_tokens || 0;
+    const childRecords = call.child_records.map((child, childIdx) => {
+      const childStartTime = toTimestamp(child.start_time || child.timestamp) ?? startTime;
+      const childEndTime = toTimestamp(child.end_time) ?? childStartTime + (child.duration_ms || 0);
+      const childDuration = child.duration_ms || Math.max(0, childEndTime - childStartTime);
+      const childInputTokens = child.input_tokens || 0;
+      const childOutputTokens = child.output_tokens || 0;
+      return {
+        id: child.id || `${call.id || call.message_id || `turn-${idx}`}-child-${childIdx}`,
+        messageId: child.message_id || '',
+        sourceEventIds: Array.isArray(child.source_event_ids)
+          ? child.source_event_ids.filter((item): item is string => typeof item === 'string')
+          : [],
+        model: child.model || call.model || record.model || 'unknown',
+        startTime: childStartTime,
+        endTime: childEndTime,
+        duration: childDuration,
+        inputTokens: childInputTokens,
+        outputTokens: childOutputTokens,
+        totalTokens: childInputTokens + childOutputTokens,
+        cost: child.cost_usd || 0,
+        status: child.response ? 'success' : 'streaming',
+        prompt: child.prompt || call.prompt || '',
+        response: child.response || '',
+        promptId: child.prompt_id || call.prompt_id || '',
+      } as const;
+    });
+
+    return [{
+      id: call.id || call.message_id || `turn-${idx}`,
+      messageId: call.message_id || '',
+      prompt: call.prompt || '',
+      promptId: call.prompt_id || '',
+      startTime,
+      endTime,
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      cost: call.cost_usd || 0,
+      childRecords,
+      childRecordCount: call.child_record_count || childRecords.length,
+      sourceEventIds: Array.isArray(call.source_event_ids)
+        ? call.source_event_ids.filter((item): item is string => typeof item === 'string')
+        : [],
+    } satisfies AssistantTurn];
   });
 }
 
@@ -299,6 +383,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
 
   const tools = buildMergedTools(record, recordStartTime);
   const llmCalls = buildLLMCalls(record, recordStartTime);
+  const assistantTurns = buildAssistantTurns(record, recordStartTime);
   const rawSubagentLogs = Array.isArray(record.metadata?.subagent_logs)
     ? (record.metadata?.subagent_logs as RawSubagentLog[])
     : [];
@@ -326,6 +411,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
     duration: record.duration_ms || 0,
     tools,
     llmCalls,
+    assistantTurns,
     subagentLogs,
     totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
     cost: record.cost_usd || 0,

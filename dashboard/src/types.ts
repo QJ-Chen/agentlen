@@ -31,6 +31,22 @@ export interface LLMCall {
   promptId?: string;
 }
 
+export interface AssistantTurn {
+  id: string;
+  messageId?: string;
+  prompt?: string;
+  promptId?: string;
+  startTime: number;
+  endTime: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cost: number;
+  childRecords: LLMCall[];
+  childRecordCount: number;
+  sourceEventIds?: string[];
+}
+
 export interface SubagentLog {
   id: string;
   agentId: string;
@@ -72,6 +88,7 @@ export interface Trace {
   duration?: number;
   tools: ToolCall[];
   llmCalls: LLMCall[];
+  assistantTurns?: AssistantTurn[];
   subagentLogs?: SubagentLog[];
   totalTokens: number;
   cost: number;

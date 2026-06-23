@@ -352,6 +352,7 @@ class SessionAggregator:
                 "last_user_prompt": None,
                 "last_response": None,
                 "message_count": 0,
+                "assistant_turns": [],
                 "current_assistant_turn": None,
                 "last_role": None,
             }
@@ -363,29 +364,59 @@ class SessionAggregator:
 
     def _assistant_turn_tool_call_count(self, session: Dict[str, Any], turn: Dict[str, Any]) -> int:
         message_id = turn.get("message_id")
-        if not message_id:
-            return len(session.get("tool_calls", []))
-        return len(
-            [
-                tool
-                for tool in session.get("tool_calls", [])
-                if isinstance(tool, dict) and tool.get("assistant_message_id") == message_id
-            ]
-        )
+        turn_record_ids = set(turn.get("record_ids") or [])
+        if message_id:
+            return len(
+                [
+                    tool
+                    for tool in session.get("tool_calls", [])
+                    if isinstance(tool, dict) and tool.get("assistant_message_id") == message_id
+                ]
+            )
+        if turn_record_ids:
+            return len(
+                [
+                    tool
+                    for tool in session.get("tool_calls", [])
+                    if isinstance(tool, dict)
+                    and tool.get("assistant_record_id") in turn_record_ids
+                ]
+            )
+        return len(session.get("tool_calls", []))
 
     def _append_assistant_turn(self, session: Dict[str, Any], turn: Dict[str, Any]) -> None:
-        turn_data = dict(turn)
-        turn_data["response"] = build_assistant_response(turn_data.get("content_blocks", []))
+        child_records = [dict(record) for record in turn.get("records", []) if isinstance(record, dict)]
+        if not child_records:
+            session["current_assistant_turn"] = None
+            return
+
+        turn_data = {
+            "id": turn.get("id"),
+            "message_id": turn.get("message_id"),
+            "prompt": turn.get("prompt"),
+            "prompt_id": turn.get("prompt_id") or "",
+            "start_time": turn.get("start_time"),
+            "end_time": turn.get("end_time") or turn.get("start_time"),
+            "input_tokens": int(turn.get("input_tokens") or 0),
+            "output_tokens": int(turn.get("output_tokens") or 0),
+            "cost_usd": float(turn.get("cost_usd") or 0.0),
+            "tool_call_count": self._assistant_turn_tool_call_count(session, turn),
+            "source_event_ids": list(turn.get("source_event_ids") or []),
+            "record_ids": list(turn.get("record_ids") or []),
+            "child_records": child_records,
+            "child_record_count": len(child_records),
+            "response": build_assistant_response(turn.get("content_blocks", [])),
+            "is_assistant_turn": True,
+        }
         if isinstance(turn_data.get("response"), str):
             turn_data["response"] = turn_data["response"][:1000]
-        turn_data["tool_call_count"] = self._assistant_turn_tool_call_count(session, turn_data)
+        session["assistant_turns"].append(turn_data)
         session["total_input_tokens"] += int(turn_data.get("input_tokens") or 0)
         session["total_output_tokens"] += int(turn_data.get("output_tokens") or 0)
         session["total_cost"] += float(turn_data.get("cost_usd") or 0.0)
-        session["llm_calls"].append(turn_data)
         session["current_assistant_turn"] = None
-        if len(session["llm_calls"]) > 500:
-            session["llm_calls"] = session["llm_calls"][-500:]
+        if len(session["assistant_turns"]) > 500:
+            session["assistant_turns"] = session["assistant_turns"][-500:]
 
     def _flush_assistant_turn(self, session: Dict[str, Any]) -> None:
         current_turn = session.get("current_assistant_turn")
@@ -427,18 +458,15 @@ class SessionAggregator:
             last_user_prompt = session.get("last_user_prompt")
             if can_merge_assistant:
                 current_turn["source_event_ids"].append(message.get("trace_id"))
+                current_turn["record_ids"].append(message.get("trace_id"))
                 current_turn["content_blocks"] = merge_content_blocks(
                     current_turn.get("content_blocks", []),
                     message.get("content_blocks", []),
-                )
-                current_turn["response"] = build_assistant_response(
-                    current_turn.get("content_blocks", [])
                 )
                 current_turn["input_tokens"] = int(message.get("input_tokens") or 0)
                 current_turn["output_tokens"] = int(message.get("output_tokens") or 0)
                 current_turn["cost_usd"] = float(message.get("cost_usd") or 0.0)
                 current_turn["model"] = message.get("model") or current_turn.get("model")
-                current_turn["start_time"] = current_turn.get("start_time") or message.get("start_time")
                 current_turn["end_time"] = message.get("start_time") or current_turn.get("end_time")
                 if message.get("prompt_id"):
                     current_turn["prompt_id"] = message.get("prompt_id")
@@ -447,6 +475,7 @@ class SessionAggregator:
                     "id": message.get("message_id") or message.get("trace_id"),
                     "message_id": message.get("message_id"),
                     "source_event_ids": [message.get("trace_id")],
+                    "record_ids": [message.get("trace_id")],
                     "model": message.get("model"),
                     "start_time": message.get("start_time"),
                     "end_time": message.get("start_time"),
@@ -454,24 +483,43 @@ class SessionAggregator:
                     "output_tokens": int(message.get("output_tokens") or 0),
                     "cost_usd": float(message.get("cost_usd") or 0.0),
                     "prompt": last_user_prompt[:500] if last_user_prompt else None,
-                    "response": message.get("response")[:1000] if isinstance(message.get("response"), str) else None,
                     "prompt_id": message.get("prompt_id") or message.get("promptId"),
                     "content_blocks": merge_content_blocks([], message.get("content_blocks", [])),
+                    "records": [],
                 }
-                current_turn["response"] = build_assistant_response(
-                    current_turn.get("content_blocks", [])
-                )
                 session["current_assistant_turn"] = current_turn
-            session["last_response"] = current_turn.get("response") or session.get("last_response")
+
+            response = build_assistant_response(message.get("content_blocks", []))
+            if isinstance(response, str):
+                response = response[:1000]
+            child_record = {
+                "id": message.get("trace_id"),
+                "message_id": message.get("message_id") or "",
+                "assistant_turn_id": current_turn.get("id"),
+                "source_event_ids": [message.get("trace_id")],
+                "content_blocks": merge_content_blocks([], message.get("content_blocks", [])),
+                "model": message.get("model"),
+                "start_time": message.get("start_time"),
+                "end_time": message.get("start_time"),
+                "input_tokens": int(message.get("input_tokens") or 0),
+                "output_tokens": int(message.get("output_tokens") or 0),
+                "cost_usd": float(message.get("cost_usd") or 0.0),
+                "prompt": last_user_prompt[:500] if last_user_prompt else None,
+                "response": response,
+                "prompt_id": message.get("prompt_id") or message.get("promptId") or "",
+                "is_assistant_turn": False,
+            }
+            current_turn.setdefault("records", []).append(child_record)
+            session["last_response"] = response or session.get("last_response")
         else:
             session["total_input_tokens"] += int(message.get("input_tokens") or 0)
             session["total_output_tokens"] += int(message.get("output_tokens") or 0)
             session["total_cost"] += float(message.get("cost_usd") or 0.0)
 
         if message.get("tool_calls"):
-            prompt_idx = len(session.get("llm_calls", [])) + 1 if session.get("last_user_prompt") else None
+            prompt_idx = len(session.get("assistant_turns", [])) + 1 if session.get("last_user_prompt") else None
             if role == "assistant" and current_turn is not None:
-                prompt_idx = len(session.get("llm_calls", [])) + 1 if session.get("last_user_prompt") else None
+                prompt_idx = len(session.get("assistant_turns", [])) + 1 if session.get("last_user_prompt") else None
             enriched_tool_calls = []
             for tool_call in message["tool_calls"]:
                 item = dict(tool_call)
@@ -480,6 +528,7 @@ class SessionAggregator:
                 if role == "assistant" and current_turn is not None:
                     item["assistant_message_id"] = current_turn.get("message_id")
                     item["assistant_turn_id"] = current_turn.get("id")
+                    item["assistant_record_id"] = message.get("trace_id")
                 enriched_tool_calls.append(item)
             session["tool_calls"] = merge_tool_calls(session["tool_calls"], enriched_tool_calls)
 
@@ -515,7 +564,7 @@ class SessionAggregator:
             "start_time": session["start_time"],
             "end_time": session["end_time"],
             "duration_ms": 0,
-            "model": session["llm_calls"][-1]["model"] if session["llm_calls"] else "unknown",
+            "model": session["assistant_turns"][-1]["records"][-1]["model"] if session["assistant_turns"] and session["assistant_turns"][-1].get("records") else "unknown",
             "prompt": session.get("first_prompt"),
             "response": session.get("last_response"),
             "input_tokens": session["total_input_tokens"],
@@ -526,12 +575,12 @@ class SessionAggregator:
                 session["total_output_tokens"],
             ),
             "tool_calls": merged_tool_calls,
-            "llm_calls": session["llm_calls"],
+            "llm_calls": session["assistant_turns"],
             "status": "success",
             "project_path": project_path,
             "metadata": {
                 "message_count": session["message_count"],
-                "llm_call_count": len(session["llm_calls"]),
+                "llm_call_count": sum(turn.get("child_record_count", 0) for turn in session["assistant_turns"]),
                 "project_group": session.get("project_group") or project_path,
                 "major_cwd": project_path,
                 "task_summary": summarize_task_tools(session_id, merged_tool_calls),

@@ -79,6 +79,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   const allTools = useMemo(() => trace.tools || [], [trace.tools]);
   const allLLMCalls = useMemo(() => trace.llmCalls || [], [trace.llmCalls]);
+  const assistantTurns = useMemo(() => trace.assistantTurns || [], [trace.assistantTurns]);
   const subagentLogs = useMemo(() => trace.subagentLogs || [], [trace.subagentLogs]);
 
   const groupedSubagentLogs = useMemo(() => {
@@ -142,6 +143,38 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
     return groups;
   }, [allLLMCalls]);
+
+  const assistantTurnGroups = useMemo(() => {
+    if (assistantTurns.length > 0) {
+      return assistantTurns.map((turn, index) => ({
+        key: turn.messageId || turn.id || `assistant-turn-${index}`,
+        prompt: turn.prompt || '',
+        promptId: turn.promptId || '',
+        turn,
+      }));
+    }
+
+    return groupedLLMCalls.map((group, index) => ({
+      key: group.promptId || group.key || `assistant-turn-${index}`,
+      prompt: group.prompt,
+      promptId: group.promptId || '',
+      turn: {
+        id: group.promptId || group.key || `assistant-turn-${index}`,
+        messageId: '',
+        prompt: group.prompt,
+        promptId: group.promptId || '',
+        startTime: group.calls[0]?.startTime || 0,
+        endTime: group.calls[group.calls.length - 1]?.endTime || group.calls[group.calls.length - 1]?.startTime || 0,
+        inputTokens: group.calls.reduce((sum, call) => sum + call.inputTokens, 0),
+        outputTokens: group.calls.reduce((sum, call) => sum + call.outputTokens, 0),
+        totalTokens: group.calls.reduce((sum, call) => sum + call.totalTokens, 0),
+        cost: group.calls.reduce((sum, call) => sum + call.cost, 0),
+        childRecords: group.calls,
+        childRecordCount: group.calls.length,
+        sourceEventIds: group.calls.flatMap((call) => call.sourceEventIds || []),
+      },
+    }));
+  }, [assistantTurns, groupedLLMCalls]);
 
   const getRelatedToolCalls = (call: LLMCall): ToolCall[] => {
     if (!trace.tools || !call.startTime) return [];
@@ -226,7 +259,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     }
     target.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setPendingLaunchPromptId(null);
-  }, [activeTab, pendingLaunchPromptId, groupedLLMCalls]);
+  }, [activeTab, pendingLaunchPromptId, assistantTurnGroups]);
 
   const jumpToLaunchPrompt = (promptId?: string) => {
     if (!promptId) return;
@@ -241,7 +274,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
-    { id: 'llm', label: `LLM (${groupedLLMCalls.length}组)`, icon: MessageSquare },
+    { id: 'llm', label: `LLM (${assistantTurnGroups.length}组)`, icon: MessageSquare },
     { id: 'subagents', label: `Subagents (${subagentLogs.length})`, icon: Bot },
     { id: 'taskStatus', label: '任务状态', icon: Layers },
     { id: 'raw', label: '原始', icon: Code },
@@ -337,13 +370,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       {allLLMCalls.length === 0 ? (
         <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />
       ) : (
-        groupedLLMCalls.map((group, groupIdx) => {
+        assistantTurnGroups.map((group, groupIdx) => {
           const groupKey = group.key;
           const isGroupExpanded = expandedLLMs.has(groupKey);
           const cleanedPrompt = cleanSessionText(group.prompt || '');
           const promptPreview = cleanedPrompt
             ? `${cleanedPrompt.replace(/\n/g, ' ').slice(0, 80)}${cleanedPrompt.length > 80 ? '...' : ''}`
             : '无提示词';
+          const turn = group.turn;
 
           return (
             <div
@@ -362,11 +396,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-200 truncate">{promptPreview}</div>
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
-                    <span>{group.calls.length} 次调用</span>
+                    <span>{turn.childRecordCount} 条 assistant 记录</span>
                     <span>·</span>
                     <span>
-                      {group.calls.reduce((sum, call) => sum + call.inputTokens, 0).toLocaleString()} →{' '}
-                      {group.calls.reduce((sum, call) => sum + call.outputTokens, 0).toLocaleString()} tokens
+                      {turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens
                     </span>
                   </div>
                 </div>
@@ -393,8 +426,19 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                     </div>
                   )}
 
+                  <div className="px-4 py-3 border-b border-slate-700/50 bg-slate-950/20">
+                    <div className="text-xs font-medium text-cyan-400 flex items-center gap-1 mb-2">
+                      <Layers className="w-3 h-3" /> Assistant turn
+                    </div>
+                    <div className="text-xs text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
+                      <span>{turn.childRecordCount} child records</span>
+                      <span>{turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens</span>
+                      {turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
+                    </div>
+                  </div>
+
                   <div className="space-y-2 p-4">
-                    {group.calls.map((call, callIdx) => {
+                    {turn.childRecords.map((call, callIdx) => {
                       const callKey = `call-${groupIdx}-${callIdx}`;
                       const isCallExpanded = expandedLLMs.has(callKey);
                       const relatedTools = getRelatedToolCalls(call);
@@ -435,6 +479,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                 <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
                                 <span>·</span>
                                 <span>{formatDuration(call.duration)}</span>
+                                {call.sourceEventIds && call.sourceEventIds[0] && (
+                                  <>
+                                    <span>·</span>
+                                    <span className="font-mono">event {call.sourceEventIds[0]}</span>
+                                  </>
+                                )}
                               </div>
                             </div>
                             {isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -442,7 +492,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
                           {isCallExpanded && (
                             <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
-                              {call.response && !formattedToolResponse && !call.contentBlocks?.length && (
+                              {call.response && !formattedToolResponse && (
                                 <JsonOrTextBlock
                                   title={responseStyle.label}
                                   value={
@@ -451,17 +501,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                       : cleanSessionText(call.response)
                                   }
                                   copyId={`llm-response-${callKey}`}
-                                  copiedId={copiedId}
-                                  onCopy={copyToClipboard}
-                                />
-                              )}
-                              {call.contentBlocks && call.contentBlocks.length > 0 && (
-                                <StructuredResponseBlock
-                                  title="Assistant turn blocks"
-                                  color="violet"
-                                  icon={Layers}
-                                  value={call.contentBlocks}
-                                  copyId={`llm-content-blocks-${callKey}`}
                                   copiedId={copiedId}
                                   onCopy={copyToClipboard}
                                 />
