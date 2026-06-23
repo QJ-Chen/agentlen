@@ -790,6 +790,11 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                         return groups;
                       })();
                       const cleanedPrompt = cleanSessionText(subagent.prompt || '');
+                      const hasSubagentMeta = !!subagent.meta && Object.keys(subagent.meta).length > 0;
+                      const hasSubagentDetails =
+                        hasSubagentMeta ||
+                        !!(subagent.sessionFilePath && subagent.sessionFilePath.length > 0) ||
+                        !!(subagent.toolUseId && subagent.toolUseId.length > 0);
                       const responseStyle = classifyCallResponse(
                         subagent.llmCalls[subagent.llmCalls.length - 1] || {
                           id: `${subagent.id}-fallback`,
@@ -818,7 +823,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                               </div>
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${responseStyle.badge}`}>{responseStyle.label}</span>
+                                  <span className="inline-flex items-center gap-1 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">
+                                    <Bot className="h-3 w-3" />
+                                    subagent
+                                  </span>
                                   <div className="min-w-0 truncate text-sm font-medium text-slate-100">{subagent.description || subagent.agentType || subagent.agentId}</div>
                                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusTone}`}>{statusLabel(subagent.status)}</span>
                                 </div>
@@ -834,6 +842,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                   <span>{subagent.toolCalls.length} tools</span>
                                   <span>·</span>
                                   <span>{subagent.llmCalls.length} LLM</span>
+                                  {hasSubagentDetails && (
+                                    <>
+                                      <span>·</span>
+                                      <span className="text-sky-300">details below</span>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                               <div className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-400">
@@ -844,6 +858,29 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
                           {isSubagentExpanded && (
                             <div className="border-t border-slate-700/50 px-3.5 pb-3 pt-3 space-y-4 bg-slate-950/10">
+                              {hasSubagentDetails && (
+                                <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 p-3 space-y-2">
+                                  <div className="flex items-center gap-2 text-xs font-medium text-sky-300">
+                                    <Bot className="h-3.5 w-3.5" />
+                                    Subagent details
+                                  </div>
+                                  {subagent.sessionFilePath && <PathField label="Log 文件" value={subagent.sessionFilePath} />}
+                                  {subagent.toolUseId && (
+                                    <div className="text-[11px] text-slate-500 font-mono">toolUseId: {subagent.toolUseId}</div>
+                                  )}
+                                  {hasSubagentMeta && (
+                                    <StructuredResponseBlock
+                                      title="Subagent 元数据"
+                                      color="emerald"
+                                      icon={FileText}
+                                      value={subagent.meta || {}}
+                                      copyId={`subagent-meta-${subagent.id}`}
+                                      copiedId={copiedId}
+                                      onCopy={copyToClipboard}
+                                    />
+                                  )}
+                                </div>
+                              )}
                               {cleanedPrompt && groupedCalls.length === 0 && (
                                 <PreviewBlock icon={User} label="用户输入" content={truncateText(cleanedPrompt, 800)} />
                               )}
@@ -862,23 +899,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                   onCopy={copyToClipboard}
                                 />
                               ) : null}
-                              {((subagent.sessionFilePath && subagent.sessionFilePath.length > 0) || (subagent.toolUseId && subagent.toolUseId.length > 0)) && (
-                                <div className="rounded-lg border border-slate-700/50 bg-slate-900/40 p-3 space-y-2">
-                                  {subagent.sessionFilePath && <PathField label="Subagent 文件" value={subagent.sessionFilePath} />}
-                                  {subagent.toolUseId && (
-                                    <div className="text-[11px] text-slate-500 font-mono">toolUseId: {subagent.toolUseId}</div>
-                                  )}
-                                </div>
-                              )}
-                              <StructuredResponseBlock
-                                title="Subagent 元数据"
-                                color="emerald"
-                                icon={FileText}
-                                value={subagent.meta || {}}
-                                copyId={`subagent-meta-${subagent.id}`}
-                                copiedId={copiedId}
-                                onCopy={copyToClipboard}
-                              />
                             </div>
                           )}
                         </div>
