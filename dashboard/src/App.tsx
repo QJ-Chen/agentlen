@@ -13,7 +13,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { AssistantTurn, OverviewStats, ProjectStats, PromptThread, SubagentLog, Trace } from './types';
+import type { AssistantTurn, OverviewStats, ProjectStats, PromptThread, SubagentLog, ToolCall, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
 import { AgentInteractionGraph } from './components/AgentInteractionGraph';
 import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
@@ -44,6 +44,9 @@ interface RawToolCall {
   input_args?: Record<string, unknown>;
   output?: unknown;
   output_result?: unknown;
+  assistant_turn_id?: string;
+  assistant_message_id?: string;
+  assistant_record_id?: string;
 }
 
 interface RawLLMCall {
@@ -152,17 +155,7 @@ function toTimestamp(value?: string | number | null): number | undefined {
 }
 
 function buildMergedTools(record: RawSessionRecord | RawSubagentLog, recordStartTime: number) {
-  const merged = new Map<string, {
-    id: string;
-    name: string;
-    startTime: number;
-    endTime: number;
-    duration: number;
-    status: 'success' | 'error' | 'pending';
-    input?: Record<string, unknown>;
-    output?: unknown;
-    error?: string;
-  }>();
+  const merged = new Map<string, ToolCall>();
 
   (record.tool_calls || []).forEach((tool, idx) => {
     const startTime = toTimestamp(tool.timestamp) ?? recordStartTime;
@@ -181,10 +174,16 @@ function buildMergedTools(record: RawSessionRecord | RawSubagentLog, recordStart
         input: tool.input || tool.input_args,
         output: tool.output ?? tool.output_result,
         error: tool.error || tool.error_message,
+        assistantTurnId: tool.assistant_turn_id,
+        assistantMessageId: tool.assistant_message_id,
+        assistantRecordId: tool.assistant_record_id,
       };
 
       base.name = tool.name || tool.tool_name || base.name;
       base.input = tool.input || tool.input_args || base.input;
+      base.assistantTurnId = tool.assistant_turn_id || base.assistantTurnId;
+      base.assistantMessageId = tool.assistant_message_id || base.assistantMessageId;
+      base.assistantRecordId = tool.assistant_record_id || base.assistantRecordId;
       base.startTime = Math.min(base.startTime, startTime);
       base.endTime = Math.max(base.endTime, startTime + duration);
       base.duration = Math.max(base.duration, base.endTime - base.startTime, duration);
@@ -220,6 +219,9 @@ function buildMergedTools(record: RawSessionRecord | RawSubagentLog, recordStart
       input: tool.input || tool.input_args,
       output: tool.output ?? tool.output_result,
       error: tool.error || tool.error_message,
+      assistantTurnId: tool.assistant_turn_id,
+      assistantMessageId: tool.assistant_message_id,
+      assistantRecordId: tool.assistant_record_id,
     });
   });
 

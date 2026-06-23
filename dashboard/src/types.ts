@@ -10,6 +10,9 @@ export interface ToolCall {
   input?: Record<string, unknown>;
   output?: unknown;
   error?: string;
+  assistantTurnId?: string;
+  assistantMessageId?: string;
+  assistantRecordId?: string;
 }
 
 export interface LLMCall {
