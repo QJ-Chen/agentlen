@@ -54,3 +54,79 @@ def test_process_line_uses_decoded_path_when_cwd_missing(tmp_path: Path):
     traces = state["aggregator"].get_traces()
 
     assert traces[0]["project_path"] == "C:\\Users\\real\\repo"
+
+
+def test_consecutive_assistant_records_with_same_message_id_merge_into_one_turn(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","timestamp":"2026-06-22T03:20:00Z","message":{"role":"user","content":"track recent changes"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"44991d4d-b06c-4144-aaae-cccd91d77bd5","timestamp":"2026-06-22T03:20:05.955Z","message":{"id":"msg_same_turn","role":"assistant","model":"claude-opus-4-8","content":[{"type":"thinking","thinking":"Figuring out recent changes","signature":""}],"usage":{"input_tokens":27581,"output_tokens":630}}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"59961901-e3d9-48a8-b5ad-b8cc9fee9817","timestamp":"2026-06-22T03:20:05.961Z","message":{"id":"msg_same_turn","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git log --stat --decorate -5"}}],"usage":{"input_tokens":27581,"output_tokens":630}}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"4474d629-0815-43fc-93c6-b3abca88e659","timestamp":"2026-06-22T03:20:06.120Z","message":{"id":"msg_same_turn","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_2","name":"Bash","input":{"command":"git status --short"}}],"usage":{"input_tokens":27581,"output_tokens":630}}}',
+    )
+
+    traces = state["aggregator"].get_traces()
+    trace = traces[0]
+
+    assert len(trace["llm_calls"]) == 1
+    llm_call = trace["llm_calls"][0]
+    assert llm_call["id"] == "msg_same_turn"
+    assert llm_call["message_id"] == "msg_same_turn"
+    assert llm_call["input_tokens"] == 27581
+    assert llm_call["output_tokens"] == 630
+    assert trace["input_tokens"] == 27581
+    assert trace["output_tokens"] == 630
+    assert len(llm_call["source_event_ids"]) == 3
+    assert len(llm_call["content_blocks"]) == 3
+    assert llm_call["response"].startswith("[Bash]")
+    assert len(trace["tool_calls"]) == 2
+    assert {tool["assistant_message_id"] for tool in trace["tool_calls"]} == {"msg_same_turn"}
+
+
+def test_same_message_id_after_user_message_does_not_merge(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","timestamp":"2026-06-22T03:20:00Z","message":{"role":"user","content":"track recent changes"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","timestamp":"2026-06-22T03:20:05.955Z","message":{"id":"msg_same_turn","role":"assistant","model":"claude-opus-4-8","content":[{"type":"thinking","thinking":"First snapshot","signature":""}],"usage":{"input_tokens":10,"output_tokens":2}}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"user","timestamp":"2026-06-22T03:20:06.000Z","message":{"role":"user","content":"continue"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a2","timestamp":"2026-06-22T03:20:06.100Z","message":{"id":"msg_same_turn","role":"assistant","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"git status --short"}}],"usage":{"input_tokens":12,"output_tokens":3}}}',
+    )
+
+    traces = state["aggregator"].get_traces()
+    trace = traces[0]
+
+    assert len(trace["llm_calls"]) == 2
+    assert trace["input_tokens"] == 22
+    assert trace["output_tokens"] == 5

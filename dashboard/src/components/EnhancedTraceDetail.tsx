@@ -145,6 +145,13 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   const getRelatedToolCalls = (call: LLMCall): ToolCall[] => {
     if (!trace.tools || !call.startTime) return [];
+    if (call.messageId) {
+      return trace.tools.filter(
+        (tool) =>
+          typeof (tool as ToolCall & { assistantMessageId?: string }).assistantMessageId === 'string' &&
+          (tool as ToolCall & { assistantMessageId?: string }).assistantMessageId === call.messageId,
+      );
+    }
     const callIndex = allLLMCalls.findIndex((candidate) => candidate.id === call.id);
     const nextCall = allLLMCalls[callIndex + 1];
 
@@ -435,7 +442,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
                           {isCallExpanded && (
                             <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
-                              {call.response && !formattedToolResponse && (
+                              {call.response && !formattedToolResponse && !call.contentBlocks?.length && (
                                 <JsonOrTextBlock
                                   title={responseStyle.label}
                                   value={
@@ -444,6 +451,17 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                       : cleanSessionText(call.response)
                                   }
                                   copyId={`llm-response-${callKey}`}
+                                  copiedId={copiedId}
+                                  onCopy={copyToClipboard}
+                                />
+                              )}
+                              {call.contentBlocks && call.contentBlocks.length > 0 && (
+                                <StructuredResponseBlock
+                                  title="Assistant turn blocks"
+                                  color="violet"
+                                  icon={Layers}
+                                  value={call.contentBlocks}
+                                  copyId={`llm-content-blocks-${callKey}`}
                                   copiedId={copiedId}
                                   onCopy={copyToClipboard}
                                 />
@@ -608,7 +626,18 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
                     {isCallExpanded && (
                       <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
-                        {call.response && !formattedToolResponse && (
+                        {call.contentBlocks && call.contentBlocks.length > 0 && (
+                          <StructuredResponseBlock
+                            title="Assistant turn blocks"
+                            color="violet"
+                            icon={Layers}
+                            value={call.contentBlocks}
+                            copyId={`${callKey}-content-blocks`}
+                            copiedId={copiedId}
+                            onCopy={copyToClipboard}
+                          />
+                        )}
+                        {call.response && !formattedToolResponse && !call.contentBlocks?.length && (
                           <JsonOrTextBlock
                             title={responseStyle.label}
                             value={

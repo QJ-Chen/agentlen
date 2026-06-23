@@ -27,6 +27,114 @@ CLAUDE_CODE_PRICING = {"input_per_1m": 3.0, "output_per_1m": 15.0}
 logger = logging.getLogger(__name__)
 
 
+def merge_content_blocks(existing: List[Dict[str, Any]], new_blocks: Any) -> List[Dict[str, Any]]:
+    merged = [dict(block) for block in existing if isinstance(block, dict)]
+    if not isinstance(new_blocks, list):
+        return merged
+
+    seen_keys = set()
+
+    def block_key(block: Dict[str, Any]) -> Any:
+        block_type = block.get("type")
+        if block_type == "tool_use":
+            return (block_type, block.get("id"))
+        if block_type == "tool_result":
+            return (block_type, block.get("tool_use_id"), json.dumps(block.get("content", ""), ensure_ascii=False, sort_keys=True))
+        if block_type == "thinking":
+            return (block_type, block.get("thinking", ""))
+        if block_type == "text":
+            return (block_type, block.get("text", ""))
+        return (block_type, json.dumps(block, ensure_ascii=False, sort_keys=True))
+
+    for index, block in enumerate(merged):
+        seen_keys.add(block_key(block))
+        if block.get("type") == "tool_use" and block.get("id"):
+            seen_keys.add(("tool_use", block.get("id")))
+            merged[index] = dict(block)
+
+    for item in new_blocks:
+        if not isinstance(item, dict):
+            continue
+        key = block_key(item)
+        if key in seen_keys:
+            if item.get("type") == "tool_use" and item.get("id"):
+                tool_key = ("tool_use", item.get("id"))
+                for idx, existing_block in enumerate(merged):
+                    if (
+                        isinstance(existing_block, dict)
+                        and existing_block.get("type") == "tool_use"
+                        and existing_block.get("id") == item.get("id")
+                    ):
+                        merged[idx] = dict(item)
+                        break
+                seen_keys.add(tool_key)
+            continue
+        merged.append(dict(item))
+        seen_keys.add(key)
+        if item.get("type") == "tool_use" and item.get("id"):
+            seen_keys.add(("tool_use", item.get("id")))
+
+    return merged
+
+
+def build_assistant_response(content: Any) -> Optional[str]:
+    if isinstance(content, str):
+        text = content.strip()
+        return text or None
+    if not isinstance(content, list):
+        return None
+
+    text_parts = [
+        item.get("text", "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "text" and item.get("text")
+    ]
+    response = "\n".join(text_parts).strip()
+    if response:
+        return response
+
+    tool_uses = [
+        item for item in content if isinstance(item, dict) and item.get("type") == "tool_use"
+    ]
+    if tool_uses:
+        return "\n".join(
+            f"[{tool_use.get('name', 'Unknown')}] {json.dumps(tool_use.get('input', {}), ensure_ascii=False)[:200]}"
+            for tool_use in tool_uses
+        )
+
+    thinking_items = [
+        item.get("thinking", "")
+        for item in content
+        if isinstance(item, dict) and item.get("type") == "thinking" and item.get("thinking")
+    ]
+    if thinking_items:
+        return "[thinking] " + "\n".join(thinking_items)
+    return None
+
+
+def merge_tool_calls(existing: List[Dict[str, Any]], new_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged = [dict(call) for call in existing if isinstance(call, dict)]
+    seen = {}
+    for idx, call in enumerate(merged):
+        tool_use_id = call.get("tool_use_id")
+        name = call.get("name") or call.get("tool_name")
+        key = (tool_use_id, name, "input" if call.get("input") or call.get("input_args") else "output")
+        seen[key] = idx
+
+    for call in new_calls:
+        if not isinstance(call, dict):
+            continue
+        tool_use_id = call.get("tool_use_id")
+        name = call.get("name") or call.get("tool_name")
+        key = (tool_use_id, name, "input" if call.get("input") or call.get("input_args") else "output")
+        if key in seen:
+            merged[seen[key]] = {**merged[seen[key]], **dict(call)}
+        else:
+            seen[key] = len(merged)
+            merged.append(dict(call))
+    return merged
+
+
 def calc_cost(platform: str, input_tokens: int, output_tokens: int) -> float:
     if platform != CLAUDE_CODE_PLATFORM:
         raise ValueError(f"Unsupported platform: {platform}")
@@ -244,12 +352,45 @@ class SessionAggregator:
                 "last_user_prompt": None,
                 "last_response": None,
                 "message_count": 0,
+                "current_assistant_turn": None,
+                "last_role": None,
             }
         return self.sessions[session_id]
 
     def add_tool_outputs(self, session_id: str, tool_outputs: Dict[str, str]):
         session = self._ensure_session(session_id)
         session["tool_outputs"].update(tool_outputs)
+
+    def _assistant_turn_tool_call_count(self, session: Dict[str, Any], turn: Dict[str, Any]) -> int:
+        message_id = turn.get("message_id")
+        if not message_id:
+            return len(session.get("tool_calls", []))
+        return len(
+            [
+                tool
+                for tool in session.get("tool_calls", [])
+                if isinstance(tool, dict) and tool.get("assistant_message_id") == message_id
+            ]
+        )
+
+    def _append_assistant_turn(self, session: Dict[str, Any], turn: Dict[str, Any]) -> None:
+        turn_data = dict(turn)
+        turn_data["response"] = build_assistant_response(turn_data.get("content_blocks", []))
+        if isinstance(turn_data.get("response"), str):
+            turn_data["response"] = turn_data["response"][:1000]
+        turn_data["tool_call_count"] = self._assistant_turn_tool_call_count(session, turn_data)
+        session["total_input_tokens"] += int(turn_data.get("input_tokens") or 0)
+        session["total_output_tokens"] += int(turn_data.get("output_tokens") or 0)
+        session["total_cost"] += float(turn_data.get("cost_usd") or 0.0)
+        session["llm_calls"].append(turn_data)
+        session["current_assistant_turn"] = None
+        if len(session["llm_calls"]) > 500:
+            session["llm_calls"] = session["llm_calls"][-500:]
+
+    def _flush_assistant_turn(self, session: Dict[str, Any]) -> None:
+        current_turn = session.get("current_assistant_turn")
+        if current_turn:
+            self._append_assistant_turn(session, current_turn)
 
     def add_message(self, session_id: str, message: Dict[str, Any]):
         session = self._ensure_session(session_id)
@@ -269,19 +410,78 @@ class SessionAggregator:
         session["platform"] = CLAUDE_CODE_PLATFORM
         session["agent_name"] = CLAUDE_CODE_PLATFORM
 
-        session["total_input_tokens"] += int(message.get("input_tokens") or 0)
-        session["total_output_tokens"] += int(message.get("output_tokens") or 0)
-        session["total_cost"] += float(message.get("cost_usd") or 0.0)
+        role = message.get("role")
+        current_turn = session.get("current_assistant_turn")
+        can_merge_assistant = (
+            role == "assistant"
+            and current_turn is not None
+            and session.get("last_role") == "assistant"
+            and current_turn.get("message_id")
+            and current_turn.get("message_id") == message.get("message_id")
+        )
+
+        if role != "assistant" or not can_merge_assistant:
+            self._flush_assistant_turn(session)
+
+        if role == "assistant" and message.get("model"):
+            last_user_prompt = session.get("last_user_prompt")
+            if can_merge_assistant:
+                current_turn["source_event_ids"].append(message.get("trace_id"))
+                current_turn["content_blocks"] = merge_content_blocks(
+                    current_turn.get("content_blocks", []),
+                    message.get("content_blocks", []),
+                )
+                current_turn["response"] = build_assistant_response(
+                    current_turn.get("content_blocks", [])
+                )
+                current_turn["input_tokens"] = int(message.get("input_tokens") or 0)
+                current_turn["output_tokens"] = int(message.get("output_tokens") or 0)
+                current_turn["cost_usd"] = float(message.get("cost_usd") or 0.0)
+                current_turn["model"] = message.get("model") or current_turn.get("model")
+                current_turn["start_time"] = current_turn.get("start_time") or message.get("start_time")
+                current_turn["end_time"] = message.get("start_time") or current_turn.get("end_time")
+                if message.get("prompt_id"):
+                    current_turn["prompt_id"] = message.get("prompt_id")
+            else:
+                current_turn = {
+                    "id": message.get("message_id") or message.get("trace_id"),
+                    "message_id": message.get("message_id"),
+                    "source_event_ids": [message.get("trace_id")],
+                    "model": message.get("model"),
+                    "start_time": message.get("start_time"),
+                    "end_time": message.get("start_time"),
+                    "input_tokens": int(message.get("input_tokens") or 0),
+                    "output_tokens": int(message.get("output_tokens") or 0),
+                    "cost_usd": float(message.get("cost_usd") or 0.0),
+                    "prompt": last_user_prompt[:500] if last_user_prompt else None,
+                    "response": message.get("response")[:1000] if isinstance(message.get("response"), str) else None,
+                    "prompt_id": message.get("prompt_id") or message.get("promptId"),
+                    "content_blocks": merge_content_blocks([], message.get("content_blocks", [])),
+                }
+                current_turn["response"] = build_assistant_response(
+                    current_turn.get("content_blocks", [])
+                )
+                session["current_assistant_turn"] = current_turn
+            session["last_response"] = current_turn.get("response") or session.get("last_response")
+        else:
+            session["total_input_tokens"] += int(message.get("input_tokens") or 0)
+            session["total_output_tokens"] += int(message.get("output_tokens") or 0)
+            session["total_cost"] += float(message.get("cost_usd") or 0.0)
 
         if message.get("tool_calls"):
             prompt_idx = len(session.get("llm_calls", [])) + 1 if session.get("last_user_prompt") else None
+            if role == "assistant" and current_turn is not None:
+                prompt_idx = len(session.get("llm_calls", [])) + 1 if session.get("last_user_prompt") else None
             enriched_tool_calls = []
             for tool_call in message["tool_calls"]:
                 item = dict(tool_call)
                 if item.get("prompt_idx") is None and prompt_idx is not None:
                     item["prompt_idx"] = prompt_idx
+                if role == "assistant" and current_turn is not None:
+                    item["assistant_message_id"] = current_turn.get("message_id")
+                    item["assistant_turn_id"] = current_turn.get("id")
                 enriched_tool_calls.append(item)
-            session["tool_calls"].extend(enriched_tool_calls)
+            session["tool_calls"] = merge_tool_calls(session["tool_calls"], enriched_tool_calls)
 
         if message.get("role") == "user" and message.get("prompt"):
             prompt = message["prompt"]
@@ -289,29 +489,7 @@ class SessionAggregator:
                 session["first_prompt"] = prompt
             session["last_user_prompt"] = prompt
 
-        if message.get("role") == "assistant" and message.get("response"):
-            session["last_response"] = message["response"]
-
-        if message.get("role") == "assistant" and message.get("model"):
-            last_user_prompt = session.get("last_user_prompt")
-            session["llm_calls"].append(
-                {
-                    "id": message.get("trace_id"),
-                    "model": message.get("model"),
-                    "start_time": message.get("start_time"),
-                    "input_tokens": int(message.get("input_tokens") or 0),
-                    "output_tokens": int(message.get("output_tokens") or 0),
-                    "prompt": last_user_prompt[:500] if last_user_prompt else None,
-                    "response": (
-                        message.get("response")[:1000]
-                        if isinstance(message.get("response"), str)
-                        else None
-                    ),
-                    "prompt_id": message.get("prompt_id") or message.get("promptId"),
-                }
-            )
-            if len(session["llm_calls"]) > 500:
-                session["llm_calls"] = session["llm_calls"][-500:]
+        session["last_role"] = role
 
     def _build_trace(self, session_id: str, session: Dict[str, Any]) -> Dict[str, Any]:
         tool_outputs = session.get("tool_outputs", {})
@@ -365,6 +543,7 @@ class SessionAggregator:
         for session_id, session in self.sessions.items():
             if session["message_count"] == 0 and not session["tool_calls"]:
                 continue
+            self._flush_assistant_turn(session)
             traces.append(self._build_trace(session_id, session))
         return traces
 
@@ -792,8 +971,10 @@ class ClaudeCodeCollector(LogCollector):
         role = message.get("role")
         content = message.get("content", [])
         tool_calls = []
+        content_blocks = []
 
         if isinstance(content, list):
+            content_blocks = [dict(item) for item in content if isinstance(item, dict)]
             for item in content:
                 if not isinstance(item, dict):
                     continue
@@ -879,27 +1060,7 @@ class ClaudeCodeCollector(LogCollector):
                     prompt = f"{cmd_str}\n{prompt}"
                     pending_command.clear()
         elif role == "assistant" and content:
-            if isinstance(content, str):
-                response = content
-            elif isinstance(content, list):
-                response = "\n".join(
-                    item.get("text", "") for item in content if item.get("type") == "text"
-                )
-                if not response:
-                    tool_uses = [item for item in content if item.get("type") == "tool_use"]
-                    if tool_uses:
-                        response = "\n".join(
-                            f"[{tool_use.get('name', 'Unknown')}] {json.dumps(tool_use.get('input', {}), ensure_ascii=False)[:200]}"
-                            for tool_use in tool_uses
-                        )
-                if not response:
-                    thinking_items = [
-                        item.get("thinking", "")
-                        for item in content
-                        if item.get("type") == "thinking"
-                    ]
-                    if thinking_items:
-                        response = "[thinking] " + "\n".join(thinking_items)
+            response = build_assistant_response(content)
 
         if is_command_only:
             return
@@ -907,6 +1068,7 @@ class ClaudeCodeCollector(LogCollector):
         cwd = data.get("cwd", "")
         msg_data = {
             "trace_id": data.get("uuid"),
+            "message_id": message.get("id"),
             "platform": CLAUDE_CODE_PLATFORM,
             "agent_name": CLAUDE_CODE_PLATFORM,
             "session_id": state["session_id"],
@@ -915,6 +1077,7 @@ class ClaudeCodeCollector(LogCollector):
             "role": role,
             "prompt": prompt,
             "response": response,
+            "content_blocks": content_blocks,
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
             "cost_usd": 0,

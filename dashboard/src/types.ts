@@ -14,6 +14,9 @@ export interface ToolCall {
 
 export interface LLMCall {
   id: string;
+  messageId?: string;
+  sourceEventIds?: string[];
+  contentBlocks?: Array<Record<string, unknown>>;
   model: string;
   startTime: number;
   endTime: number;

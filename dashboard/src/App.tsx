@@ -48,8 +48,12 @@ interface RawToolCall {
 
 interface RawLLMCall {
   id?: string;
+  message_id?: string;
+  source_event_ids?: string[];
+  content_blocks?: Array<Record<string, unknown>>;
   model?: string;
   start_time?: string | number;
+  end_time?: string | number;
   timestamp?: string | number;
   duration_ms?: number;
   input_tokens?: number;
@@ -223,14 +227,22 @@ function buildMergedTools(record: RawSessionRecord | RawSubagentLog, recordStart
 function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTime: number) {
   return (record.llm_calls || []).map((call, idx) => {
     const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
-    const duration = call.duration_ms || 0;
+    const endTime = toTimestamp(call.end_time) ?? startTime + (call.duration_ms || 0);
+    const duration = call.duration_ms || Math.max(0, endTime - startTime);
     const inputTokens = call.input_tokens || 0;
     const outputTokens = call.output_tokens || 0;
     return {
-      id: call.id || `llm-${idx}`,
+      id: call.id || call.message_id || `llm-${idx}`,
+      messageId: call.message_id || '',
+      sourceEventIds: Array.isArray(call.source_event_ids)
+        ? call.source_event_ids.filter((item): item is string => typeof item === 'string')
+        : [],
+      contentBlocks: Array.isArray(call.content_blocks)
+        ? call.content_blocks.filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+        : [],
       model: call.model || record.model || 'unknown',
       startTime,
-      endTime: startTime + duration,
+      endTime,
       duration,
       inputTokens,
       outputTokens,
