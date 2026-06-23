@@ -47,6 +47,13 @@ export interface AssistantTurn {
   sourceEventIds?: string[];
 }
 
+export interface PromptThread {
+  id: string;
+  prompt?: string;
+  promptId?: string;
+  assistantTurns: AssistantTurn[];
+}
+
 export interface SubagentLog {
   id: string;
   agentId: string;
@@ -89,6 +96,7 @@ export interface Trace {
   tools: ToolCall[];
   llmCalls: LLMCall[];
   assistantTurns?: AssistantTurn[];
+  promptThreads?: PromptThread[];
   subagentLogs?: SubagentLog[];
   totalTokens: number;
   cost: number;

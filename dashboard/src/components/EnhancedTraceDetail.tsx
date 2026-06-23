@@ -80,6 +80,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   const allTools = useMemo(() => trace.tools || [], [trace.tools]);
   const allLLMCalls = useMemo(() => trace.llmCalls || [], [trace.llmCalls]);
   const assistantTurns = useMemo(() => trace.assistantTurns || [], [trace.assistantTurns]);
+  const promptThreads = useMemo(() => trace.promptThreads || [], [trace.promptThreads]);
   const subagentLogs = useMemo(() => trace.subagentLogs || [], [trace.subagentLogs]);
 
   const groupedSubagentLogs = useMemo(() => {
@@ -145,20 +146,24 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   }, [allLLMCalls]);
 
   const assistantTurnGroups = useMemo(() => {
+    if (promptThreads.length > 0) {
+      return promptThreads;
+    }
+
     if (assistantTurns.length > 0) {
       return assistantTurns.map((turn, index) => ({
-        key: turn.messageId || turn.id || `assistant-turn-${index}`,
+        id: turn.messageId || turn.id || `prompt-thread-${index}`,
         prompt: turn.prompt || '',
         promptId: turn.promptId || '',
-        turn,
+        assistantTurns: [turn],
       }));
     }
 
     return groupedLLMCalls.map((group, index) => ({
-      key: group.promptId || group.key || `assistant-turn-${index}`,
+      id: group.promptId || group.key || `prompt-thread-${index}`,
       prompt: group.prompt,
       promptId: group.promptId || '',
-      turn: {
+      assistantTurns: [{
         id: group.promptId || group.key || `assistant-turn-${index}`,
         messageId: '',
         prompt: group.prompt,
@@ -172,9 +177,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
         childRecords: group.calls,
         childRecordCount: group.calls.length,
         sourceEventIds: group.calls.flatMap((call) => call.sourceEventIds || []),
-      },
+      }],
     }));
-  }, [assistantTurns, groupedLLMCalls]);
+  }, [promptThreads, assistantTurns, groupedLLMCalls]);
 
   const getRelatedToolCalls = (call: LLMCall): ToolCall[] => {
     if (!trace.tools || !call.startTime) return [];
@@ -370,176 +375,196 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       {allLLMCalls.length === 0 ? (
         <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />
       ) : (
-        assistantTurnGroups.map((group, groupIdx) => {
-          const groupKey = group.key;
-          const isGroupExpanded = expandedLLMs.has(groupKey);
-          const cleanedPrompt = cleanSessionText(group.prompt || '');
+        assistantTurnGroups.map((thread, threadIdx) => {
+          const threadKey = thread.id;
+          const isThreadExpanded = expandedLLMs.has(threadKey);
+          const cleanedPrompt = cleanSessionText(thread.prompt || '');
           const promptPreview = cleanedPrompt
             ? `${cleanedPrompt.replace(/\n/g, ' ').slice(0, 80)}${cleanedPrompt.length > 80 ? '...' : ''}`
             : '无提示词';
-          const turn = group.turn;
+          const threadInputTokens = thread.assistantTurns.reduce((sum, turn) => sum + turn.inputTokens, 0);
+          const threadOutputTokens = thread.assistantTurns.reduce((sum, turn) => sum + turn.outputTokens, 0);
+          const assistantTurnCount = thread.assistantTurns.length;
 
           return (
             <div
-              key={groupKey}
+              key={threadKey}
               ref={(node) => {
-                llmGroupRefs.current[groupKey] = node;
+                llmGroupRefs.current[threadKey] = node;
               }}
               className={`rounded-lg border transition-all ${
-                isGroupExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
+                isThreadExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
               }`}
             >
-              <button onClick={() => toggleLLM(groupKey)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
+              <button onClick={() => toggleLLM(threadKey)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
                 <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                  <span className="text-xs text-cyan-400 font-mono">{groupIdx + 1}</span>
+                  <span className="text-xs text-cyan-400 font-mono">{threadIdx + 1}</span>
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-gray-200 truncate">{promptPreview}</div>
                   <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
-                    <span>{turn.childRecordCount} 条 assistant 记录</span>
+                    <span>{assistantTurnCount} 个 assistant turn</span>
                     <span>·</span>
                     <span>
-                      {turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens
+                      {threadInputTokens.toLocaleString()} → {threadOutputTokens.toLocaleString()} tokens
                     </span>
                   </div>
                 </div>
-                {isGroupExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                {isThreadExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
               </button>
 
-              {isGroupExpanded && (
+              {isThreadExpanded && (
                 <div className="border-t border-slate-700/50">
-                  {group.prompt && (
+                  {thread.prompt && (
                     <div className="px-4 py-3 bg-slate-900/30 border-b border-slate-700/50">
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
                           <MessageSquare className="w-3 h-3" /> 用户提示词
                         </span>
                         <button
-                          onClick={() => copyToClipboard(group.prompt, `group-prompt-${groupIdx}`)}
+                          onClick={() => copyToClipboard(thread.prompt || '', `thread-prompt-${threadIdx}`)}
                           className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
                         >
-                          {copiedId === `group-prompt-${groupIdx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                          {copiedId === `group-prompt-${groupIdx}` ? '已复制' : '复制'}
+                          {copiedId === `thread-prompt-${threadIdx}` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          {copiedId === `thread-prompt-${threadIdx}` ? '已复制' : '复制'}
                         </button>
                       </div>
                       <div className="text-sm text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-auto">{cleanedPrompt}</div>
                     </div>
                   )}
 
-                  <div className="px-4 py-3 border-b border-slate-700/50 bg-slate-950/20">
-                    <div className="text-xs font-medium text-cyan-400 flex items-center gap-1 mb-2">
-                      <Layers className="w-3 h-3" /> Assistant turn
-                    </div>
-                    <div className="text-xs text-gray-400 flex flex-wrap gap-x-3 gap-y-1">
-                      <span>{turn.childRecordCount} child records</span>
-                      <span>{turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens</span>
-                      {turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
-                    </div>
-                  </div>
+                  <div className="space-y-3 p-4">
+                    {thread.assistantTurns.map((turn, turnIdx) => {
+                      const turnKey = turn.messageId || turn.id || `${threadKey}-turn-${turnIdx}`;
+                      const isTurnExpanded = expandedLLMs.has(turnKey);
 
-                  <div className="space-y-2 p-4">
-                    {turn.childRecords.map((call, callIdx) => {
-                      const callKey = `call-${groupIdx}-${callIdx}`;
-                      const isCallExpanded = expandedLLMs.has(callKey);
-                      const relatedTools = getRelatedToolCalls(call);
-                      const responseStyle = classifyCallResponse(call, relatedTools);
-                      const formattedToolResponse =
-                        responseStyle.kind === 'tool'
-                          ? relatedTools.map((tool) => ({
-                              name: tool.name,
-                              input: tool.input,
-                            }))
-                          : null;
-                      const toolResultAppendix =
-                        formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
-                          ? relatedTools.map((tool) => ({
-                              name: tool.name,
-                              result: tool.output,
-                              error: tool.error,
-                            }))
-                          : null;
                       return (
-                        <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
-                          <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
-                            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${responseStyle.badge}`}>
-                              <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
+                        <div key={turnKey} className={`rounded border ${isTurnExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
+                          <button onClick={() => toggleLLM(turnKey)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
+                            <div className="w-7 h-7 rounded-full bg-cyan-500/15 flex items-center justify-center">
+                              <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 min-w-0">
-                                <span className={`text-[11px] px-1.5 py-0.5 rounded ${responseStyle.badge}`}>{responseStyle.label}</span>
-                                <div className={`text-sm truncate ${responseStyle.accent}`}>
-                                  {responseStyle.preview
-                                    ? `${responseStyle.preview.replace(/\n/g, ' ').slice(0, 60)}${responseStyle.preview.length > 60 ? '...' : ''}`
-                                    : '无响应内容'}
-                                </div>
-                              </div>
-                              <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2">
-                                <span>{call.model}</span>
-                                <span>·</span>
-                                <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
-                                <span>·</span>
-                                <span>{formatDuration(call.duration)}</span>
-                                {call.sourceEventIds && call.sourceEventIds[0] && (
-                                  <>
-                                    <span>·</span>
-                                    <span className="font-mono">event {call.sourceEventIds[0]}</span>
-                                  </>
-                                )}
+                              <div className="text-sm text-cyan-300">Assistant turn</div>
+                              <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
+                                <span>{turn.childRecordCount} child records</span>
+                                <span>{turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens</span>
+                                {turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
                               </div>
                             </div>
-                            {isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                            {isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
                           </button>
 
-                          {isCallExpanded && (
-                            <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
-                              {call.response && !formattedToolResponse && (
-                                <JsonOrTextBlock
-                                  title={responseStyle.label}
-                                  value={
-                                    responseStyle.kind === 'thinking'
-                                      ? cleanSessionText(call.response).replace(/^\[thinking\]\s*/, '')
-                                      : cleanSessionText(call.response)
-                                  }
-                                  copyId={`llm-response-${callKey}`}
-                                  copiedId={copiedId}
-                                  onCopy={copyToClipboard}
-                                />
-                              )}
-                              {formattedToolResponse && (
-                                <StructuredResponseBlock
-                                  title="工具调用"
-                                  color="violet"
-                                  icon={Wrench}
-                                  value={formattedToolResponse}
-                                  copyId={`llm-tool-calls-${callKey}`}
-                                  copiedId={copiedId}
-                                  onCopy={copyToClipboard}
-                                />
-                              )}
-                              {toolResultAppendix && (
-                                <StructuredResponseBlock
-                                  title="工具结果"
-                                  color="emerald"
-                                  icon={FileText}
-                                  value={toolResultAppendix}
-                                  copyId={`llm-tool-results-${callKey}`}
-                                  copiedId={copiedId}
-                                  onCopy={copyToClipboard}
-                                />
-                              )}
-                              {relatedTools.length > 0 && !formattedToolResponse && (
-                                <div>
-                                  <div className="text-xs font-medium text-violet-400 mb-2">相关工具调用</div>
-                                  <div className="space-y-2">
-                                    {relatedTools.map((tool) => (
-                                      <div key={`${callKey}-${tool.id}`} className="rounded bg-slate-900/40 border border-slate-800 p-2 text-xs text-gray-300">
-                                        <div className="font-medium text-violet-300">{tool.name}</div>
-                                        {tool.input && <pre className="mt-1 whitespace-pre-wrap text-gray-400">{JSON.stringify(tool.input, null, 2)}</pre>}
+                          {isTurnExpanded && (
+                            <div className="border-t border-slate-700/50 space-y-2 p-3">
+                              {turn.childRecords.map((call, callIdx) => {
+                                const callKey = `${turnKey}-call-${callIdx}`;
+                                const isCallExpanded = expandedLLMs.has(callKey);
+                                const relatedTools = getRelatedToolCalls(call);
+                                const responseStyle = classifyCallResponse(call, relatedTools);
+                                const formattedToolResponse =
+                                  responseStyle.kind === 'tool'
+                                    ? relatedTools.map((tool) => ({
+                                        name: tool.name,
+                                        input: tool.input,
+                                      }))
+                                    : null;
+                                const toolResultAppendix =
+                                  formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
+                                    ? relatedTools.map((tool) => ({
+                                        name: tool.name,
+                                        result: tool.output,
+                                        error: tool.error,
+                                      }))
+                                    : null;
+
+                                return (
+                                  <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
+                                    <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
+                                      <div className={`w-6 h-6 rounded-full flex items-center justify-center ${responseStyle.badge}`}>
+                                        <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
                                       </div>
-                                    ))}
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className={`text-[11px] px-1.5 py-0.5 rounded ${responseStyle.badge}`}>{responseStyle.label}</span>
+                                          <div className={`text-sm truncate ${responseStyle.accent}`}>
+                                            {responseStyle.preview
+                                              ? `${responseStyle.preview.replace(/\n/g, ' ').slice(0, 60)}${responseStyle.preview.length > 60 ? '...' : ''}`
+                                              : '无响应内容'}
+                                          </div>
+                                        </div>
+                                        <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2 flex-wrap">
+                                          <span>{call.model}</span>
+                                          <span>·</span>
+                                          <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
+                                          <span>·</span>
+                                          <span>{formatDuration(call.duration)}</span>
+                                          {call.sourceEventIds && call.sourceEventIds[0] && (
+                                            <>
+                                              <span>·</span>
+                                              <span className="font-mono">event {call.sourceEventIds[0]}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                      {isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                                    </button>
+
+                                    {isCallExpanded && (
+                                      <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
+                                        {call.response && !formattedToolResponse && (
+                                          <JsonOrTextBlock
+                                            title={responseStyle.label}
+                                            value={
+                                              responseStyle.kind === 'thinking'
+                                                ? cleanSessionText(call.response).replace(/^\[thinking\]\s*/, '')
+                                                : cleanSessionText(call.response)
+                                            }
+                                            copyId={`llm-response-${callKey}`}
+                                            copiedId={copiedId}
+                                            onCopy={copyToClipboard}
+                                          />
+                                        )}
+                                        {formattedToolResponse && (
+                                          <StructuredResponseBlock
+                                            title="工具调用"
+                                            color="violet"
+                                            icon={Wrench}
+                                            value={formattedToolResponse}
+                                            copyId={`llm-tool-calls-${callKey}`}
+                                            copiedId={copiedId}
+                                            onCopy={copyToClipboard}
+                                          />
+                                        )}
+                                        {toolResultAppendix && (
+                                          <StructuredResponseBlock
+                                            title="工具结果"
+                                            color="emerald"
+                                            icon={FileText}
+                                            value={toolResultAppendix}
+                                            copyId={`llm-tool-results-${callKey}`}
+                                            copiedId={copiedId}
+                                            onCopy={copyToClipboard}
+                                          />
+                                        )}
+                                        {relatedTools.length > 0 && !formattedToolResponse && (
+                                          <div>
+                                            <div className="text-xs font-medium text-violet-400 mb-2">相关工具调用</div>
+                                            <div className="space-y-2">
+                                              {relatedTools.map((tool) => (
+                                                <div key={`${callKey}-${tool.id}`} className="rounded bg-slate-900/40 border border-slate-800 p-2 text-xs text-gray-300">
+                                                  <div className="font-medium text-violet-300">{tool.name}</div>
+                                                  {tool.input && <pre className="mt-1 whitespace-pre-wrap text-gray-400">{JSON.stringify(tool.input, null, 2)}</pre>}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
                                   </div>
-                                </div>
-                              )}
+                                );
+                              })}
                             </div>
                           )}
                         </div>

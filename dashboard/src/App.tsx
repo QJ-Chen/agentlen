@@ -13,7 +13,7 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { AssistantTurn, OverviewStats, ProjectStats, SubagentLog, Trace } from './types';
+import type { AssistantTurn, OverviewStats, ProjectStats, PromptThread, SubagentLog, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
 import { AgentInteractionGraph } from './components/AgentInteractionGraph';
 import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
@@ -340,6 +340,36 @@ function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, recordSt
   });
 }
 
+function buildPromptThreads(assistantTurns: AssistantTurn[]): PromptThread[] {
+  const threads: PromptThread[] = [];
+  let currentThread: PromptThread | null = null;
+
+  for (let index = 0; index < assistantTurns.length; index += 1) {
+    const turn = assistantTurns[index];
+    const promptId = turn.promptId || '';
+    const prompt = turn.prompt || '';
+    const threadKey = promptId || `prompt-thread-${index}`;
+
+    if (
+      !currentThread ||
+      (promptId && currentThread.promptId !== promptId) ||
+      (!promptId && currentThread.prompt !== prompt)
+    ) {
+      currentThread = {
+        id: threadKey,
+        prompt,
+        promptId,
+        assistantTurns: [],
+      };
+      threads.push(currentThread);
+    }
+
+    currentThread.assistantTurns.push(turn);
+  }
+
+  return threads;
+}
+
 function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
   const startTime = toTimestamp(subagent.start_time) ?? 0;
   const endTime = toTimestamp(subagent.end_time);
@@ -384,6 +414,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
   const tools = buildMergedTools(record, recordStartTime);
   const llmCalls = buildLLMCalls(record, recordStartTime);
   const assistantTurns = buildAssistantTurns(record, recordStartTime);
+  const promptThreads = buildPromptThreads(assistantTurns);
   const rawSubagentLogs = Array.isArray(record.metadata?.subagent_logs)
     ? (record.metadata?.subagent_logs as RawSubagentLog[])
     : [];
@@ -412,6 +443,7 @@ function transformSession(record: RawSessionRecord): TraceWithRaw {
     tools,
     llmCalls,
     assistantTurns,
+    promptThreads,
     subagentLogs,
     totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
     cost: record.cost_usd || 0,
