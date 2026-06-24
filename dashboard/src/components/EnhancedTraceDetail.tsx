@@ -378,7 +378,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     scopePrefix,
     jumpable = false,
   }: {
-    thread: { id: string; prompt?: string; promptId?: string; assistantTurns: Array<{ id: string; messageId?: string; inputTokens: number; outputTokens: number; childRecords: LLMCall[]; childRecordCount: number; }> };
+    thread: { id: string; prompt?: string; promptId?: string; assistantTurns: Array<{ id: string; messageId?: string; inputTokens: number; outputTokens: number; totalTokens: number; childRecords: LLMCall[]; childRecordCount: number; }> };
     index: number;
     toolScope: ToolCall[];
     scopePrefix: string;
@@ -393,7 +393,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     const threadInputTokens = thread.assistantTurns.reduce((sum, turn) => sum + turn.inputTokens, 0);
     const threadOutputTokens = thread.assistantTurns.reduce((sum, turn) => sum + turn.outputTokens, 0);
     const assistantTurnCount = thread.assistantTurns.length;
-    const shouldShowThreadTokens = threadInputTokens > 0 || threadOutputTokens > 1;
 
     const renderChildRecord = ({
       call,
@@ -417,7 +416,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
               input: tool.input,
             }))
           : null;
-      const shouldShowCallTokens = showTokenUsage && (call.inputTokens > 0 || call.outputTokens > 1);
       const toolResultAppendix =
         formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
           ? relatedTools.map((tool) => ({
@@ -444,7 +442,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
               </div>
               <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-2 flex-wrap">
                 <span>{call.model}</span>
-                {shouldShowCallTokens && (
+                {showTokenUsage && call.totalTokens > 0 && (
                   <>
                     <span>·</span>
                     <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
@@ -539,7 +537,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
             <div className="text-sm text-gray-200 truncate">{promptPreview}</div>
             <div className="text-xs text-gray-400 mt-0.5 flex items-center gap-2">
               <span>{assistantTurnCount} 个 assistant turn</span>
-              {shouldShowThreadTokens && (
+              {(threadInputTokens > 0 || threadOutputTokens > 0) && (
                 <>
                   <span>·</span>
                   <span>
@@ -577,7 +575,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 const turnKey = `${threadKey}-turn-${turn.messageId || turn.id || turnIdx}`;
                 const isSingleChild = turn.childRecords.length === 1;
                 const isTurnExpanded = isSingleChild ? true : expandedLLMs.has(turnKey);
-                const shouldShowTurnTokens = turn.inputTokens > 0 || turn.outputTokens > 1;
 
                 if (isSingleChild) {
                   return renderChildRecord({
@@ -598,7 +595,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                         <div className="text-sm text-cyan-300">Assistant turn</div>
                         <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
                           <span>{turn.childRecordCount} child records</span>
-                          {shouldShowTurnTokens && <span>{turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens</span>}
+                          {turn.totalTokens > 0 && <span>{turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens</span>}
                           {turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
                         </div>
                       </div>
@@ -644,38 +641,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       )}
     </div>
   );
-
-  const renderSubagentCallGroup = (subagentId: string, group: { prompt: string; calls: LLMCall[] }, groupIdx: number) => {
-    const subagent = subagentLogs.find((item) => item.id === subagentId);
-    const toolScope = subagent?.toolCalls || [];
-    const thread = {
-      id: `${subagentId}-prompt-${groupIdx}`,
-      prompt: group.prompt,
-      promptId: group.calls[0]?.promptId || '',
-      assistantTurns: [{
-        id: `${subagentId}-turn-${groupIdx}`,
-        messageId: '',
-        prompt: group.prompt,
-        promptId: group.calls[0]?.promptId || '',
-        startTime: group.calls[0]?.startTime || 0,
-        endTime: group.calls[group.calls.length - 1]?.endTime || group.calls[group.calls.length - 1]?.startTime || 0,
-        inputTokens: group.calls.reduce((sum, call) => sum + call.inputTokens, 0),
-        outputTokens: group.calls.reduce((sum, call) => sum + call.outputTokens, 0),
-        totalTokens: group.calls.reduce((sum, call) => sum + call.totalTokens, 0),
-        cost: group.calls.reduce((sum, call) => sum + call.cost, 0),
-        childRecords: group.calls,
-        childRecordCount: group.calls.length,
-        sourceEventIds: group.calls.flatMap((call) => call.sourceEventIds || []),
-      }],
-    };
-
-    return renderPromptThreadGroup({
-      thread,
-      index: groupIdx,
-      toolScope,
-      scopePrefix: `subagent-${subagentId}`,
-    });
-  };
 
   const renderSubagents = () => {
     if (subagentLogs.length === 0) {
@@ -744,8 +709,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
                         <span>{formatTime(launchTime)}</span>
-                        <span>·</span>
-                        <span>{totalInputTokens.toLocaleString()} → {totalOutputTokens.toLocaleString()} tokens</span>
+                        {(totalInputTokens > 0 || totalOutputTokens > 0) && (
+                          <>
+                            <span>·</span>
+                            <span>{totalInputTokens.toLocaleString()} → {totalOutputTokens.toLocaleString()} tokens</span>
+                          </>
+                        )}
                         <span>·</span>
                         <span>${totalCost.toFixed(4)}</span>
                         {groupRunningCount > 0 && (
@@ -784,25 +753,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                     {group.subagents.map((subagent, subagentIdx) => {
                       const subagentKey = `${groupKey}-subagent-${subagent.id}`;
                       const isSubagentExpanded = expandedLLMs.has(subagentKey);
-                      const groupedCalls = (() => {
-                        const groups: { prompt: string; calls: LLMCall[] }[] = [];
-                        let current: { prompt: string; calls: LLMCall[] } | null = null;
-                        for (const call of subagent.llmCalls) {
-                          if (!current || current.prompt !== call.prompt) {
-                            current = { prompt: call.prompt || '', calls: [] };
-                            groups.push(current);
-                          }
-                          current.calls.push(call);
-                        }
-                        return groups;
-                      })();
+                      const assistantTurns = subagent.assistantTurns || [];
+                      const promptThreads = subagent.promptThreads || [];
                       const cleanedPrompt = cleanSessionText(subagent.prompt || '');
                       const hasSubagentMeta = !!subagent.meta && Object.keys(subagent.meta).length > 0;
                       const hasSubagentDetails =
                         hasSubagentMeta ||
                         !!(subagent.sessionFilePath && subagent.sessionFilePath.length > 0) ||
                         !!(subagent.toolUseId && subagent.toolUseId.length > 0);
-                      const shouldShowSubagentTokens = subagent.totalTokens > 0;
                       const responseStyle = classifyCallResponse(
                         subagent.llmCalls[subagent.llmCalls.length - 1] || {
                           id: `${subagent.id}-fallback`,
@@ -842,7 +800,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                   <span>{subagent.agentType || 'unknown'}</span>
                                   <span>·</span>
                                   <span>{subagent.model || 'unknown'}</span>
-                                  {shouldShowSubagentTokens && (
+                                  {subagent.totalTokens > 0 && (
                                     <>
                                       <span>·</span>
                                       <span>{subagent.inputTokens.toLocaleString()} → {subagent.outputTokens.toLocaleString()} tokens</span>
@@ -893,13 +851,34 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                   )}
                                 </div>
                               )}
-                              {cleanedPrompt && groupedCalls.length === 0 && (
+                              {cleanedPrompt && promptThreads.length === 0 && (
                                 <PreviewBlock icon={User} label="用户输入" content={truncateText(cleanedPrompt, 800)} />
                               )}
-                              {groupedCalls.length > 0 ? (
+                              {promptThreads.length > 0 ? (
                                 <div className="space-y-3">
-                                  {groupedCalls.map((groupedCall, callGroupIdx) =>
-                                    renderSubagentCallGroup(subagent.id, groupedCall, callGroupIdx),
+                                  {promptThreads.map((thread, threadIdx) =>
+                                    renderPromptThreadGroup({
+                                      thread,
+                                      index: threadIdx,
+                                      toolScope: subagent.toolCalls,
+                                      scopePrefix: `subagent-${subagent.id}`,
+                                    }),
+                                  )}
+                                </div>
+                              ) : assistantTurns.length > 0 ? (
+                                <div className="space-y-3">
+                                  {assistantTurns.map((turn, turnIdx) =>
+                                    renderPromptThreadGroup({
+                                      thread: {
+                                        id: turn.messageId || turn.id || `subagent-${subagent.id}-thread-${turnIdx}`,
+                                        prompt: turn.prompt || '',
+                                        promptId: turn.promptId || '',
+                                        assistantTurns: [turn],
+                                      },
+                                      index: turnIdx,
+                                      toolScope: subagent.toolCalls,
+                                      scopePrefix: `subagent-${subagent.id}`,
+                                    }),
                                   )}
                                 </div>
                               ) : subagent.response ? (

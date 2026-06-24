@@ -96,10 +96,19 @@ interface RawSubagentLog {
   meta?: Record<string, unknown>;
 }
 
-const MIN_NORMAL_SUBAGENT_OUTPUT_TOKENS = 2;
+function normalizeDisplayedTokenUsage(inputTokens?: number, outputTokens?: number) {
+  const normalizedInputTokens = Math.max(0, inputTokens || 0);
+  const normalizedOutputTokens = Math.max(0, outputTokens || 0);
 
-function hasNormalTokenUsage(inputTokens: number, outputTokens: number): boolean {
-  return inputTokens > 0 || outputTokens >= MIN_NORMAL_SUBAGENT_OUTPUT_TOKENS;
+  if (normalizedInputTokens === 0) {
+    return { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+  }
+
+  return {
+    inputTokens: normalizedInputTokens,
+    outputTokens: normalizedOutputTokens,
+    totalTokens: normalizedInputTokens + normalizedOutputTokens,
+  };
 }
 
 interface RawSessionRecord {
@@ -241,8 +250,10 @@ function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTim
         const startTime = toTimestamp(child.start_time || child.timestamp) ?? recordStartTime;
         const endTime = toTimestamp(child.end_time) ?? startTime + (child.duration_ms || 0);
         const duration = child.duration_ms || Math.max(0, endTime - startTime);
-        const inputTokens = child.input_tokens || 0;
-        const outputTokens = child.output_tokens || 0;
+        const { inputTokens, outputTokens, totalTokens } = normalizeDisplayedTokenUsage(
+          child.input_tokens,
+          child.output_tokens,
+        );
         return {
           id: child.id || `${call.id || call.message_id || `llm-${idx}`}-child-${childIdx}`,
           messageId: child.message_id || '',
@@ -255,7 +266,7 @@ function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTim
           duration,
           inputTokens,
           outputTokens,
-          totalTokens: inputTokens + outputTokens,
+          totalTokens,
           cost: child.cost_usd || 0,
           status: child.response ? 'success' : 'streaming',
           prompt: child.prompt || call.prompt || '',
@@ -268,8 +279,10 @@ function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTim
     const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
     const endTime = toTimestamp(call.end_time) ?? startTime + (call.duration_ms || 0);
     const duration = call.duration_ms || Math.max(0, endTime - startTime);
-    const inputTokens = call.input_tokens || 0;
-    const outputTokens = call.output_tokens || 0;
+    const { inputTokens, outputTokens, totalTokens } = normalizeDisplayedTokenUsage(
+      call.input_tokens,
+      call.output_tokens,
+    );
     return [{
       id: call.id || call.message_id || `llm-${idx}`,
       messageId: call.message_id || '',
@@ -282,7 +295,7 @@ function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordStartTim
       duration,
       inputTokens,
       outputTokens,
-      totalTokens: inputTokens + outputTokens,
+      totalTokens,
       cost: call.cost_usd || 0,
       status: call.response ? 'success' : 'streaming',
       prompt: call.prompt || '',
@@ -299,14 +312,15 @@ function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, recordSt
     }
     const startTime = toTimestamp(call.start_time || call.timestamp) ?? recordStartTime;
     const endTime = toTimestamp(call.end_time) ?? startTime + (call.duration_ms || 0);
-    const inputTokens = call.input_tokens || 0;
-    const outputTokens = call.output_tokens || 0;
+    const { inputTokens, outputTokens } = normalizeDisplayedTokenUsage(
+      call.input_tokens,
+      call.output_tokens,
+    );
     const childRecords = call.child_records.map((child, childIdx) => {
       const childStartTime = toTimestamp(child.start_time || child.timestamp) ?? startTime;
       const childEndTime = toTimestamp(child.end_time) ?? childStartTime + (child.duration_ms || 0);
       const childDuration = child.duration_ms || Math.max(0, childEndTime - childStartTime);
-      const childInputTokens = child.input_tokens || 0;
-      const childOutputTokens = child.output_tokens || 0;
+      const normalizedChildUsage = normalizeDisplayedTokenUsage(child.input_tokens, child.output_tokens);
       return {
         id: child.id || `${call.id || call.message_id || `turn-${idx}`}-child-${childIdx}`,
         messageId: child.message_id || '',
@@ -317,9 +331,9 @@ function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, recordSt
         startTime: childStartTime,
         endTime: childEndTime,
         duration: childDuration,
-        inputTokens: childInputTokens,
-        outputTokens: childOutputTokens,
-        totalTokens: childInputTokens + childOutputTokens,
+        inputTokens: normalizedChildUsage.inputTokens,
+        outputTokens: normalizedChildUsage.outputTokens,
+        totalTokens: normalizedChildUsage.totalTokens,
         cost: child.cost_usd || 0,
         status: child.response ? 'success' : 'streaming',
         prompt: child.prompt || call.prompt || '',
@@ -386,21 +400,13 @@ function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
   const llmCalls = buildLLMCalls(subagent, startTime);
   const assistantTurns = buildAssistantTurns(subagent, startTime);
   const promptThreads = buildPromptThreads(assistantTurns);
-  const subagentInputTokens = subagent.input_tokens || 0;
-  const subagentOutputTokens = subagent.output_tokens || 0;
-  const normalAssistantTurns = assistantTurns.filter((turn) => hasNormalTokenUsage(turn.inputTokens, turn.outputTokens));
-  const normalChildCalls = llmCalls.filter((call) => hasNormalTokenUsage(call.inputTokens, call.outputTokens));
-  const preferredInputTokens = normalAssistantTurns.length > 0
-    ? normalAssistantTurns.reduce((sum, turn) => sum + turn.inputTokens, 0)
-    : normalChildCalls.length > 0
-      ? normalChildCalls.reduce((sum, call) => sum + call.inputTokens, 0)
-      : subagentInputTokens;
-  const preferredOutputTokens = normalAssistantTurns.length > 0
-    ? normalAssistantTurns.reduce((sum, turn) => sum + turn.outputTokens, 0)
-    : normalChildCalls.length > 0
-      ? normalChildCalls.reduce((sum, call) => sum + call.outputTokens, 0)
-      : subagentOutputTokens;
-  const showTokenUsage = hasNormalTokenUsage(preferredInputTokens, preferredOutputTokens);
+  const normalizedSubagentUsage = normalizeDisplayedTokenUsage(
+    subagent.input_tokens,
+    subagent.output_tokens,
+  );
+  const assistantTurnInputTokens = assistantTurns.reduce((sum, turn) => sum + turn.inputTokens, 0);
+  const assistantTurnOutputTokens = assistantTurns.reduce((sum, turn) => sum + turn.outputTokens, 0);
+  const hasAssistantTurnUsage = assistantTurnInputTokens > 0 || assistantTurnOutputTokens > 0;
 
   return {
     id: subagent.id || subagent.agent_id || `subagent-${startTime}`,
@@ -421,9 +427,11 @@ function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
     model: subagent.model || 'unknown',
     prompt: subagent.prompt || '',
     response: subagent.response || '',
-    inputTokens: showTokenUsage ? preferredInputTokens : 0,
-    outputTokens: showTokenUsage ? preferredOutputTokens : 0,
-    totalTokens: showTokenUsage ? preferredInputTokens + preferredOutputTokens : 0,
+    inputTokens: hasAssistantTurnUsage ? assistantTurnInputTokens : normalizedSubagentUsage.inputTokens,
+    outputTokens: hasAssistantTurnUsage ? assistantTurnOutputTokens : normalizedSubagentUsage.outputTokens,
+    totalTokens: hasAssistantTurnUsage
+      ? assistantTurnInputTokens + assistantTurnOutputTokens
+      : normalizedSubagentUsage.totalTokens,
     cost: subagent.cost_usd || 0,
     toolCalls,
     llmCalls,
