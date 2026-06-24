@@ -52,6 +52,10 @@ export function formatInteger(value: number): string {
   return clampNonNegative(value).toLocaleString();
 }
 
+export function formatTokenPair(inputTokens: number, outputTokens: number): string {
+  return `${formatInteger(inputTokens)} → ${formatInteger(outputTokens)} tokens`;
+}
+
 export function relativeTime(timestamp: number, now: number = Date.now()): string {
   const delta = clampNonNegative(now - timestamp);
   if (delta < 60_000) return 'just now';

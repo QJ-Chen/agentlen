@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { ComponentType } from 'react';
 import {
   Activity,
   Bot,
@@ -21,8 +20,23 @@ import {
   Wrench,
   X as XIcon,
 } from 'lucide-react';
-import type { LLMCall, ToolCall, Trace } from '../types';
-import { cleanSessionText, formatDuration, truncateText } from '../lib/sessionUtils';
+import type { LLMCall, PromptThread, ToolCall, Trace } from '../types';
+import {
+  assistantTurnsToPromptThreads,
+  deriveRenderablePromptThreads,
+  groupSubagentLaunches,
+} from '../lib/conversationModel';
+import { cleanSessionText, formatDuration, formatTokenPair, truncateText } from '../lib/sessionUtils';
+import {
+  EmptyState,
+  InfoField,
+  JsonOrTextBlock,
+  MetricCard,
+  PathField,
+  PreviewBlock,
+  StructuredResponseBlock,
+  SummaryList,
+} from './TraceDetailBlocks';
 
 interface EnhancedTraceDetailProps {
   trace: Trace;
@@ -83,103 +97,18 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   const promptThreads = useMemo(() => trace.promptThreads || [], [trace.promptThreads]);
   const subagentLogs = useMemo(() => trace.subagentLogs || [], [trace.subagentLogs]);
 
-  const groupedSubagentLogs = useMemo(() => {
-    const groups = new Map<
-      string,
-      {
-        batchId: string;
-        launchTimestamp?: number;
-        subagents: typeof subagentLogs;
-      }
-    >();
+  const groupedSubagentLogs = useMemo(() => groupSubagentLaunches(subagentLogs), [subagentLogs]);
 
-    for (const subagent of subagentLogs) {
-      const batchId = subagent.launchBatchId || subagent.toolUseId || subagent.id;
-      const existing = groups.get(batchId);
-      if (existing) {
-        existing.subagents.push(subagent);
-        if (subagent.launchTimestamp && (!existing.launchTimestamp || subagent.launchTimestamp < existing.launchTimestamp)) {
-          existing.launchTimestamp = subagent.launchTimestamp;
-        }
-      } else {
-        groups.set(batchId, {
-          batchId,
-          launchTimestamp: subagent.launchTimestamp,
-          subagents: [subagent],
-        });
-      }
-    }
-
-    return Array.from(groups.values())
-      .map((group) => ({
-        ...group,
-        subagents: [...group.subagents].sort((a, b) => {
-          const orderA = a.launchOrder ?? Number.MAX_SAFE_INTEGER;
-          const orderB = b.launchOrder ?? Number.MAX_SAFE_INTEGER;
-          if (orderA !== orderB) return orderA - orderB;
-          return (a.startTime || 0) - (b.startTime || 0);
-        }),
-      }))
-      .sort((a, b) => (a.launchTimestamp || a.subagents[0]?.startTime || 0) - (b.launchTimestamp || b.subagents[0]?.startTime || 0));
-  }, [subagentLogs]);
-
-  const groupedLLMCalls = useMemo(() => {
-    const groups: { key: string; prompt: string; promptId?: string; calls: LLMCall[] }[] = [];
-    let currentGroup: { key: string; prompt: string; promptId?: string; calls: LLMCall[] } | null = null;
-
-    for (let index = 0; index < allLLMCalls.length; index += 1) {
-      const call = allLLMCalls[index];
-      const promptId = call.promptId || '';
-      const groupKey = promptId || `group-${index}`;
-      if (
-        !currentGroup ||
-        (promptId && currentGroup.promptId !== promptId) ||
-        (!promptId && currentGroup.prompt !== (call.prompt || ''))
-      ) {
-        currentGroup = { key: groupKey, prompt: call.prompt || '', promptId, calls: [] };
-        groups.push(currentGroup);
-      }
-      currentGroup.calls.push(call);
-    }
-
-    return groups;
-  }, [allLLMCalls]);
-
-  const assistantTurnGroups = useMemo(() => {
-    if (promptThreads.length > 0) {
-      return promptThreads;
-    }
-
-    if (assistantTurns.length > 0) {
-      return assistantTurns.map((turn, index) => ({
-        id: turn.messageId || turn.id || `prompt-thread-${index}`,
-        prompt: turn.prompt || '',
-        promptId: turn.promptId || '',
-        assistantTurns: [turn],
-      }));
-    }
-
-    return groupedLLMCalls.map((group, index) => ({
-      id: group.promptId || group.key || `prompt-thread-${index}`,
-      prompt: group.prompt,
-      promptId: group.promptId || '',
-      assistantTurns: [{
-        id: group.promptId || group.key || `assistant-turn-${index}`,
-        messageId: '',
-        prompt: group.prompt,
-        promptId: group.promptId || '',
-        startTime: group.calls[0]?.startTime || 0,
-        endTime: group.calls[group.calls.length - 1]?.endTime || group.calls[group.calls.length - 1]?.startTime || 0,
-        inputTokens: group.calls.reduce((sum, call) => sum + call.inputTokens, 0),
-        outputTokens: group.calls.reduce((sum, call) => sum + call.outputTokens, 0),
-        totalTokens: group.calls.reduce((sum, call) => sum + call.totalTokens, 0),
-        cost: group.calls.reduce((sum, call) => sum + call.cost, 0),
-        childRecords: group.calls,
-        childRecordCount: group.calls.length,
-        sourceEventIds: group.calls.flatMap((call) => call.sourceEventIds || []),
-      }],
-    }));
-  }, [promptThreads, assistantTurns, groupedLLMCalls]);
+  const assistantTurnGroups = useMemo(
+    () =>
+      deriveRenderablePromptThreads({
+        promptThreads,
+        assistantTurns,
+        llmCalls: allLLMCalls,
+        assistantTurnIdPrefix: 'prompt-thread',
+      }),
+    [promptThreads, assistantTurns, allLLMCalls],
+  );
 
   const getRelatedToolCalls = (call: LLMCall, toolScope: ToolCall[] = trace.tools || []): ToolCall[] => {
     if (!toolScope || !call.startTime) return [];
@@ -353,7 +282,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 color="text-cyan-400"
                 rows={allLLMCalls.slice(0, 5).map((call) => ({
                   label: call.model,
-                  meta: `${call.inputTokens.toLocaleString()} → ${call.outputTokens.toLocaleString()} tokens`,
+                  meta: formatTokenPair(call.inputTokens, call.outputTokens),
                 }))}
               />
               <SummaryList
@@ -378,7 +307,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     scopePrefix,
     jumpable = false,
   }: {
-    thread: { id: string; prompt?: string; promptId?: string; assistantTurns: Array<{ id: string; messageId?: string; inputTokens: number; outputTokens: number; totalTokens: number; childRecords: LLMCall[]; childRecordCount: number; }> };
+    thread: PromptThread;
     index: number;
     toolScope: ToolCall[];
     scopePrefix: string;
@@ -445,7 +374,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 {showTokenUsage && call.totalTokens > 0 && (
                   <>
                     <span>·</span>
-                    <span>{call.inputTokens.toLocaleString()} → {call.outputTokens.toLocaleString()} tokens</span>
+                    <span>{formatTokenPair(call.inputTokens, call.outputTokens)}</span>
                   </>
                 )}
                 <span>·</span>
@@ -541,7 +470,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 <>
                   <span>·</span>
                   <span>
-                    {threadInputTokens.toLocaleString()} → {threadOutputTokens.toLocaleString()} tokens
+                    {formatTokenPair(threadInputTokens, threadOutputTokens)}
                   </span>
                 </>
               )}
@@ -595,7 +524,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                         <div className="text-sm text-cyan-300">Assistant turn</div>
                         <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
                           <span>{turn.childRecordCount} child records</span>
-                          {turn.totalTokens > 0 && <span>{turn.inputTokens.toLocaleString()} → {turn.outputTokens.toLocaleString()} tokens</span>}
+                          {turn.totalTokens > 0 && <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>}
                           {turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
                         </div>
                       </div>
@@ -712,7 +641,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                         {(totalInputTokens > 0 || totalOutputTokens > 0) && (
                           <>
                             <span>·</span>
-                            <span>{totalInputTokens.toLocaleString()} → {totalOutputTokens.toLocaleString()} tokens</span>
+                            <span>{formatTokenPair(totalInputTokens, totalOutputTokens)}</span>
                           </>
                         )}
                         <span>·</span>
@@ -803,7 +732,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                   {subagent.totalTokens > 0 && (
                                     <>
                                       <span>·</span>
-                                      <span>{subagent.inputTokens.toLocaleString()} → {subagent.outputTokens.toLocaleString()} tokens</span>
+                                      <span>{formatTokenPair(subagent.inputTokens, subagent.outputTokens)}</span>
                                     </>
                                   )}
                                   <span>·</span>
@@ -867,15 +796,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                                 </div>
                               ) : assistantTurns.length > 0 ? (
                                 <div className="space-y-3">
-                                  {assistantTurns.map((turn, turnIdx) =>
+                                  {assistantTurnsToPromptThreads(assistantTurns, `subagent-${subagent.id}`).map((thread, threadIdx) =>
                                     renderPromptThreadGroup({
-                                      thread: {
-                                        id: turn.messageId || turn.id || `subagent-${subagent.id}-thread-${turnIdx}`,
-                                        prompt: turn.prompt || '',
-                                        promptId: turn.promptId || '',
-                                        assistantTurns: [turn],
-                                      },
-                                      index: turnIdx,
+                                      thread,
+                                      index: threadIdx,
                                       toolScope: subagent.toolCalls,
                                       scopePrefix: `subagent-${subagent.id}`,
                                     }),
@@ -968,20 +892,16 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     );
   };
 
+  const rawJson = JSON.stringify(typedTrace.raw || trace, null, 2);
+
   const renderRaw = () => (
-    <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-900/50 border-b border-slate-800">
-        <span className="text-xs text-gray-400">原始 Session 记录</span>
-        <button
-          onClick={() => copyToClipboard(JSON.stringify(typedTrace.raw || trace, null, 2), 'raw-trace')}
-          className="text-xs text-gray-500 hover:text-white flex items-center gap-1"
-        >
-          {copiedId === 'raw-trace' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copiedId === 'raw-trace' ? '已复制' : '复制'}
-        </button>
-      </div>
-      <pre className="p-4 text-xs text-gray-300 overflow-auto max-h-[32rem] whitespace-pre-wrap font-mono">{JSON.stringify(typedTrace.raw || trace, null, 2)}</pre>
-    </div>
+    <JsonOrTextBlock
+      title="原始 Session 记录"
+      value={rawJson}
+      copyId="raw-trace"
+      copiedId={copiedId}
+      onCopy={copyToClipboard}
+    />
   );
 
   return (
@@ -1042,197 +962,5 @@ function statusBadgeTone(status: Trace['status']): string {
   }
 }
 
-function MetricCard({
-  icon: Icon,
-  color,
-  value,
-  label,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  color: string;
-  value: string;
-  label: string;
-}) {
-  return (
-    <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
-      <Icon className={`w-6 h-6 mx-auto mb-2 ${color}`} />
-      <div className="text-2xl font-bold">{value}</div>
-      <div className="text-xs text-gray-500">{label}</div>
-    </div>
-  );
-}
-
-function InfoField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div>
-      <span className="text-gray-500 block text-xs mb-1">{label}</span>
-      <span className={mono ? 'font-mono text-xs' : 'font-medium'}>{value}</span>
-    </div>
-  );
-}
-
-function PathField({
-  label,
-  value,
-  actionLabel,
-  actionIcon: ActionIcon,
-  actionPending = false,
-  onAction,
-}: {
-  label: string;
-  value: string;
-  actionLabel?: string;
-  actionIcon?: ComponentType<{ className?: string }>;
-  actionPending?: boolean;
-  onAction?: () => void;
-}) {
-  return (
-    <div className="mt-3 flex items-start justify-between gap-3">
-      <div className="min-w-0 flex items-start gap-2">
-        <span className="text-xs text-gray-500 shrink-0">{label}:</span>
-        <code className="text-xs text-gray-300 font-mono break-all">{value}</code>
-      </div>
-      {actionLabel && ActionIcon && onAction && (
-        <button
-          onClick={onAction}
-          disabled={actionPending}
-          className="shrink-0 inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-600 hover:text-white disabled:opacity-60"
-        >
-          <ActionIcon className="w-3 h-3" />
-          {actionPending ? 'Opening…' : actionLabel}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function PreviewBlock({
-  icon: Icon,
-  label,
-  content,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  label: string;
-  content: string;
-}) {
-  return (
-    <div>
-      <div className="flex items-center gap-1 mb-1">
-        <Icon className="w-3 h-3 text-gray-500" />
-        <span className="text-xs text-gray-500">{label}</span>
-      </div>
-      <div className="text-sm text-gray-200 bg-slate-900/50 rounded p-2 border border-slate-700/50 whitespace-pre-wrap">{content}</div>
-    </div>
-  );
-}
-
-function SummaryList({ title, color, rows }: { title: string; color: string; rows: Array<{ label: string; meta: string }> }) {
-  return (
-    <div>
-      <h4 className={`text-xs font-medium mb-2 ${color}`}>{title}</h4>
-      <div className="space-y-1">
-        {rows.map((row, idx) => (
-          <div key={`${row.label}-${idx}`} className="flex items-center justify-between gap-3 text-sm">
-            <span className="truncate flex-1">{row.label}</span>
-            <span className="text-xs text-gray-500">{row.meta}</span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function EmptyState({ icon: Icon, label }: { icon: ComponentType<{ className?: string }>; label: string }) {
-  return (
-    <div className="text-center py-8 text-gray-500">
-      <Icon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-      <p>{label}</p>
-    </div>
-  );
-}
-
-function JsonOrTextBlock({
-  title,
-  value,
-  copyId,
-  copiedId,
-  onCopy,
-}: {
-  title: string;
-  value: unknown;
-  copyId: string;
-  copiedId: string | null;
-  onCopy: (text: string, id: string) => void;
-}) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
-  return (
-    <div className="mt-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-blue-400 flex items-center gap-1">
-          <FileText className="w-3 h-3" />
-          {title}
-        </span>
-        <button onClick={() => onCopy(text, copyId)} className="text-xs text-gray-500 hover:text-white flex items-center gap-1">
-          {copiedId === copyId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copiedId === copyId ? '已复制' : '复制'}
-        </button>
-      </div>
-      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
-        <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">{text}</pre>
-      </div>
-    </div>
-  );
-}
-
-function StructuredResponseBlock({
-  title,
-  color,
-  icon: Icon,
-  value,
-  copyId,
-  copiedId,
-  onCopy,
-}: {
-  title: string;
-  color: 'violet' | 'emerald';
-  icon: ComponentType<{ className?: string }>;
-  value: unknown;
-  copyId: string;
-  copiedId: string | null;
-  onCopy: (text: string, id: string) => void;
-}) {
-  const palette =
-    color === 'violet'
-      ? {
-          label: 'text-violet-300',
-          border: 'border-violet-500/30',
-          bg: 'bg-violet-500/10',
-          text: 'text-violet-100',
-        }
-      : {
-          label: 'text-emerald-300',
-          border: 'border-emerald-500/30',
-          bg: 'bg-emerald-500/10',
-          text: 'text-emerald-100',
-        };
-
-  return (
-    <div className={`mt-3 rounded-lg border ${palette.border} ${palette.bg} p-3`}>
-      <div className="flex items-center justify-between mb-2">
-        <span className={`text-xs font-medium flex items-center gap-1 ${palette.label}`}>
-          <Icon className="w-3 h-3" />
-          {title}
-        </span>
-        <button onClick={() => onCopy(JSON.stringify(value, null, 2), copyId)} className="text-xs text-gray-500 hover:text-white flex items-center gap-1">
-          {copiedId === copyId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-          {copiedId === copyId ? '已复制' : '复制'}
-        </button>
-      </div>
-      <div className="bg-slate-950/70 rounded border border-slate-800 overflow-hidden">
-        <pre className={`p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap font-mono ${palette.text}`}>{JSON.stringify(value, null, 2)}</pre>
-      </div>
-    </div>
-  );
-}
 
 export default EnhancedTraceDetail;

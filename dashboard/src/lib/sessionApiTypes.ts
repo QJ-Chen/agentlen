@@ -1,0 +1,98 @@
+import type { ProjectStats } from '../types';
+
+export interface RawToolCall {
+  tool_use_id?: string;
+  tool_name?: string;
+  name?: string;
+  timestamp?: string | number;
+  duration_ms?: number;
+  is_error?: boolean;
+  error?: string;
+  error_message?: string;
+  input?: Record<string, unknown>;
+  input_args?: Record<string, unknown>;
+  output?: unknown;
+  output_result?: unknown;
+  assistant_turn_id?: string;
+  assistant_message_id?: string;
+  assistant_record_id?: string;
+}
+
+export interface RawLLMCall {
+  id?: string;
+  message_id?: string;
+  source_event_ids?: string[];
+  child_records?: RawLLMCall[];
+  child_record_count?: number;
+  is_assistant_turn?: boolean;
+  model?: string;
+  start_time?: string | number;
+  end_time?: string | number;
+  timestamp?: string | number;
+  duration_ms?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  prompt?: string;
+  response?: string;
+  prompt_id?: string;
+}
+
+export interface RawSubagentLog {
+  id?: string;
+  agent_id?: string;
+  agent_type?: string;
+  description?: string;
+  tool_use_id?: string;
+  launch_batch_id?: string;
+  launch_timestamp?: string | number;
+  launch_order?: number;
+  launch_prompt_id?: string;
+  launch_user_prompt?: string;
+  session_file_path?: string;
+  start_time?: string | number;
+  end_time?: string | number;
+  duration_ms?: number;
+  status?: string;
+  model?: string;
+  prompt?: string;
+  response?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  tool_calls?: RawToolCall[];
+  llm_calls?: RawLLMCall[];
+  meta?: Record<string, unknown>;
+}
+
+export interface RawSessionRecord {
+  id?: string | number;
+  trace_id?: string;
+  session_id?: string;
+  agent_name?: string;
+  platform?: 'claude-code';
+  status?: string;
+  start_time?: string | number;
+  end_time?: string | number;
+  duration_ms?: number;
+  tool_calls?: RawToolCall[];
+  llm_calls?: RawLLMCall[];
+  total_tokens?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  project_path?: string;
+  session_file_path?: string;
+  prompt?: string;
+  response?: string;
+  model?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface SessionsResponse {
+  sessions: RawSessionRecord[];
+}
+
+export interface ProjectsResponse {
+  projects: ProjectStats[];
+}
