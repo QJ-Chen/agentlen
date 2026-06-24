@@ -96,6 +96,12 @@ interface RawSubagentLog {
   meta?: Record<string, unknown>;
 }
 
+const MIN_NORMAL_SUBAGENT_OUTPUT_TOKENS = 2;
+
+function hasNormalTokenUsage(inputTokens: number, outputTokens: number): boolean {
+  return inputTokens > 0 || outputTokens >= MIN_NORMAL_SUBAGENT_OUTPUT_TOKENS;
+}
+
 interface RawSessionRecord {
   id?: string | number;
   trace_id?: string;
@@ -378,8 +384,23 @@ function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
   const duration = subagent.duration_ms || (endTime ? Math.max(0, endTime - startTime) : 0);
   const toolCalls = buildMergedTools(subagent, startTime);
   const llmCalls = buildLLMCalls(subagent, startTime);
-  const inputTokens = subagent.input_tokens || 0;
-  const outputTokens = subagent.output_tokens || 0;
+  const assistantTurns = buildAssistantTurns(subagent, startTime);
+  const promptThreads = buildPromptThreads(assistantTurns);
+  const subagentInputTokens = subagent.input_tokens || 0;
+  const subagentOutputTokens = subagent.output_tokens || 0;
+  const normalAssistantTurns = assistantTurns.filter((turn) => hasNormalTokenUsage(turn.inputTokens, turn.outputTokens));
+  const normalChildCalls = llmCalls.filter((call) => hasNormalTokenUsage(call.inputTokens, call.outputTokens));
+  const preferredInputTokens = normalAssistantTurns.length > 0
+    ? normalAssistantTurns.reduce((sum, turn) => sum + turn.inputTokens, 0)
+    : normalChildCalls.length > 0
+      ? normalChildCalls.reduce((sum, call) => sum + call.inputTokens, 0)
+      : subagentInputTokens;
+  const preferredOutputTokens = normalAssistantTurns.length > 0
+    ? normalAssistantTurns.reduce((sum, turn) => sum + turn.outputTokens, 0)
+    : normalChildCalls.length > 0
+      ? normalChildCalls.reduce((sum, call) => sum + call.outputTokens, 0)
+      : subagentOutputTokens;
+  const showTokenUsage = hasNormalTokenUsage(preferredInputTokens, preferredOutputTokens);
 
   return {
     id: subagent.id || subagent.agent_id || `subagent-${startTime}`,
@@ -400,12 +421,14 @@ function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
     model: subagent.model || 'unknown',
     prompt: subagent.prompt || '',
     response: subagent.response || '',
-    inputTokens,
-    outputTokens,
-    totalTokens: inputTokens + outputTokens,
+    inputTokens: showTokenUsage ? preferredInputTokens : 0,
+    outputTokens: showTokenUsage ? preferredOutputTokens : 0,
+    totalTokens: showTokenUsage ? preferredInputTokens + preferredOutputTokens : 0,
     cost: subagent.cost_usd || 0,
     toolCalls,
     llmCalls,
+    assistantTurns,
+    promptThreads,
     meta: subagent.meta || {},
   };
 }

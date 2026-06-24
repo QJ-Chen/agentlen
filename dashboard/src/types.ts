@@ -82,6 +82,8 @@ export interface SubagentLog {
   cost: number;
   toolCalls: ToolCall[];
   llmCalls: LLMCall[];
+  assistantTurns?: AssistantTurn[];
+  promptThreads?: PromptThread[];
   meta?: Record<string, unknown>;
 }
 
