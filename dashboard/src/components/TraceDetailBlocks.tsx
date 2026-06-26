@@ -150,8 +150,8 @@ export function JsonOrTextBlock({
           {copiedId === copyId ? '已复制' : '复制'}
         </button>
       </div>
-      <div className="bg-slate-950 rounded border border-slate-800 overflow-hidden">
-        <pre className="p-3 text-xs text-blue-300 overflow-auto max-h-60 whitespace-pre-wrap font-mono">{text}</pre>
+      <div className="bg-slate-900/70 rounded border border-slate-700/70 overflow-hidden shadow-inner shadow-slate-950/20">
+        <pre className="p-3 text-xs text-blue-200 overflow-auto max-h-60 whitespace-pre-wrap font-mono">{text}</pre>
       </div>
     </div>
   );
@@ -201,7 +201,7 @@ export function StructuredResponseBlock({
           {copiedId === copyId ? '已复制' : '复制'}
         </button>
       </div>
-      <div className="bg-slate-950/70 rounded border border-slate-800 overflow-hidden">
+      <div className="bg-slate-900/60 rounded border border-slate-700/60 overflow-hidden shadow-inner shadow-slate-950/10">
         <pre className={`p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap font-mono ${palette.text}`}>{JSON.stringify(value, null, 2)}</pre>
       </div>
     </div>

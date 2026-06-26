@@ -35,7 +35,6 @@ import {
   PathField,
   PreviewBlock,
   StructuredResponseBlock,
-  SummaryList,
 } from './TraceDetailBlocks';
 
 interface EnhancedTraceDetailProps {
@@ -216,21 +215,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   ] as const;
 
   const renderOverview = () => {
-    const rawTrace = typedTrace.raw || {};
-    const rawPrompt = typeof rawTrace.prompt === 'string' ? rawTrace.prompt : '';
-    const rawResponse = typeof rawTrace.response === 'string' ? rawTrace.response : '';
-    const cleanedPrompt = cleanSessionText(rawPrompt || trace.prompt || '');
-    const cleanedResponse = cleanSessionText(rawResponse || trace.response || '');
     const platformConfig = PLATFORM_CONFIG[trace.platform];
-    const rawModels = typedTrace.metadata?.models;
-    const models = Array.isArray(rawModels) ? rawModels.filter((item): item is string => typeof item === 'string') : [];
 
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <MetricCard icon={Clock} color="text-blue-400" value={formatDuration(trace.duration)} label="会话时长" />
+          <MetricCard icon={MessageSquare} color="text-cyan-400" value={String(assistantTurnGroups.length)} label="提示词分组" />
           <MetricCard icon={Wrench} color="text-violet-400" value={String(allTools.length)} label="工具调用" />
-          <MetricCard icon={Hash} color="text-cyan-400" value={trace.totalTokens.toLocaleString()} label="总 Tokens" />
           <MetricCard icon={DollarSign} color="text-emerald-400" value={`$${trace.cost.toFixed(4)}`} label="总成本" />
         </div>
 
@@ -247,55 +239,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 {platformConfig.name}
               </span>
             </div>
-            <InfoField label="状态" value={statusLabel(trace.status)} />
             <InfoField label="开始时间" value={formatTime(trace.startTime)} />
-            <InfoField label="模型" value={trace.model || models.join(', ') || 'unknown'} />
+            <InfoField label="最后活动" value={formatTime(trace.lastRequestTime)} />
             <InfoField label="Session ID" value={trace.sessionId} mono />
           </div>
           {trace.projectPath && <PathField label="项目路径" value={trace.projectPath} actionLabel="Open project" actionIcon={ExternalLink} actionPending={openingTarget === 'project'} onAction={() => void openPath('project')} />}
           {trace.sessionFilePath && <PathField label="Session 文件" value={trace.sessionFilePath} actionLabel="Open folder" actionIcon={ExternalLink} actionPending={openingTarget === 'session_folder'} onAction={() => void openPath('session_folder')} />}
           {openError && <div className="mt-3 text-xs text-red-300 bg-red-950/30 border border-red-900/30 rounded px-3 py-2">{openError}</div>}
         </div>
-
-        {(cleanedPrompt || cleanedResponse) && (
-          <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-            <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
-              <Sparkles className="w-4 h-4" />
-              Session 预览
-            </h3>
-            <div className="space-y-3">
-              {cleanedPrompt && <PreviewBlock icon={User} label="用户输入" content={truncateText(cleanedPrompt, 600)} />}
-              {cleanedResponse && <PreviewBlock icon={Bot} label="助手输出" content={truncateText(cleanedResponse, 600)} />}
-            </div>
-          </div>
-        )}
-
-        {(allTools.length > 0 || allLLMCalls.length > 0) && (
-          <div className="bg-slate-800/30 rounded-lg p-4 border border-slate-700/50">
-            <h3 className="text-sm font-semibold text-gray-400 mb-3 flex items-center gap-2">
-              <Layers className="w-4 h-4" />
-              会话摘要
-            </h3>
-            <div className="grid md:grid-cols-2 gap-4 text-sm">
-              <SummaryList
-                title={`LLM 调用 (${allLLMCalls.length})`}
-                color="text-cyan-400"
-                rows={allLLMCalls.slice(0, 5).map((call) => ({
-                  label: call.model,
-                  meta: formatTokenPair(call.inputTokens, call.outputTokens),
-                }))}
-              />
-              <SummaryList
-                title={`工具调用 (${allTools.length})`}
-                color="text-violet-400"
-                rows={allTools.slice(0, 5).map((tool) => ({
-                  label: tool.name,
-                  meta: formatDuration(tool.duration),
-                }))}
-              />
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -355,7 +306,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
           : null;
 
       return (
-        <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
+        <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/55 border-slate-600 shadow-sm shadow-slate-950/10' : 'bg-slate-800/40 border-slate-700/50'}`}>
           <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
             <div className={`w-6 h-6 rounded-full flex items-center justify-center ${responseStyle.badge}`}>
               <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
@@ -391,7 +342,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
           </button>
 
           {isCallExpanded && (
-            <div className="px-3 pb-3 border-t border-slate-700/50 space-y-3">
+            <div className="px-3 pb-3 pt-3 border-t border-slate-700/50 space-y-3 bg-slate-900/10">
               {call.response && !formattedToolResponse && (
                 <JsonOrTextBlock
                   title={responseStyle.label}
@@ -427,7 +378,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                   onCopy={copyToClipboard}
                 />
               )}
-              {relatedTools.length > 0 && !formattedToolResponse && (
+              {relatedTools.length > 0 && !formattedToolResponse && responseStyle.kind !== 'thinking' && (
                 <div>
                   <div className="text-xs font-medium text-violet-400 mb-2">相关工具调用</div>
                   <div className="space-y-2">
@@ -455,7 +406,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
           }
         }}
         className={`rounded-lg border transition-all ${
-          isThreadExpanded ? 'bg-slate-800/50 border-slate-600' : 'bg-slate-800/30 border-slate-700/50'
+          isThreadExpanded ? 'bg-slate-800/40 border-slate-600 shadow-sm shadow-slate-950/10' : 'bg-slate-800/30 border-slate-700/50'
         }`}
       >
         <button onClick={() => toggleLLM(threadKey)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
@@ -482,7 +433,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
         {isThreadExpanded && (
           <div className="border-t border-slate-700/50">
             {thread.prompt && (
-              <div className="px-4 py-3 bg-slate-900/30 border-b border-slate-700/50">
+              <div className="px-4 py-3 bg-slate-900/15 border-b border-slate-700/50">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
                     <MessageSquare className="w-3 h-3" /> 用户提示词
@@ -515,7 +466,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 }
 
                 return (
-                  <div key={turnKey} className={`rounded border ${isTurnExpanded ? 'bg-slate-800/70 border-slate-600' : 'bg-slate-800/40 border-slate-700/50'}`}>
+                  <div key={turnKey} className={`rounded border ${isTurnExpanded ? 'bg-slate-800/55 border-slate-600 shadow-sm shadow-slate-950/10' : 'bg-slate-800/40 border-slate-700/50'}`}>
                     <button onClick={() => toggleLLM(turnKey)} className="w-full px-4 py-3 flex items-center gap-3 text-left">
                       <div className="w-7 h-7 rounded-full bg-cyan-500/15 flex items-center justify-center">
                         <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
@@ -532,7 +483,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                     </button>
 
                     {isTurnExpanded && (
-                      <div className="border-t border-slate-700/50 space-y-2 p-3">
+                      <div className="border-t border-slate-700/50 space-y-2 p-3 bg-slate-900/10">
                         {turn.childRecords.map((call, callIdx) =>
                           renderChildRecord({
                             call,
@@ -610,72 +561,78 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
               <div
                 key={group.batchId}
                 className={`overflow-hidden rounded-xl border transition-all ${
-                  isGroupExpanded ? 'border-slate-600 bg-slate-800/55 shadow-sm shadow-slate-950/30' : 'border-slate-700/50 bg-slate-900/35 hover:border-slate-600/70 hover:bg-slate-900/45'
+                  isGroupExpanded ? 'border-slate-600 bg-slate-800/45 shadow-sm shadow-slate-950/20' : 'border-slate-700/50 bg-slate-900/35 hover:border-slate-600/70 hover:bg-slate-900/45'
                 }`}
               >
-                <button onClick={() => toggleLLM(groupKey)} className="w-full px-4 py-3.5 text-left">
+                <div className="w-full px-4 py-3.5">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-cyan-500/20 bg-cyan-500/10 text-[11px] font-mono text-cyan-300">
-                      {groupIdx + 1}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <div className="truncate text-sm font-medium text-slate-100">
-                          {(() => {
-                            const launchPrompt = cleanSessionText(group.subagents[0]?.launchUserPrompt || '').replace(/\n/g, ' ').trim();
-                            if (launchPrompt) {
-                              return `${launchPrompt.slice(0, 96)}${launchPrompt.length > 96 ? '...' : ''}`;
-                            }
-                            if (group.subagents.length === 1) {
-                              return group.subagents[0]?.description || group.subagents[0]?.agentType || 'Subagent';
-                            }
-                            return `${group.subagents.length} subagents launched together`;
-                          })()}
+                    <button
+                      onClick={() => toggleLLM(groupKey)}
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-cyan-500/20 bg-cyan-500/10 text-[11px] font-mono text-cyan-300">
+                        {groupIdx + 1}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="truncate text-sm font-medium text-slate-100">
+                            {(() => {
+                              const launchPrompt = cleanSessionText(group.subagents[0]?.launchUserPrompt || '').replace(/\n/g, ' ').trim();
+                              if (launchPrompt) {
+                                return `${launchPrompt.slice(0, 96)}${launchPrompt.length > 96 ? '...' : ''}`;
+                              }
+                              if (group.subagents.length === 1) {
+                                return group.subagents[0]?.description || group.subagents[0]?.agentType || 'Subagent';
+                              }
+                              return `${group.subagents.length} subagents launched together`;
+                            })()}
+                          </div>
+                          <span className="rounded-full bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-300">
+                            {group.subagents.length} subagents
+                          </span>
                         </div>
-                        <span className="rounded-full bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-300">
-                          {group.subagents.length} subagents
-                        </span>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+                          <span>{formatTime(launchTime)}</span>
+                          {(totalInputTokens > 0 || totalOutputTokens > 0) && (
+                            <>
+                              <span>·</span>
+                              <span>{formatTokenPair(totalInputTokens, totalOutputTokens)}</span>
+                            </>
+                          )}
+                          <span>·</span>
+                          <span>${totalCost.toFixed(4)}</span>
+                          {groupRunningCount > 0 && (
+                            <>
+                              <span>·</span>
+                              <span className="text-amber-300">{groupRunningCount} running</span>
+                            </>
+                          )}
+                          {groupFailedCount > 0 && (
+                            <>
+                              <span>·</span>
+                              <span className="text-red-300">{groupFailedCount} failed</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-                        <span>{formatTime(launchTime)}</span>
-                        {(totalInputTokens > 0 || totalOutputTokens > 0) && (
-                          <>
-                            <span>·</span>
-                            <span>{formatTokenPair(totalInputTokens, totalOutputTokens)}</span>
-                          </>
-                        )}
-                        <span>·</span>
-                        <span>${totalCost.toFixed(4)}</span>
-                        {groupRunningCount > 0 && (
-                          <>
-                            <span>·</span>
-                            <span className="text-amber-300">{groupRunningCount} running</span>
-                          </>
-                        )}
-                        {groupFailedCount > 0 && (
-                          <>
-                            <span>·</span>
-                            <span className="text-red-300">{groupFailedCount} failed</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
+                    </button>
                     {group.subagents[0]?.launchPromptId && (
                       <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          jumpToLaunchPrompt(group.subagents[0]?.launchPromptId);
-                        }}
+                        onClick={() => jumpToLaunchPrompt(group.subagents[0]?.launchPromptId)}
                         className="shrink-0 rounded-lg border border-slate-700/80 bg-slate-900/70 px-2.5 py-1 text-[11px] text-slate-300 hover:border-slate-600 hover:text-white"
                       >
                         Go to prompt
                       </button>
                     )}
-                    <div className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-400">
+                    <button
+                      onClick={() => toggleLLM(groupKey)}
+                      aria-label={isGroupExpanded ? 'Collapse subagent batch' : 'Expand subagent batch'}
+                      className="shrink-0 rounded-full border border-slate-700/80 bg-slate-900/70 p-1.5 text-slate-400 hover:border-slate-600 hover:text-white"
+                    >
                       {isGroupExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    </div>
+                    </button>
                   </div>
-                </button>
+                </div>
 
                 {isGroupExpanded && (
                   <div className="border-t border-slate-700/50 px-3 py-3 space-y-2.5 bg-slate-950/10">
@@ -710,7 +667,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                       const statusTone = statusBadgeTone(subagent.status);
 
                       return (
-                        <div key={subagent.id} className={`overflow-hidden rounded-xl border transition-all ${isSubagentExpanded ? 'border-slate-600 bg-slate-800/65 shadow-sm shadow-slate-950/20' : 'border-slate-700/50 bg-slate-900/30 hover:border-slate-600/70 hover:bg-slate-900/40'}`}>
+                        <div key={subagent.id} className={`overflow-hidden rounded-xl border transition-all ${isSubagentExpanded ? 'border-slate-600 bg-slate-800/50 shadow-sm shadow-slate-950/15' : 'border-slate-700/50 bg-slate-900/30 hover:border-slate-600/70 hover:bg-slate-900/40'}`}>
                           <button onClick={() => toggleLLM(subagentKey)} className="w-full px-3.5 py-3 text-left">
                             <div className="flex items-center gap-3">
                               <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-violet-500/20 bg-violet-500/10 text-[10px] font-mono text-violet-300">
