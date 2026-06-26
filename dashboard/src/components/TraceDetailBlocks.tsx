@@ -13,10 +13,10 @@ export function MetricCard({
   label: string;
 }) {
   return (
-    <div className="bg-slate-800/50 rounded-lg p-4 text-center border border-slate-700/50">
-      <Icon className={`w-6 h-6 mx-auto mb-2 ${color}`} />
-      <div className="text-2xl font-bold">{value}</div>
-      <div className="text-xs text-gray-500">{label}</div>
+    <div className="rounded-2xl border border-slate-200/80 bg-white px-4 py-4 text-center shadow-sm shadow-slate-200/70">
+      <Icon className={`mx-auto mb-2 h-6 w-6 ${color}`} />
+      <div className="text-2xl font-semibold text-slate-950">{value}</div>
+      <div className="text-xs text-slate-500">{label}</div>
     </div>
   );
 }
@@ -24,8 +24,8 @@ export function MetricCard({
 export function InfoField({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <div>
-      <span className="text-gray-500 block text-xs mb-1">{label}</span>
-      <span className={mono ? 'font-mono text-xs' : 'font-medium'}>{value}</span>
+      <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">{label}</span>
+      <span className={mono ? 'font-mono text-xs text-slate-700' : 'font-medium text-slate-900'}>{value}</span>
     </div>
   );
 }
@@ -46,18 +46,18 @@ export function PathField({
   onAction?: () => void;
 }) {
   return (
-    <div className="mt-3 flex items-start justify-between gap-3">
+    <div className="mt-3 flex items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-3">
       <div className="min-w-0 flex items-start gap-2">
-        <span className="text-xs text-gray-500 shrink-0">{label}:</span>
-        <code className="text-xs text-gray-300 font-mono break-all">{value}</code>
+        <span className="shrink-0 text-xs font-medium text-slate-500">{label}:</span>
+        <code className="break-all text-xs text-slate-700 font-mono">{value}</code>
       </div>
       {actionLabel && ActionIcon && onAction && (
         <button
           onClick={onAction}
           disabled={actionPending}
-          className="shrink-0 inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1 text-[11px] text-slate-300 hover:border-slate-600 hover:text-white disabled:opacity-60"
+          className="shrink-0 inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] text-slate-600 shadow-sm hover:border-slate-300 hover:text-slate-900 disabled:opacity-60"
         >
-          <ActionIcon className="w-3 h-3" />
+          <ActionIcon className="h-3 w-3" />
           {actionPending ? 'Opening…' : actionLabel}
         </button>
       )}
@@ -76,11 +76,13 @@ export function PreviewBlock({
 }) {
   return (
     <div>
-      <div className="flex items-center gap-1 mb-1">
-        <Icon className="w-3 h-3 text-gray-500" />
-        <span className="text-xs text-gray-500">{label}</span>
+      <div className="mb-1 flex items-center gap-1">
+        <Icon className="h-3 w-3 text-slate-400" />
+        <span className="text-xs font-medium text-slate-500">{label}</span>
       </div>
-      <div className="text-sm text-gray-200 bg-slate-900/50 rounded p-2 border border-slate-700/50 whitespace-pre-wrap">{content}</div>
+      <div className="rounded-2xl border border-slate-200/70 bg-slate-50/85 p-3 text-sm leading-6 text-slate-700 whitespace-pre-wrap">
+        {content}
+      </div>
     </div>
   );
 }
@@ -96,12 +98,12 @@ export function SummaryList({
 }) {
   return (
     <div>
-      <h4 className={`text-xs font-medium mb-2 ${color}`}>{title}</h4>
-      <div className="space-y-1">
+      <h4 className={`mb-2 text-xs font-semibold uppercase tracking-wide ${color}`}>{title}</h4>
+      <div className="space-y-2">
         {rows.map((row, idx) => (
-          <div key={`${row.label}-${idx}`} className="flex items-center justify-between gap-3 text-sm">
-            <span className="truncate flex-1">{row.label}</span>
-            <span className="text-xs text-gray-500">{row.meta}</span>
+          <div key={`${row.label}-${idx}`} className="flex items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white px-3 py-2 text-sm shadow-sm shadow-slate-200/40">
+            <span className="flex-1 truncate text-slate-700">{row.label}</span>
+            <span className="text-xs text-slate-500">{row.meta}</span>
           </div>
         ))}
       </div>
@@ -117,9 +119,9 @@ export function EmptyState({
   label: string;
 }) {
   return (
-    <div className="text-center py-8 text-gray-500">
-      <Icon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-      <p>{label}</p>
+    <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50/80 py-10 text-center text-slate-500">
+      <Icon className="mx-auto mb-3 h-12 w-12 opacity-50" />
+      <p className="text-sm font-medium">{label}</p>
     </div>
   );
 }
@@ -139,19 +141,19 @@ export function JsonOrTextBlock({
 }) {
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   return (
-    <div className="mt-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-blue-400 flex items-center gap-1">
-          <FileText className="w-3 h-3" />
+    <div className="mt-3 rounded-2xl border border-slate-200/80 bg-white p-3 shadow-sm shadow-slate-200/50">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="flex items-center gap-1 text-xs font-semibold text-sky-700">
+          <FileText className="h-3 w-3" />
           {title}
         </span>
-        <button onClick={() => onCopy(text, copyId)} className="text-xs text-gray-500 hover:text-white flex items-center gap-1">
-          {copiedId === copyId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+        <button onClick={() => onCopy(text, copyId)} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900">
+          {copiedId === copyId ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copiedId === copyId ? '已复制' : '复制'}
         </button>
       </div>
-      <div className="bg-slate-900/70 rounded border border-slate-700/70 overflow-hidden shadow-inner shadow-slate-950/20">
-        <pre className="p-3 text-xs text-blue-200 overflow-auto max-h-60 whitespace-pre-wrap font-mono">{text}</pre>
+      <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80">
+        <pre className="max-h-60 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs text-slate-700">{text}</pre>
       </div>
     </div>
   );
@@ -177,32 +179,32 @@ export function StructuredResponseBlock({
   const palette =
     color === 'violet'
       ? {
-          label: 'text-violet-300',
-          border: 'border-violet-500/30',
-          bg: 'bg-violet-500/10',
-          text: 'text-violet-100',
+          label: 'text-violet-700',
+          border: 'border-violet-200/80',
+          bg: 'bg-violet-50/90',
+          text: 'text-violet-900',
         }
       : {
-          label: 'text-emerald-300',
-          border: 'border-emerald-500/30',
-          bg: 'bg-emerald-500/10',
-          text: 'text-emerald-100',
+          label: 'text-emerald-700',
+          border: 'border-emerald-200/80',
+          bg: 'bg-emerald-50/90',
+          text: 'text-emerald-900',
         };
 
   return (
-    <div className={`mt-3 rounded-lg border ${palette.border} ${palette.bg} p-3`}>
-      <div className="flex items-center justify-between mb-2">
-        <span className={`text-xs font-medium flex items-center gap-1 ${palette.label}`}>
-          <Icon className="w-3 h-3" />
+    <div className={`mt-3 rounded-2xl border ${palette.border} ${palette.bg} p-3 shadow-sm shadow-slate-200/40`}>
+      <div className="mb-2 flex items-center justify-between">
+        <span className={`flex items-center gap-1 text-xs font-semibold ${palette.label}`}>
+          <Icon className="h-3 w-3" />
           {title}
         </span>
-        <button onClick={() => onCopy(JSON.stringify(value, null, 2), copyId)} className="text-xs text-gray-500 hover:text-white flex items-center gap-1">
-          {copiedId === copyId ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+        <button onClick={() => onCopy(JSON.stringify(value, null, 2), copyId)} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900">
+          {copiedId === copyId ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
           {copiedId === copyId ? '已复制' : '复制'}
         </button>
       </div>
-      <div className="bg-slate-900/60 rounded border border-slate-700/60 overflow-hidden shadow-inner shadow-slate-950/10">
-        <pre className={`p-3 text-xs overflow-auto max-h-60 whitespace-pre-wrap font-mono ${palette.text}`}>{JSON.stringify(value, null, 2)}</pre>
+      <div className="overflow-hidden rounded-xl border border-white/60 bg-white/80">
+        <pre className={`max-h-60 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs ${palette.text}`}>{JSON.stringify(value, null, 2)}</pre>
       </div>
     </div>
   );

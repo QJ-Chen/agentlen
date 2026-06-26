@@ -87,18 +87,20 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
       <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <Activity className="h-5 w-5 text-green-400" />
-            <h2 className="text-lg font-semibold text-white">Recent Activity</h2>
+            <Activity className="h-5 w-5 text-emerald-600" />
+            <h2 className="text-lg font-semibold text-slate-950">Recent Activity</h2>
             {freshTraces.length > 0 && (
-              <span className="rounded-full bg-green-500/10 px-2 py-0.5 text-[11px] text-green-300">
+              <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2 py-0.5 text-[11px] text-emerald-700">
                 {freshTraces.length} fresh sessions
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-slate-400">Newest updated sessions from the latest server refresh, with a bias toward fresh activity.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Newest updated sessions from the latest server refresh, with a bias toward fresh activity.
+          </p>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-slate-400">
+        <div className="flex items-center gap-2 text-xs text-slate-500">
           <span>{isRefreshing ? 'Refreshing…' : `Updated ${lastRefreshLabel}`}</span>
         </div>
       </div>
@@ -109,33 +111,35 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
             <div
               key={trace.id}
               onClick={() => onSelectTrace?.(trace)}
-              className={`rounded-2xl border p-4 cursor-pointer transition-all ${
+              className={`cursor-pointer rounded-3xl border p-4 transition-all ${
                 selectedTraceId === trace.id
-                  ? 'border-blue-500 bg-blue-500/10 shadow-lg shadow-blue-950/20'
-                  : 'border-slate-700/60 bg-slate-900/80 hover:border-slate-600'
+                  ? 'border-blue-300 bg-blue-50 shadow-sm shadow-blue-100'
+                  : 'border-slate-200 bg-white shadow-sm shadow-slate-200/50 hover:border-slate-300 hover:bg-slate-50'
               }`}
             >
-              <div className="flex items-start justify-between gap-3 mb-3">
+              <div className="mb-3 flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     {trace.status === 'running' ? (
-                      <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />
+                      <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
                     ) : trace.status === 'completed' ? (
-                      <CheckCircle className="h-4 w-4 text-emerald-400" />
+                      <CheckCircle className="h-4 w-4 text-emerald-600" />
                     ) : trace.status === 'failed' ? (
-                      <XCircle className="h-4 w-4 text-red-400" />
+                      <XCircle className="h-4 w-4 text-red-600" />
                     ) : (
                       <Clock className="h-4 w-4 text-slate-400" />
                     )}
-                    <span className="font-medium text-white truncate">{trace.agentName}</span>
-                    <span className="rounded-full bg-blue-500/10 px-2 py-0.5 text-[11px] text-blue-300">Claude Code</span>
+                    <span className="truncate font-medium text-slate-900">{trace.agentName}</span>
+                    <span className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700">
+                      Claude Code
+                    </span>
                   </div>
-                  <p className="mt-2 text-sm text-slate-300">{currentStep}</p>
+                  <p className="mt-2 text-sm text-slate-600">{currentStep}</p>
                 </div>
-                <span className="text-xs text-slate-400 whitespace-nowrap">{freshnessLabel}</span>
+                <span className="whitespace-nowrap text-xs text-slate-500">{freshnessLabel}</span>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs text-slate-400 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 text-xs text-slate-500 sm:grid-cols-4">
                 <span className="flex items-center gap-1">
                   <Clock className="h-3 w-3" /> {formatCompactDuration(trace.duration || elapsedTime)}
                 </span>
@@ -145,7 +149,7 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
                 <span className="flex items-center gap-1">
                   <MessageSquare className="h-3 w-3" /> {trace.llmCalls.length} LLM
                 </span>
-                <span className="flex items-center gap-1 text-emerald-300">
+                <span className="flex items-center gap-1 text-emerald-700">
                   <Terminal className="h-3 w-3" /> {trace.totalTokens.toLocaleString()} tokens
                 </span>
               </div>
@@ -153,18 +157,20 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
           ))}
         </div>
       ) : (
-        <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/60 p-8 text-center text-slate-400">
-          <CheckCircle className="mx-auto mb-3 h-10 w-10 text-slate-600" />
-          <p className="text-base font-medium text-slate-200">No recent session activity</p>
-          <p className="mt-2 text-sm">Use the top-right refresh button to pull the latest server data after local session logs change.</p>
+        <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+          <CheckCircle className="mx-auto mb-3 h-10 w-10 text-slate-400" />
+          <p className="text-base font-medium text-slate-800">No recent session activity</p>
+          <p className="mt-2 text-sm">
+            Use the top-right refresh button to pull the latest server data after local session logs change.
+          </p>
         </div>
       )}
 
       {recentCompleted.length > 0 && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+        <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/50">
           <div className="mb-3 flex items-center gap-2">
             <Clock className="h-4 w-4 text-slate-400" />
-            <span className="text-sm font-medium text-slate-300">Recently completed</span>
+            <span className="text-sm font-medium text-slate-700">Recently completed</span>
           </div>
 
           <div className="space-y-2">
@@ -172,30 +178,38 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
               <div
                 key={trace.id}
                 onClick={() => onSelectTrace?.(trace)}
-                className={`flex items-center justify-between rounded-xl border p-3 cursor-pointer transition-all ${
+                className={`flex cursor-pointer items-center justify-between rounded-2xl border p-3 transition-all ${
                   selectedTraceId === trace.id
-                    ? 'border-blue-500 bg-blue-500/10'
-                    : 'border-slate-700/50 bg-slate-950/50 hover:border-slate-600'
+                    ? 'border-blue-300 bg-blue-50'
+                    : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
                 }`}
               >
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     {trace.status === 'completed' ? (
-                      <CheckCircle className="h-4 w-4 text-emerald-400" />
+                      <CheckCircle className="h-4 w-4 text-emerald-600" />
                     ) : (
-                      <XCircle className="h-4 w-4 text-red-400" />
+                      <XCircle className="h-4 w-4 text-red-600" />
                     )}
-                    <span className="font-medium text-white truncate">{trace.agentName}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] ${trace.status === 'completed' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>
+                    <span className="truncate font-medium text-slate-900">{trace.agentName}</span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[11px] ${
+                        trace.status === 'completed'
+                          ? 'border border-emerald-100 bg-emerald-50 text-emerald-700'
+                          : 'border border-red-100 bg-red-50 text-red-700'
+                      }`}
+                    >
                       {trace.status === 'completed' ? 'completed' : 'failed'}
                     </span>
                   </div>
-                  <div className="mt-1 text-xs text-slate-400">Claude Code · {relativeTime(trace.endTime || trace.startTime, nowMs)}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    Claude Code · {relativeTime(trace.endTime || trace.startTime, nowMs)}
+                  </div>
                 </div>
 
-                <div className="flex items-center gap-4 text-sm text-slate-400">
+                <div className="flex items-center gap-4 text-sm text-slate-500">
                   <span>{formatDuration(trace.duration || 0)}</span>
-                  <span className="text-emerald-400">${trace.cost.toFixed(4)}</span>
+                  <span className="text-emerald-700">${trace.cost.toFixed(4)}</span>
                   <ChevronRight className="h-4 w-4" />
                 </div>
               </div>

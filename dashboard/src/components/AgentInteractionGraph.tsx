@@ -53,17 +53,19 @@ export const AgentInteractionGraph: React.FC<AgentInteractionGraphProps> = ({
   }, [traces]);
 
   return (
-    <div className="space-y-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg shadow-slate-950/30">
+    <div className="space-y-6 rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-200/70">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <Network className="h-5 w-5 text-blue-400" />
-            <h2 className="text-lg font-semibold text-white">Session Intelligence Views</h2>
+            <Network className="h-5 w-5 text-blue-600" />
+            <h2 className="text-lg font-semibold text-slate-950">Session Intelligence Views</h2>
           </div>
-          <p className="mt-1 text-sm text-slate-400">Explore sessions by project or chronological flow to find where work and spend concentrate.</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Explore sessions by project or chronological flow to find where work and spend concentrate.
+          </p>
         </div>
 
-        <div className="inline-flex rounded-xl bg-slate-950/80 p-1 border border-slate-800 self-start">
+        <div className="inline-flex self-start rounded-2xl border border-slate-200 bg-slate-50 p-1">
           {([
             ['projects', 'Projects'],
             ['sessions', 'Session flow'],
@@ -71,8 +73,10 @@ export const AgentInteractionGraph: React.FC<AgentInteractionGraphProps> = ({
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
-              className={`rounded-lg px-3 py-2 text-sm transition-colors ${
-                viewMode === mode ? 'bg-blue-600 text-white shadow-md shadow-blue-950/40' : 'text-slate-400 hover:text-white'
+              className={`rounded-xl px-3 py-2 text-sm transition-colors ${
+                viewMode === mode
+                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-100'
+                  : 'text-slate-500 hover:bg-white hover:text-slate-900'
               }`}
             >
               {label}
@@ -82,25 +86,29 @@ export const AgentInteractionGraph: React.FC<AgentInteractionGraphProps> = ({
       </div>
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <SummaryCard label="Projects" value={String(projectGroups.length)} color="text-blue-400" />
-        <SummaryCard label="Sessions" value={String(sessionFlows.length)} color="text-violet-400" />
-        <SummaryCard label="Claude sources" value={String(traces.length)} color="text-cyan-400" />
-        <SummaryCard label="Tokens" value={formatTokens(traces.reduce((sum, trace) => sum + trace.totalTokens, 0))} color="text-emerald-400" />
+        <SummaryCard label="Projects" value={String(projectGroups.length)} color="text-blue-600" />
+        <SummaryCard label="Sessions" value={String(sessionFlows.length)} color="text-violet-600" />
+        <SummaryCard label="Claude sources" value={String(traces.length)} color="text-cyan-600" />
+        <SummaryCard
+          label="Tokens"
+          value={formatTokens(traces.reduce((sum, trace) => sum + trace.totalTokens, 0))}
+          color="text-emerald-600"
+        />
       </div>
 
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+      <div className="rounded-3xl border border-slate-200 bg-slate-50/80 p-4">
         {viewMode === 'projects' && (
           <div className="space-y-4">
             {projectGroups.slice(0, 12).map((project) => (
-              <div key={project.projectPath} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+              <div key={project.projectPath} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/40">
                 <div className="mb-3 flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="font-medium text-white break-all">{project.projectPath}</div>
-                    <div className="mt-1 text-xs text-slate-400">
+                    <div className="break-all font-medium text-slate-900">{project.projectPath}</div>
+                    <div className="mt-1 text-xs text-slate-500">
                       {project.items.length} sessions · {formatTokens(project.totalTokens)} · ${project.totalCost.toFixed(4)}
                     </div>
                   </div>
-                  <Layers className="h-4 w-4 text-blue-400 shrink-0" />
+                  <Layers className="h-4 w-4 shrink-0 text-blue-600" />
                 </div>
                 <div className="space-y-2">
                   {project.items.slice(0, 4).map((trace) => (
@@ -115,19 +123,19 @@ export const AgentInteractionGraph: React.FC<AgentInteractionGraphProps> = ({
         {viewMode === 'sessions' && (
           <div className="space-y-4">
             {sessionFlows.slice(0, 12).map(({ sessionId, items }) => (
-              <div key={sessionId} className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+              <div key={sessionId} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm shadow-slate-200/40">
                 <div className="mb-3 flex items-center gap-2">
-                  <GitBranch className="h-4 w-4 text-blue-400" />
-                  <span className="text-sm font-medium text-white">Session flow</span>
-                  <span className="text-xs text-slate-500 font-mono">{sessionId.slice(0, 20)}</span>
-                  <span className="text-xs text-slate-500 ml-auto">{items.length} records</span>
+                  <GitBranch className="h-4 w-4 text-blue-600" />
+                  <span className="text-sm font-medium text-slate-900">Session flow</span>
+                  <span className="font-mono text-xs text-slate-400">{sessionId.slice(0, 20)}</span>
+                  <span className="ml-auto text-xs text-slate-400">{items.length} records</span>
                 </div>
 
                 <div className="flex items-center gap-2 overflow-x-auto pb-2">
                   {items.map((trace, idx) => (
                     <React.Fragment key={trace.id}>
                       <TraceChip trace={trace} selectedTraceId={selectedTraceId} onSelectTrace={onSelectTrace} compact />
-                      {idx < items.length - 1 && <ArrowRight className="h-4 w-4 text-slate-600 flex-shrink-0" />}
+                      {idx < items.length - 1 && <ArrowRight className="h-4 w-4 flex-shrink-0 text-slate-300" />}
                     </React.Fragment>
                   ))}
                 </div>
@@ -142,9 +150,9 @@ export const AgentInteractionGraph: React.FC<AgentInteractionGraphProps> = ({
 
 function SummaryCard({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 text-center">
-      <div className={`text-3xl font-bold ${color}`}>{value}</div>
-      <div className="mt-1 text-xs uppercase tracking-wide text-slate-500">{label}</div>
+    <div className="rounded-2xl border border-slate-200 bg-white p-4 text-center shadow-sm shadow-slate-200/40">
+      <div className={`text-3xl font-semibold ${color}`}>{value}</div>
+      <div className="mt-1 text-xs uppercase tracking-wide text-slate-400">{label}</div>
     </div>
   );
 }
@@ -163,27 +171,27 @@ function TraceChip({
   return (
     <button
       onClick={() => onSelectTrace?.(trace)}
-      className={`text-left rounded-xl border transition-all ${
+      className={`rounded-2xl border text-left transition-all ${
         selectedTraceId === trace.id
-          ? 'bg-blue-500/10 border-blue-500'
-          : 'bg-slate-950/40 border-slate-800 hover:border-slate-700'
-      } ${compact ? 'p-3 min-w-[220px]' : 'p-3 w-full'}`}
+          ? 'border-blue-300 bg-blue-50 shadow-sm shadow-blue-100'
+          : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
+      } ${compact ? 'min-w-[220px] p-3' : 'w-full p-3'}`}
     >
       <div className="flex items-center gap-2">
         {trace.status === 'completed' ? (
-          <CheckCircle className="h-3 w-3 text-emerald-400" />
+          <CheckCircle className="h-3 w-3 text-emerald-600" />
         ) : trace.status === 'failed' ? (
-          <XCircle className="h-3 w-3 text-red-400" />
+          <XCircle className="h-3 w-3 text-red-600" />
         ) : (
-          <BarChart3 className="h-3 w-3 text-blue-400" />
+          <BarChart3 className="h-3 w-3 text-blue-600" />
         )}
-        <span className="text-sm font-medium text-white truncate">{trace.agentName}</span>
+        <span className="truncate text-sm font-medium text-slate-900">{trace.agentName}</span>
       </div>
-      <div className="mt-1 text-xs text-slate-400">
+      <div className="mt-1 text-xs text-slate-500">
         Claude Code · {formatCompactDuration(trace.duration)} · {formatTokens(trace.totalTokens)}
       </div>
-      {trace.projectPath && <div className="mt-1 text-[11px] text-slate-500 truncate">{shortProjectPath(trace.projectPath)}</div>}
-      <div className="mt-1 text-xs text-emerald-400">${trace.cost.toFixed(4)}</div>
+      {trace.projectPath && <div className="mt-1 truncate text-[11px] text-slate-400">{shortProjectPath(trace.projectPath)}</div>}
+      <div className="mt-1 text-xs text-emerald-700">${trace.cost.toFixed(4)}</div>
     </button>
   );
 }
