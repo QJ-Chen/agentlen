@@ -21,3 +21,7 @@
 - [ ] Quarantine or demote legacy docs/scripts that compete with the current product story
 - [ ] Add explicit prerequisites and configurable frontend backend URL setup docs
 - [ ] Clarify which scripts and entrypoints are canonical versus compatibility utilities
+- [ ] Add static HTML / Markdown session export, including a compact handoff mode for feeding past sessions back into an LLM
+- [ ] Add detail-level and message-type filtering for session replay surfaces (e.g. user-only, minimal, interaction-focused, full)
+- [ ] Add a session timeline view for prompt threads, assistant turns, tools, and subagent activity
+- [ ] Add snapshot-style regression tests for long-session rendering and inspector/export readability

@@ -42,7 +42,33 @@ interface EnhancedTraceDetailProps {
 }
 
 type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'raw';
+type DetailLevel = 'summary' | 'standard' | 'verbose';
+type ReplayMessageKind = 'user' | 'thinking' | 'tool' | 'text' | 'empty' | 'subagent';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
+
+const REPLAY_KIND_LABELS: Record<ReplayMessageKind, string> = {
+  user: '用户',
+  thinking: '思考',
+  tool: '工具',
+  text: '文本',
+  empty: '空响应',
+  subagent: 'Subagent',
+};
+
+const DETAIL_LEVEL_LABELS: Record<DetailLevel, string> = {
+  summary: '摘要',
+  standard: '标准',
+  verbose: '详细',
+};
+
+const DEFAULT_VISIBLE_KINDS: Record<ReplayMessageKind, boolean> = {
+  user: true,
+  thinking: true,
+  tool: true,
+  text: true,
+  empty: true,
+  subagent: true,
+};
 
 const PLATFORM_CONFIG = {
   'claude-code': { name: 'Claude Code', color: 'text-orange-400', bg: 'bg-orange-500/20' },
@@ -51,6 +77,8 @@ const PLATFORM_CONFIG = {
 export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace }) => {
   const typedTrace = trace as TraceWithRaw;
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [detailLevel, setDetailLevel] = useState<DetailLevel>('standard');
+  const [visibleKinds, setVisibleKinds] = useState<Record<ReplayMessageKind, boolean>>(DEFAULT_VISIBLE_KINDS);
   const [expandedLLMs, setExpandedLLMs] = useState<Set<string>>(new Set(['group-0']));
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [openingTarget, setOpeningTarget] = useState<'project' | 'session_folder' | null>(null);
@@ -176,6 +204,54 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     };
   };
 
+  const getCallRenderState = (call: LLMCall, toolScope: ToolCall[] = trace.tools || []) => {
+    const relatedTools = getRelatedToolCalls(call, toolScope);
+    const responseStyle = classifyCallResponse(call, relatedTools);
+    const formattedToolResponse =
+      responseStyle.kind === 'tool'
+        ? relatedTools.map((tool) => ({
+            name: tool.name,
+            input: tool.input,
+          }))
+        : null;
+    const toolResultAppendix =
+      formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
+        ? relatedTools.map((tool) => ({
+            name: tool.name,
+            result: tool.output,
+            error: tool.error,
+          }))
+        : null;
+
+    return {
+      relatedTools,
+      responseStyle,
+      formattedToolResponse,
+      toolResultAppendix,
+    };
+  };
+
+  const isKindVisible = (kind: ReplayMessageKind) => visibleKinds[kind];
+
+  const toggleVisibleKind = (kind: ReplayMessageKind) => {
+    setVisibleKinds((current) => ({
+      ...current,
+      [kind]: !current[kind],
+    }));
+  };
+
+  const resetReplayFilters = () => {
+    setDetailLevel('standard');
+    setVisibleKinds({ ...DEFAULT_VISIBLE_KINDS });
+  };
+
+  const replayFilterKinds =
+    activeTab === 'subagents'
+      ? (['user', 'thinking', 'tool', 'text', 'empty', 'subagent'] as ReplayMessageKind[])
+      : (['user', 'thinking', 'tool', 'text', 'empty'] as ReplayMessageKind[]);
+
+  const shouldShowReplayFilters = activeTab === 'llm' || activeTab === 'subagents';
+
   const toggleLLM = (key: string) => {
     const newSet = new Set(expandedLLMs);
     if (newSet.has(key)) newSet.delete(key);
@@ -270,9 +346,29 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     const promptPreview = cleanedPrompt
       ? `${cleanedPrompt.replace(/\n/g, ' ').slice(0, 80)}${cleanedPrompt.length > 80 ? '...' : ''}`
       : '无提示词';
-    const threadInputTokens = thread.assistantTurns.reduce((sum, turn) => sum + turn.inputTokens, 0);
-    const threadOutputTokens = thread.assistantTurns.reduce((sum, turn) => sum + turn.outputTokens, 0);
-    const assistantTurnCount = thread.assistantTurns.length;
+    const showPromptBlock = isKindVisible('user') && detailLevel !== 'summary' && cleanedPrompt.length > 0;
+
+    const visibleTurns = thread.assistantTurns
+      .map((turn) => {
+        const visibleChildRecords = turn.childRecords.filter((call) => {
+          const { responseStyle } = getCallRenderState(call, toolScope);
+          return isKindVisible(responseStyle.kind);
+        });
+
+        return {
+          turn,
+          visibleChildRecords,
+        };
+      })
+      .filter(({ visibleChildRecords }) => visibleChildRecords.length > 0);
+
+    if (!showPromptBlock && visibleTurns.length === 0) {
+      return null;
+    }
+
+    const threadInputTokens = visibleTurns.reduce((sum, { turn }) => sum + turn.inputTokens, 0);
+    const threadOutputTokens = visibleTurns.reduce((sum, { turn }) => sum + turn.outputTokens, 0);
+    const assistantTurnCount = visibleTurns.length;
 
     const renderChildRecord = ({
       call,
@@ -286,24 +382,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
       showTokenUsage?: boolean;
     }) => {
       const callKey = `${parentKey}-call-${callIdx}`;
-      const isCallExpanded = expandedLLMs.has(callKey);
-      const relatedTools = getRelatedToolCalls(call, toolScope);
-      const responseStyle = classifyCallResponse(call, relatedTools);
-      const formattedToolResponse =
-        responseStyle.kind === 'tool'
-          ? relatedTools.map((tool) => ({
-              name: tool.name,
-              input: tool.input,
-            }))
-          : null;
-      const toolResultAppendix =
-        formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
-          ? relatedTools.map((tool) => ({
-              name: tool.name,
-              result: tool.output,
-              error: tool.error,
-            }))
-          : null;
+      const isCallExpanded = detailLevel !== 'summary' && expandedLLMs.has(callKey);
+      const { relatedTools, responseStyle, formattedToolResponse, toolResultAppendix } = getCallRenderState(call, toolScope);
 
       return (
         <div key={callKey} className={`rounded border ${isCallExpanded ? 'bg-slate-800/55 border-slate-600 shadow-sm shadow-slate-950/10' : 'bg-slate-800/40 border-slate-700/50'}`}>
@@ -330,7 +410,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 )}
                 <span>·</span>
                 <span>{formatDuration(call.duration)}</span>
-                {call.sourceEventIds && call.sourceEventIds[0] && (
+                {detailLevel === 'verbose' && call.sourceEventIds && call.sourceEventIds[0] && (
                   <>
                     <span>·</span>
                     <span className="font-mono">event {call.sourceEventIds[0]}</span>
@@ -338,10 +418,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                 )}
               </div>
             </div>
-            {isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+            {detailLevel !== 'summary' && (isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
           </button>
 
-          {isCallExpanded && (
+          {detailLevel !== 'summary' && isCallExpanded && (
             <div className="px-3 pb-3 pt-3 border-t border-slate-700/50 space-y-3 bg-slate-900/10">
               {call.response && !formattedToolResponse && (
                 <JsonOrTextBlock
@@ -378,7 +458,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                   onCopy={copyToClipboard}
                 />
               )}
-              {relatedTools.length > 0 && !formattedToolResponse && responseStyle.kind !== 'thinking' && (
+              {relatedTools.length > 0 && !formattedToolResponse && responseStyle.kind !== 'thinking' && detailLevel === 'verbose' && (
                 <div>
                   <div className="text-xs font-medium text-violet-400 mb-2">相关工具调用</div>
                   <div className="space-y-2">
@@ -425,6 +505,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                   </span>
                 </>
               )}
+              {detailLevel === 'verbose' && thread.promptId && (
+                <>
+                  <span>·</span>
+                  <span className="font-mono">promptId: {thread.promptId}</span>
+                </>
+              )}
             </div>
           </div>
           {isThreadExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
@@ -432,7 +518,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
         {isThreadExpanded && (
           <div className="border-t border-slate-700/50">
-            {thread.prompt && (
+            {showPromptBlock && (
               <div className="px-4 py-3 bg-slate-900/15 border-b border-slate-700/50">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-medium text-cyan-400 flex items-center gap-1">
@@ -451,14 +537,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
             )}
 
             <div className="space-y-3 p-4">
-              {thread.assistantTurns.map((turn, turnIdx) => {
+              {visibleTurns.map(({ turn, visibleChildRecords }, turnIdx) => {
                 const turnKey = `${threadKey}-turn-${turn.messageId || turn.id || turnIdx}`;
-                const isSingleChild = turn.childRecords.length === 1;
-                const isTurnExpanded = isSingleChild ? true : expandedLLMs.has(turnKey);
+                const isSingleChild = visibleChildRecords.length === 1;
+                const isTurnExpanded = detailLevel !== 'summary' && (isSingleChild ? true : expandedLLMs.has(turnKey));
 
                 if (isSingleChild) {
                   return renderChildRecord({
-                    call: turn.childRecords[0],
+                    call: visibleChildRecords[0],
                     callIdx: 0,
                     parentKey: turnKey,
                     showTokenUsage: true,
@@ -474,17 +560,17 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-cyan-300">Assistant turn</div>
                         <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
-                          <span>{turn.childRecordCount} child records</span>
+                          <span>{visibleChildRecords.length} child records</span>
                           {turn.totalTokens > 0 && <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>}
-                          {turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
+                          {detailLevel === 'verbose' && turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
                         </div>
                       </div>
-                      {isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
+                      {detailLevel !== 'summary' && (isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
                     </button>
 
-                    {isTurnExpanded && (
+                    {detailLevel !== 'summary' && isTurnExpanded && (
                       <div className="border-t border-slate-700/50 space-y-2 p-3 bg-slate-900/10">
-                        {turn.childRecords.map((call, callIdx) =>
+                        {visibleChildRecords.map((call, callIdx) =>
                           renderChildRecord({
                             call,
                             callIdx,
@@ -504,27 +590,33 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     );
   };
 
-  const renderLLM = () => (
-    <div className="space-y-4">
-      {allLLMCalls.length === 0 ? (
-        <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />
-      ) : (
-        assistantTurnGroups.map((thread, threadIdx) =>
-          renderPromptThreadGroup({
-            thread,
-            index: threadIdx,
-            toolScope: trace.tools || [],
-            scopePrefix: 'main-llm',
-            jumpable: true,
-          }),
-        )
-      )}
-    </div>
-  );
+  const renderLLM = () => {
+    if (allLLMCalls.length === 0) {
+      return <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />;
+    }
+
+    const renderedThreads = assistantTurnGroups
+      .map((thread, threadIdx) =>
+        renderPromptThreadGroup({
+          thread,
+          index: threadIdx,
+          toolScope: trace.tools || [],
+          scopePrefix: 'main-llm',
+          jumpable: true,
+        }),
+      )
+      .filter(Boolean);
+
+    if (renderedThreads.length === 0) {
+      return <EmptyState icon={MessageSquare} label="当前筛选条件下无可见消息" />;
+    }
+
+    return <div className="space-y-4">{renderedThreads}</div>;
+  };
 
   const renderSubagents = () => {
-    if (subagentLogs.length === 0) {
-      return <EmptyState icon={Bot} label="无 Subagent 日志" />;
+    if (subagentLogs.length === 0 || !isKindVisible('subagent')) {
+      return <EmptyState icon={Bot} label="当前筛选条件下无可见 Subagent 日志" />;
     }
 
     const completedCount = subagentLogs.filter((item) => item.status === 'completed').length;
@@ -861,6 +953,55 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     />
   );
 
+  const renderReplayFilters = () => {
+    if (!shouldShowReplayFilters) {
+      return null;
+    }
+
+    return (
+      <div className="border-b border-slate-700/50 px-4 py-3 bg-slate-900/20 space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-400">Detail</span>
+          {(Object.keys(DETAIL_LEVEL_LABELS) as DetailLevel[]).map((level) => (
+            <button
+              key={level}
+              onClick={() => setDetailLevel(level)}
+              className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
+                detailLevel === level
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700'
+              }`}
+            >
+              {DETAIL_LEVEL_LABELS[level]}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-slate-400">Kinds</span>
+          {replayFilterKinds.map((kind) => (
+            <button
+              key={kind}
+              onClick={() => toggleVisibleKind(kind)}
+              className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
+                isKindVisible(kind)
+                  ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-500/30'
+                  : 'bg-slate-800 text-slate-500 border border-slate-700 hover:text-slate-300'
+              }`}
+            >
+              {REPLAY_KIND_LABELS[kind]}
+            </button>
+          ))}
+          <button
+            onClick={resetReplayFilters}
+            className="ml-2 px-2.5 py-1 rounded-md text-xs bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700"
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="bg-slate-800 rounded-lg border border-slate-700/50 overflow-hidden">
       <div className="border-b border-slate-700 px-4 py-3 flex flex-wrap gap-2">
@@ -877,6 +1018,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
           </button>
         ))}
       </div>
+
+      {renderReplayFilters()}
 
       <div className="p-4">
         {activeTab === 'overview' && renderOverview()}
