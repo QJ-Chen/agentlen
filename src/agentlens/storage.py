@@ -38,7 +38,12 @@ class Storage:
     ) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
-    def get_stats(self, period_hours: int = 24) -> Dict[str, Any]:
+    def get_stats(
+        self,
+        period_hours: int = 24,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> Dict[str, Any]:
         raise NotImplementedError
 
 
@@ -466,6 +471,23 @@ class SQLiteStorage(Storage):
         sessions.sort(key=lambda session: session.get("last_updated") or session.get("start_time") or "", reverse=True)
         return sessions
 
+    def _resolve_time_range(
+        self,
+        period_hours: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        normalized_start = self._coerce_iso_datetime(start_time)
+        normalized_end = self._coerce_iso_datetime(end_time)
+        if normalized_start or normalized_end:
+            return normalized_start, normalized_end
+        if period_hours:
+            return (
+                (datetime.now(timezone.utc) - timedelta(hours=period_hours)).isoformat(),
+                None,
+            )
+        return None, None
+
     def _duration_from_times(self, start_time: Optional[str], end_time: Optional[str]) -> int:
         if not start_time or not end_time:
             return 0
@@ -484,18 +506,21 @@ class SQLiteStorage(Storage):
         status: Optional[str] = None,
         query: Optional[str] = None,
         period_hours: Optional[int] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> Dict[str, Any]:
-        start_time = None
-        if period_hours:
-            start_time = (
-                datetime.now(timezone.utc) - timedelta(hours=period_hours)
-            ).isoformat()
+        effective_start_time, effective_end_time = self._resolve_time_range(
+            period_hours=period_hours,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
         raw_traces = self.get_traces(
             platform=platform,
-            start_time=start_time,
+            start_time=effective_start_time,
+            end_time=effective_end_time,
             limit=max(limit + offset, 5000),
         )
         sessions = self._collapse_sessions(raw_traces)
@@ -533,11 +558,22 @@ class SQLiteStorage(Storage):
         sessions = self._collapse_sessions(traces)
         return sessions[0] if sessions else None
 
-    def get_overview_stats(self, period_hours: int = 24) -> Dict[str, Any]:
-        start_time = (
-            datetime.now(timezone.utc) - timedelta(hours=period_hours)
-        ).isoformat()
-        traces = self.get_traces(start_time=start_time, limit=50000)
+    def get_overview_stats(
+        self,
+        period_hours: int = 24,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        effective_start_time, effective_end_time = self._resolve_time_range(
+            period_hours=period_hours,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        traces = self.get_traces(
+            start_time=effective_start_time,
+            end_time=effective_end_time,
+            limit=50000,
+        )
         sessions = self._collapse_sessions(traces)
 
         total_tokens = sum(session["total_tokens"] for session in sessions)
@@ -600,11 +636,22 @@ class SQLiteStorage(Storage):
             "active_days": active_days,
         }
 
-    def get_project_stats(self, period_hours: int = 24) -> List[Dict[str, Any]]:
-        start_time = (
-            datetime.now(timezone.utc) - timedelta(hours=period_hours)
-        ).isoformat()
-        traces = self.get_traces(start_time=start_time, limit=50000)
+    def get_project_stats(
+        self,
+        period_hours: int = 24,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        effective_start_time, effective_end_time = self._resolve_time_range(
+            period_hours=period_hours,
+            start_time=start_time,
+            end_time=end_time,
+        )
+        traces = self.get_traces(
+            start_time=effective_start_time,
+            end_time=effective_end_time,
+            limit=50000,
+        )
         sessions = self._collapse_sessions(traces)
 
         grouped: Dict[str, Dict[str, Any]] = {}
@@ -651,8 +698,17 @@ class SQLiteStorage(Storage):
         results.sort(key=lambda item: (item["total_cost"], item["session_count"]), reverse=True)
         return results
 
-    def get_stats(self, period_hours: int = 24) -> Dict[str, Any]:
-        return self.get_overview_stats(period_hours)
+    def get_stats(
+        self,
+        period_hours: int = 24,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.get_overview_stats(
+            period_hours=period_hours,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
 
 class JSONLStorage(Storage):
@@ -720,8 +776,17 @@ class JSONLStorage(Storage):
             traces.append(trace)
         return traces
 
-    def get_stats(self, period_hours: int = 24) -> Dict[str, Any]:
-        traces = self.get_traces(limit=10000)
+    def get_stats(
+        self,
+        period_hours: int = 24,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        traces = self.get_traces(
+            start_time=start_time,
+            end_time=end_time,
+            limit=10000,
+        )
         total_cost = sum(float(t.get("cost_usd", 0) or 0) for t in traces)
         total_tokens = sum(
             int(t.get("input_tokens", 0) or 0) + int(t.get("output_tokens", 0) or 0)

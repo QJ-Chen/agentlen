@@ -26,7 +26,7 @@ import {
   deriveRenderablePromptThreads,
   groupSubagentLaunches,
 } from '../lib/conversationModel';
-import { cleanSessionText, formatDuration, formatTokenPair, truncateText } from '../lib/sessionUtils';
+import { cleanSessionText, formatDuration, formatTimestamp, formatTokenPair, truncateText } from '../lib/sessionUtils';
 import {
   EmptyState,
   InfoField,
@@ -318,7 +318,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
               </span>
             </div>
             <InfoField label="开始时间" value={formatTime(trace.startTime)} />
+            <InfoField label="修改时间" value={formatTimestamp(trace.lastUpdatedAt || trace.lastRequestTime)} />
             <InfoField label="最后活动" value={formatTime(trace.lastRequestTime)} />
+            <InfoField label="创建时间" value={formatTimestamp(trace.createdAt || trace.startTime)} />
             <InfoField label="Session ID" value={trace.sessionId} mono />
           </div>
           {trace.projectPath && <PathField label="项目路径" value={trace.projectPath} actionLabel="Open project" actionIcon={ExternalLink} actionPending={openingTarget === 'project'} onAction={() => void openPath('project')} />}

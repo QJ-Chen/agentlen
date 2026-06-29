@@ -74,6 +74,8 @@ export interface RawSessionRecord {
   status?: string;
   start_time?: string | number;
   end_time?: string | number;
+  last_updated?: string | number;
+  created_at?: string | number;
   duration_ms?: number;
   tool_calls?: RawToolCall[];
   llm_calls?: RawLLMCall[];

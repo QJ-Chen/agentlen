@@ -17,9 +17,93 @@ class StubStorage:
         return self._session
 
 
+class RangeCaptureStorage:
+    def __init__(self):
+        self.sessions_calls = []
+        self.overview_calls = []
+        self.projects_calls = []
+
+    def list_sessions(self, **kwargs):
+        self.sessions_calls.append(kwargs)
+        return {"sessions": [], "count": 0, "total": 0}
+
+    def get_overview_stats(self, period_hours, start_time=None, end_time=None):
+        self.overview_calls.append(
+            {
+                "period_hours": period_hours,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+        )
+        return {
+            "period_hours": period_hours,
+            "total_sessions": 0,
+            "total_traces": 0,
+            "total_llm_calls": 0,
+            "total_tool_calls": 0,
+            "total_tokens": 0,
+            "total_cost": 0,
+            "avg_duration_ms": 0,
+            "platforms": [],
+            "platform_counts": {},
+            "models": [],
+            "status_counts": {},
+            "top_tools": [],
+            "active_days": [],
+        }
+
+    def get_project_stats(self, period_hours, start_time=None, end_time=None):
+        self.projects_calls.append(
+            {
+                "period_hours": period_hours,
+                "start_time": start_time,
+                "end_time": end_time,
+            }
+        )
+        return []
+
+
+class StubRealtimeUpdater:
+    def __init__(self, storage, interval=5.0):
+        self.storage = storage
+        self.interval = interval
+        self.started = False
+        self.stopped = False
+        self.rescan_requested = False
+        self.status = {
+            "running": True,
+            "watching": False,
+            "job_type": "startup_backfill",
+            "job_state": "queued",
+            "startup_backfill_completed": False,
+            "collectors": [],
+        }
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+
+    def request_rescan(self):
+        self.rescan_requested = True
+        return {
+            "status": "accepted",
+            "job_type": "manual_rescan",
+            "job_state": "queued",
+        }
+
+    def get_status(self):
+        return dict(self.status)
+
+
 class OpenSessionPathTests(unittest.TestCase):
     def setUp(self):
         self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        self.realtime_patcher = patch.object(api, "RealtimeUpdater", StubRealtimeUpdater)
+        self.realtime_patcher.start()
+        api.realtime_updater = None
         self.tmp_dir = Path(self._testMethodName)
         self.tmp_dir.mkdir(exist_ok=True)
         self.project_dir = self.tmp_dir / "project"
@@ -36,6 +120,8 @@ class OpenSessionPathTests(unittest.TestCase):
 
     def tearDown(self):
         api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+        self.realtime_patcher.stop()
         if self.tmp_dir.exists():
             for child in sorted(self.tmp_dir.rglob("*"), reverse=True):
                 if child.is_file():
@@ -105,6 +191,189 @@ class OpenSessionPathTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
         self.assertIn("Path does not exist", response.json()["detail"])
+
+
+class DateRangeApiTests(unittest.TestCase):
+    def setUp(self):
+        self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        self.realtime_patcher = patch.object(api, "RealtimeUpdater", StubRealtimeUpdater)
+        self.realtime_patcher.start()
+        self.storage = RangeCaptureStorage()
+        api.storage = self.storage
+        api.realtime_updater = None
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+        self.realtime_patcher.stop()
+
+    def test_sessions_endpoint_passes_explicit_date_range(self):
+        response = self.client.get(
+            "/api/v1/sessions",
+            params={
+                "start_time": "2026-06-01T00:00:00Z",
+                "end_time": "2026-06-29T23:59:59Z",
+                "period_hours": 24,
+                "limit": 20,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.storage.sessions_calls), 1)
+        self.assertEqual(
+            self.storage.sessions_calls[0]["start_time"],
+            "2026-06-01T00:00:00Z",
+        )
+        self.assertEqual(
+            self.storage.sessions_calls[0]["end_time"],
+            "2026-06-29T23:59:59Z",
+        )
+        self.assertEqual(self.storage.sessions_calls[0]["period_hours"], 24)
+
+    def test_sessions_endpoint_supports_partial_date_range(self):
+        response = self.client.get(
+            "/api/v1/sessions",
+            params={"end_time": "2026-06-29T23:59:59Z"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.storage.sessions_calls), 1)
+        self.assertIsNone(self.storage.sessions_calls[0]["start_time"])
+        self.assertEqual(
+            self.storage.sessions_calls[0]["end_time"],
+            "2026-06-29T23:59:59Z",
+        )
+
+    def test_overview_stats_endpoint_passes_explicit_date_range(self):
+        response = self.client.get(
+            "/api/v1/stats/overview",
+            params={
+                "start_time": "2026-06-01T00:00:00Z",
+                "end_time": "2026-06-29T23:59:59Z",
+                "period_hours": 720,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.storage.overview_calls,
+            [
+                {
+                    "period_hours": 720,
+                    "start_time": "2026-06-01T00:00:00Z",
+                    "end_time": "2026-06-29T23:59:59Z",
+                }
+            ],
+        )
+
+    def test_project_stats_endpoint_passes_explicit_date_range(self):
+        response = self.client.get(
+            "/api/v1/stats/projects",
+            params={
+                "start_time": "2026-06-01T00:00:00Z",
+                "end_time": "2026-06-29T23:59:59Z",
+                "period_hours": 720,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.storage.projects_calls,
+            [
+                {
+                    "period_hours": 720,
+                    "start_time": "2026-06-01T00:00:00Z",
+                    "end_time": "2026-06-29T23:59:59Z",
+                }
+            ],
+        )
+
+    def test_compat_stats_endpoint_passes_explicit_date_range(self):
+        response = self.client.get(
+            "/api/v1/stats",
+            params={
+                "start_time": "2026-06-01T00:00:00Z",
+                "end_time": "2026-06-29T23:59:59Z",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.storage.overview_calls,
+            [
+                {
+                    "period_hours": 720,
+                    "start_time": "2026-06-01T00:00:00Z",
+                    "end_time": "2026-06-29T23:59:59Z",
+                }
+            ],
+        )
+
+
+class AsyncIngestApiTests(unittest.TestCase):
+    def setUp(self):
+        self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        api.realtime_updater = None
+
+    def tearDown(self):
+        api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+
+    def test_startup_schedules_background_ingest_without_blocking(self):
+        created = []
+
+        class SlowStartUpdater(StubRealtimeUpdater):
+            def start(self):
+                created.append(self)
+                self.started = True
+
+        with patch.object(api, "RealtimeUpdater", SlowStartUpdater):
+            with TestClient(api.app) as client:
+                response = client.get("/")
+                self.assertEqual(response.status_code, 200)
+                self.assertTrue(created)
+                self.assertTrue(created[0].started)
+
+    def test_rescan_endpoint_returns_quickly_with_accepted_status(self):
+        updater = StubRealtimeUpdater(api.storage)
+        api.realtime_updater = updater
+        client = TestClient(api.app)
+
+        response = client.post("/api/v1/ingest/rescan")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "status": "accepted",
+                "job_type": "manual_rescan",
+                "job_state": "queued",
+            },
+        )
+        self.assertTrue(updater.rescan_requested)
+
+    def test_ingest_status_reports_lifecycle_fields(self):
+        updater = StubRealtimeUpdater(api.storage)
+        updater.status = {
+            "running": True,
+            "watching": True,
+            "job_type": "startup_backfill",
+            "job_state": "running",
+            "startup_backfill_completed": False,
+            "collectors": [{"name": "claude-code", "is_watching": True}],
+        }
+        api.realtime_updater = updater
+        client = TestClient(api.app)
+
+        response = client.get("/api/v1/ingest/status")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["job_type"], "startup_backfill")
+        self.assertEqual(response.json()["job_state"], "running")
+        self.assertTrue(response.json()["watching"])
 
 
 if __name__ == "__main__":

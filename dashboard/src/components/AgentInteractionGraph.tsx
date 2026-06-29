@@ -60,9 +60,7 @@ export const AgentInteractionGraph: React.FC<AgentInteractionGraphProps> = ({
             <Network className="h-5 w-5 text-blue-600" />
             <h2 className="text-lg font-semibold text-slate-950">Session Intelligence Views</h2>
           </div>
-          <p className="mt-1 text-sm text-slate-500">
-            Explore sessions by project or chronological flow to find where work and spend concentrate.
-          </p>
+          <p className="mt-1 text-sm text-slate-500">Explore sessions by project or flow.</p>
         </div>
 
         <div className="inline-flex self-start rounded-2xl border border-slate-200 bg-slate-50 p-1">

@@ -96,7 +96,9 @@ export interface Trace {
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   startTime: number;
   endTime?: number;
+  createdAt?: number;
   lastRequestTime: number;
+  lastUpdatedAt?: number;
   duration?: number;
   tools: ToolCall[];
   llmCalls: LLMCall[];

@@ -23,12 +23,22 @@ import {
   cleanSessionText,
   formatCompactDuration,
   formatInteger,
+  formatTimestamp,
   formatTokens,
   shortProjectPath,
+  toEndOfLocalDayISOString,
+  toStartOfLocalDayISOString,
 } from './lib/sessionUtils';
 import './index.css';
 
 const API_URL = 'http://localhost:8080';
+
+function buildDateRangeLabel(startDate: string, endDate: string): string {
+  if (startDate && endDate) return `${startDate} → ${endDate}`;
+  if (startDate) return `from ${startDate}`;
+  if (endDate) return `until ${endDate}`;
+  return '';
+}
 
 type ViewMode = 'sessions' | 'analytics' | 'activity';
 const DEFAULT_EMPTY_SELECTION = {
@@ -51,6 +61,8 @@ function TraceListItem({
     cleanSessionText(trace.llmCalls[0]?.prompt || trace.prompt || '').replace(/\n/g, ' ').slice(0, 100) ||
     'No prompt preview';
   const projectLabel = shortProjectPath(trace.projectPath);
+  const createdLabel = formatTimestamp(trace.createdAt || trace.startTime);
+  const modifiedLabel = formatTimestamp(trace.lastUpdatedAt || trace.lastRequestTime);
 
   return (
     <button
@@ -73,6 +85,8 @@ function TraceListItem({
 
       <div className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] ${isSelected ? 'text-blue-700' : 'text-slate-500'}`}>
         <span>🆔 {trace.sessionId}</span>
+        <span>Modified {modifiedLabel}</span>
+        <span>Created {createdLabel}</span>
         <span>{trace.llmCalls.length} LLM</span>
         <span>{trace.tools.length} tools</span>
         <span>{formatTokens(trace.totalTokens)}</span>
@@ -124,10 +138,15 @@ function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
+  const dateRangeEffectReadyRef = useRef(false);
+  const hasActiveDateRange = startDate.length > 0 || endDate.length > 0;
+  const activeDateRangeLabel = buildDateRangeLabel(startDate, endDate);
 
   const fetchData = useCallback(async () => {
     if (fetchInFlightRef.current) {
@@ -137,10 +156,17 @@ function App() {
     const request = (async () => {
       try {
         setLoading(true);
+        const params = new URLSearchParams({ limit: '200' });
+        const startTime = toStartOfLocalDayISOString(startDate);
+        const endTime = toEndOfLocalDayISOString(endDate);
+        if (startTime) params.set('start_time', startTime);
+        if (endTime) params.set('end_time', endTime);
+        const queryString = params.toString();
+
         const [sessionsRes, statsRes, projectsRes] = await Promise.all([
-          fetch(`${API_URL}/api/v1/sessions?limit=200`),
-          fetch(`${API_URL}/api/v1/stats/overview`),
-          fetch(`${API_URL}/api/v1/stats/projects`),
+          fetch(`${API_URL}/api/v1/sessions?${queryString}`),
+          fetch(`${API_URL}/api/v1/stats/overview?${queryString}`),
+          fetch(`${API_URL}/api/v1/stats/projects?${queryString}`),
         ]);
 
         if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
@@ -176,13 +202,22 @@ function App() {
 
     fetchInFlightRef.current = request;
     return request;
-  }, []);
+  }, [startDate, endDate]);
 
   useEffect(() => {
     if (hasLoadedInitiallyRef.current) return;
     hasLoadedInitiallyRef.current = true;
     void fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (!dateRangeEffectReadyRef.current) {
+      dateRangeEffectReadyRef.current = true;
+      return;
+    }
+    if (!hasLoadedInitiallyRef.current) return;
+    void fetchData();
+  }, [fetchData, startDate, endDate]);
 
   useEffect(() => {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
@@ -243,10 +278,10 @@ function App() {
   const expandAllGroups = useCallback(() => {
     setCollapsedGroups({});
   }, []);
-  const hasActiveFilters = searchQuery.length > 0 || statusFilter !== 'all';
+  const hasActiveSessionFilters = searchQuery.length > 0 || statusFilter !== 'all';
   const selectedTraceVisible = selectedTrace && filteredTraces.some((trace) => trace.id === selectedTrace.id);
 
-  const selectedProjectCount = useMemo(() => new Set(filteredTraces.map((trace) => trace.projectPath || '(unknown)')).size, [filteredTraces]);
+  const rangedProjectCount = useMemo(() => new Set(traces.map((trace) => trace.projectPath || '(unknown)')).size, [traces]);
 
   if (error) {
     return (
@@ -277,7 +312,7 @@ function App() {
             </div>
 
             <div className="flex items-center gap-2 text-sm text-slate-500">
-              {stats && <span className="hidden xl:inline">{formatInteger(stats.total_sessions)} sessions tracked</span>}
+              {stats && <span className="hidden xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
               <button onClick={() => void fetchData()} className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:border-slate-300 hover:bg-slate-50 transition-colors shadow-sm" disabled={loading}>
                 <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
@@ -293,32 +328,28 @@ function App() {
               <StatsCard
                 title="Sessions"
                 value={formatInteger(stats.total_sessions)}
-                subtext="Recent imported sessions"
-                detail={`${selectedProjectCount} visible projects in current view`}
+                subtext={`${rangedProjectCount} projects`}
                 icon={Activity}
                 color="bg-blue-500"
               />
               <StatsCard
                 title="Tokens"
                 value={formatTokens(stats.total_tokens)}
-                subtext={`${formatInteger(stats.total_llm_calls)} LLM calls observed`}
-                detail="Prompt + completion usage across imported sessions"
+                subtext={`${formatInteger(stats.total_llm_calls)} LLM calls`}
                 icon={BarChart3}
                 color="bg-violet-500"
               />
               <StatsCard
                 title="Cost"
                 value={`$${stats.total_cost.toFixed(2)}`}
-                subtext={`${formatInteger(stats.total_tool_calls)} tool events captured`}
-                detail="Local forensic view of spend, not a billing source of truth"
+                subtext={`${formatInteger(stats.total_tool_calls)} tools`}
                 icon={LayoutDashboard}
                 color="bg-emerald-500"
               />
               <StatsCard
                 title="Avg duration"
                 value={formatCompactDuration(stats.avg_duration_ms)}
-                subtext={`${stats.active_days.length} active days in this window`}
-                detail="Derived from imported session timestamps"
+                subtext={`${stats.active_days.length} active days`}
                 icon={Terminal}
                 color="bg-orange-500"
               />
@@ -351,58 +382,102 @@ function App() {
               ))}
             </div>
 
-            {viewMode === 'sessions' && (
-              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end xl:min-w-[28rem]">
-                <div className="relative flex-1 xl:min-w-[22rem]">
-                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search session, project, or prompt…"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none"
-                  />
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                  <Filter className="h-4 w-4" />
+                  <span className="text-slate-700">Started between</span>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    <Filter className="h-4 w-4" />
-                    <span className="text-slate-700">Claude Code only</span>
-                  </div>
-                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent focus:outline-none text-slate-700">
-                      <option value="all">All status</option>
-                      <option value="completed">completed</option>
-                      <option value="failed">failed</option>
-                      <option value="running">running</option>
-                      <option value="cancelled">cancelled</option>
-                    </select>
-                  </div>
-                  {hasActiveFilters && (
-                    <button
-                      onClick={() => {
-                        setSearchQuery('');
-                        setStatusFilter('all');
-                      }}
-                      className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                    >
-                      <X className="h-3.5 w-3.5" /> Clear
-                    </button>
-                  )}
-                </div>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  max={endDate || undefined}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:bg-white focus:outline-none"
+                  aria-label="Start date"
+                />
+                <span className="text-sm text-slate-400">→</span>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  min={startDate || undefined}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:bg-white focus:outline-none"
+                  aria-label="End date"
+                />
+                {hasActiveDateRange && (
+                  <button
+                    onClick={() => {
+                      setStartDate('');
+                      setEndDate('');
+                    }}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                  >
+                    <X className="h-3.5 w-3.5" /> Reset dates
+                  </button>
+                )}
               </div>
-            )}
+
+              {viewMode === 'sessions' && (
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end xl:min-w-[28rem]">
+                  <div className="relative flex-1 xl:min-w-[22rem]">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Search session, project, or prompt…"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                      <Filter className="h-4 w-4" />
+                      <span className="text-slate-700">Claude Code only</span>
+                    </div>
+                    <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                      <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent focus:outline-none text-slate-700">
+                        <option value="all">All status</option>
+                        <option value="completed">completed</option>
+                        <option value="failed">failed</option>
+                        <option value="running">running</option>
+                        <option value="cancelled">cancelled</option>
+                      </select>
+                    </div>
+                    {hasActiveSessionFilters && (
+                      <button
+                        onClick={() => {
+                          setSearchQuery('');
+                          setStatusFilter('all');
+                        }}
+                        className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                      >
+                        <X className="h-3.5 w-3.5" /> Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          {viewMode === 'sessions' && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+            {viewMode === 'sessions' && (
               <span>
                 Showing <span className="text-slate-900">{formatInteger(filteredTraces.length)}</span> of{' '}
                 <span className="text-slate-900">{formatInteger(traces.length)}</span> imported sessions
               </span>
-              {hasActiveFilters && <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 border border-blue-100">Filters active</span>}
-            </div>
-          )}
+            )}
+            {hasActiveDateRange && (
+              <span className="rounded-full border border-violet-100 bg-violet-50 px-3 py-1 text-violet-700">
+                Date range: {activeDateRangeLabel}
+              </span>
+            )}
+            {hasActiveSessionFilters && viewMode === 'sessions' && (
+              <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 border border-blue-100">Inbox filters active</span>
+            )}
+          </div>
         </section>
 
         {viewMode === 'sessions' && (
@@ -410,8 +485,7 @@ function App() {
             <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 xl:sticky xl:top-[13rem] xl:self-start">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-950">Sessions Inbox</h2>
-                  <p className="text-sm text-slate-500">Imported local agent sessions ready for replay and debugging</p>
+                  <h2 className="text-lg font-semibold text-slate-950">Sessions</h2>
                 </div>
                 <div className="flex items-center gap-2">
                   <button
@@ -434,8 +508,10 @@ function App() {
                 {filteredTraces.length === 0 ? (
                   <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
                     <Terminal className="mx-auto mb-3 h-10 w-10 text-slate-400" />
-                    <p className="text-base font-medium text-slate-800">No sessions match the current filters</p>
-                    <p className="mt-2 text-sm">Click the refresh button to load the latest Claude Code sessions.</p>
+                    <p className="text-base font-medium text-slate-800">No sessions match the current view</p>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {hasActiveDateRange ? 'Try widening the selected date range.' : 'Refresh to load the latest sessions.'}
+                    </p>
                   </div>
                 ) : (
                   groupedTraces.map((group) => {
@@ -502,7 +578,6 @@ function App() {
             <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
               <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-200/70">
                 <h3 className="text-lg font-semibold text-slate-950">Top Tools</h3>
-                <p className="mt-1 text-sm text-slate-500">Most frequently observed tool calls across imported sessions.</p>
                 <div className="mt-4 space-y-2">
                   {(stats?.top_tools || []).map((tool) => (
                     <div key={tool.name} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
@@ -515,7 +590,6 @@ function App() {
 
               <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-200/70">
                 <h3 className="text-lg font-semibold text-slate-950">Project Rollups</h3>
-                <p className="mt-1 text-sm text-slate-500">Project-level usage, activity, and spend for the imported sessions.</p>
                 <div className="mt-4 space-y-3 max-h-96 overflow-auto pr-1">
                   {projects.slice(0, 12).map((project) => (
                     <div key={project.project_path} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm">
@@ -553,7 +627,7 @@ function App() {
                       <Terminal className="h-8 w-8" />
                     </div>
                     <h3 className="text-xl font-semibold text-slate-900">Review recent session activity</h3>
-                    <p className="mt-3 text-sm leading-6 text-slate-500">Choose a recent session to inspect the latest tool and model activity in context.</p>
+                    <p className="mt-3 text-sm text-slate-500">Choose a session.</p>
                   </div>
                 </div>
               )}

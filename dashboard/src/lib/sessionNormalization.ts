@@ -296,12 +296,19 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
 
   const startTime = recordStartTime || Date.now();
   const endTime = toTimestamp(record.end_time);
-  const lastRequestTime =
+  const rawCreatedAt = toTimestamp(record.created_at);
+  const rawLastUpdatedAt = toTimestamp(record.last_updated);
+  const activityTime =
     Math.max(
       startTime,
+      endTime || 0,
+      rawLastUpdatedAt || 0,
       ...tools.map((tool) => tool.endTime || tool.startTime),
       ...llmCalls.map((call) => call.endTime || call.startTime),
     ) || startTime;
+  const createdAt = Math.min(...[rawCreatedAt, startTime].filter((value): value is number => typeof value === 'number' && value > 0));
+  const lastRequestTime = activityTime;
+  const lastUpdatedAt = Math.max(createdAt, activityTime);
 
   return {
     id: record.trace_id || record.session_id || String(record.id || startTime),
@@ -312,7 +319,9 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
     status: normalizeStatus(record.status || 'completed'),
     startTime,
     endTime,
+    createdAt,
     lastRequestTime,
+    lastUpdatedAt,
     duration: record.duration_ms || 0,
     tools,
     llmCalls,

@@ -606,6 +606,7 @@ class LogCollector(ABC):
         self.watch_thread: Optional[threading.Thread] = None
         self.file_positions: Dict[Path, int] = {}
         self.file_states: Dict[Path, Dict[str, Any]] = {}
+        self.state_lock = threading.RLock()
 
     @abstractmethod
     def get_name(self) -> str:
@@ -648,36 +649,43 @@ class LogCollector(ABC):
         return self.finalize_state(state)
 
     def _rebuild_state(self, log_path: Path) -> List[Dict[str, Any]]:
-        state = self.create_incremental_state(log_path)
-        self._consume_file(log_path, state)
-        self.file_states[log_path] = state
-        self.file_positions[log_path] = log_path.stat().st_size
-        return self.finalize_state(state)
+        with self.state_lock:
+            state = self.create_incremental_state(log_path)
+            self._consume_file(log_path, state)
+            self.file_states[log_path] = state
+            self.file_positions[log_path] = log_path.stat().st_size
+            return self.finalize_state(state)
 
     def start_watching(self, interval: float = 1.0):
-        if self.watching:
-            return
+        with self.state_lock:
+            if self.watching:
+                return
 
-        self.watching = True
-        for log_path in self.get_log_paths():
-            if log_path.exists():
-                self.file_positions[log_path] = log_path.stat().st_size
-        self.watch_thread = threading.Thread(
-            target=self._watch_loop,
-            args=(interval,),
-            daemon=True,
-        )
-        self.watch_thread.start()
+            self.watching = True
+            for log_path in self.get_log_paths():
+                if log_path.exists() and log_path not in self.file_positions:
+                    self.file_positions[log_path] = log_path.stat().st_size
+            self.watch_thread = threading.Thread(
+                target=self._watch_loop,
+                args=(interval,),
+                daemon=True,
+            )
+            self.watch_thread.start()
         logger.info("%s collector started watching", self.get_name())
 
     def stop_watching(self):
-        self.watching = False
-        if self.watch_thread:
-            self.watch_thread.join(timeout=5)
+        with self.state_lock:
+            self.watching = False
+            watch_thread = self.watch_thread
             self.watch_thread = None
+        if watch_thread:
+            watch_thread.join(timeout=5)
 
     def _watch_loop(self, interval: float):
-        while self.watching:
+        while True:
+            with self.state_lock:
+                if not self.watching:
+                    break
             try:
                 self._check_files()
             except Exception as exc:  # pragma: no cover - defensive logging path
@@ -685,91 +693,93 @@ class LogCollector(ABC):
             time.sleep(interval)
 
     def _check_files(self):
-        updated_files = 0
-        appended_lines_total = 0
+        with self.state_lock:
+            updated_files = 0
+            appended_lines_total = 0
 
-        for log_path in self.get_log_paths():
-            if not log_path.exists():
-                continue
-
-            current_size = log_path.stat().st_size
-            last_position = self.file_positions.get(log_path)
-
-            if last_position is None:
-                traces = self._rebuild_state(log_path)
-                if traces and self.storage:
-                    self.storage.save_traces(traces)
-                updated_files += 1
-                continue
-
-            if current_size < last_position:
-                logger.info(
-                    "%s: %s was truncated or rotated; rebuilding state",
-                    self.get_name(),
-                    log_path.name,
-                )
-                traces = self._rebuild_state(log_path)
-                if traces and self.storage:
-                    self.storage.save_traces(traces)
-                updated_files += 1
-                continue
-
-            if current_size == last_position:
-                continue
-
-            try:
-                with open(log_path, "r", encoding="utf-8") as handle:
-                    handle.seek(last_position)
-                    new_lines = handle.readlines()
-
-                if not new_lines:
-                    self.file_positions[log_path] = current_size
+            for log_path in self.get_log_paths():
+                if not log_path.exists():
                     continue
 
-                state = self.file_states.get(log_path)
-                if state is None:
+                current_size = log_path.stat().st_size
+                last_position = self.file_positions.get(log_path)
+
+                if last_position is None:
                     traces = self._rebuild_state(log_path)
-                else:
-                    for line in new_lines:
-                        self.process_line(state, line)
-                    self.file_positions[log_path] = current_size
-                    traces = self.finalize_state(state)
+                    if traces and self.storage:
+                        self.storage.save_traces(traces)
+                    updated_files += 1
+                    continue
 
-                if traces and self.storage:
-                    self.storage.save_traces(traces)
-                updated_files += 1
-                appended_lines_total += len(new_lines)
-            except Exception as exc:
-                logger.warning(
-                    "%s: incremental parse failed for %s (%s); rebuilding full state",
+                if current_size < last_position:
+                    logger.info(
+                        "%s: %s was truncated or rotated; rebuilding state",
+                        self.get_name(),
+                        log_path.name,
+                    )
+                    traces = self._rebuild_state(log_path)
+                    if traces and self.storage:
+                        self.storage.save_traces(traces)
+                    updated_files += 1
+                    continue
+
+                if current_size == last_position:
+                    continue
+
+                try:
+                    with open(log_path, "r", encoding="utf-8") as handle:
+                        handle.seek(last_position)
+                        new_lines = handle.readlines()
+
+                    if not new_lines:
+                        self.file_positions[log_path] = current_size
+                        continue
+
+                    state = self.file_states.get(log_path)
+                    if state is None:
+                        traces = self._rebuild_state(log_path)
+                    else:
+                        for line in new_lines:
+                            self.process_line(state, line)
+                        self.file_positions[log_path] = current_size
+                        traces = self.finalize_state(state)
+
+                    if traces and self.storage:
+                        self.storage.save_traces(traces)
+                    updated_files += 1
+                    appended_lines_total += len(new_lines)
+                except Exception as exc:
+                    logger.warning(
+                        "%s: incremental parse failed for %s (%s); rebuilding full state",
+                        self.get_name(),
+                        log_path.name,
+                        exc,
+                    )
+                    traces = self._rebuild_state(log_path)
+                    if traces and self.storage:
+                        self.storage.save_traces(traces)
+                    updated_files += 1
+
+            if updated_files:
+                logger.info(
+                    "%s: incrementally updated %s files (%s appended lines)",
                     self.get_name(),
-                    log_path.name,
-                    exc,
+                    updated_files,
+                    appended_lines_total,
                 )
-                traces = self._rebuild_state(log_path)
-                if traces and self.storage:
-                    self.storage.save_traces(traces)
-                updated_files += 1
-
-        if updated_files:
-            logger.info(
-                "%s: incrementally updated %s files (%s appended lines)",
-                self.get_name(),
-                updated_files,
-                appended_lines_total,
-            )
 
     def collect_historical(self) -> List[Dict[str, Any]]:
-        all_traces = []
-        for log_path in self.get_log_paths():
-            if not log_path.exists():
-                continue
-            try:
-                traces = self._rebuild_state(log_path)
-                all_traces.extend(traces)
-            except Exception as exc:
-                logger.error("Error reading %s: %s", log_path, exc)
-        return all_traces
+        with self.state_lock:
+            all_traces = []
+            for log_path in self.get_log_paths():
+                if not log_path.exists():
+                    continue
+                try:
+                    traces = self._rebuild_state(log_path)
+                    all_traces.extend(traces)
+                except Exception as exc:
+                    logger.error("Error reading %s: %s", log_path, exc)
+            return all_traces
 
 
 class ClaudeCodeCollector(LogCollector):
@@ -1167,11 +1177,15 @@ class CollectorManager:
         return len(all_traces)
 
     def get_collector_status(self) -> List[Dict[str, Any]]:
-        return [
-            {
-                "name": collector.get_name(),
-                "log_paths": [str(path) for path in collector.get_log_paths()],
-                "is_watching": collector.watching,
-            }
-            for collector in self.collectors
-        ]
+        statuses = []
+        for collector in self.collectors:
+            with collector.state_lock:
+                statuses.append(
+                    {
+                        "name": collector.get_name(),
+                        "log_paths": [str(path) for path in collector.get_log_paths()],
+                        "is_watching": collector.watching,
+                        "tracked_files": len(collector.file_positions),
+                    }
+                )
+        return statuses

@@ -95,9 +95,7 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-slate-500">
-            Newest updated sessions from the latest server refresh, with a bias toward fresh activity.
-          </p>
+          <p className="mt-1 text-sm text-slate-500">Newest sessions.</p>
         </div>
 
         <div className="flex items-center gap-2 text-xs text-slate-500">
@@ -160,9 +158,7 @@ export const RealtimeStatusPanel: React.FC<RealtimeStatusPanelProps> = ({
         <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
           <CheckCircle className="mx-auto mb-3 h-10 w-10 text-slate-400" />
           <p className="text-base font-medium text-slate-800">No recent session activity</p>
-          <p className="mt-2 text-sm">
-            Use the top-right refresh button to pull the latest server data after local session logs change.
-          </p>
+          <p className="mt-2 text-sm">No recent sessions.</p>
         </div>
       )}
 

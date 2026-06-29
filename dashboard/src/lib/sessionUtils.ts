@@ -52,6 +52,20 @@ export function formatInteger(value: number): string {
   return clampNonNegative(value).toLocaleString();
 }
 
+export function formatTimestamp(timestamp?: number): string {
+  if (!timestamp) return '-';
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? '-'
+    : date.toLocaleString([], {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+}
+
 export function formatTokenPair(inputTokens: number, outputTokens: number): string {
   return `${formatInteger(inputTokens)} → ${formatInteger(outputTokens)} tokens`;
 }
@@ -62,6 +76,18 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
   if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
   if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;
   return `${Math.floor(delta / 86_400_000)}d ago`;
+}
+
+export function toStartOfLocalDayISOString(dateInput?: string | null): string | null {
+  if (!dateInput) return null;
+  const date = new Date(`${dateInput}T00:00:00.000`);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+export function toEndOfLocalDayISOString(dateInput?: string | null): string | null {
+  if (!dateInput) return null;
+  const date = new Date(`${dateInput}T23:59:59.999`);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 export function shortProjectPath(path?: string | null): string | null {
