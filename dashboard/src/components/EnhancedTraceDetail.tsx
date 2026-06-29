@@ -1007,7 +1007,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   };
 
   return (
-    <div className="rounded-3xl border border-slate-200/80 bg-white overflow-hidden shadow-sm shadow-slate-200/70">
+    <div className="rounded-3xl border border-slate-200/80 bg-white overflow-hidden shadow-sm shadow-slate-200/70 xl:max-h-[calc(100vh-3rem)] xl:flex xl:flex-col">
       <div className="border-b border-slate-200 px-4 py-3 flex flex-wrap gap-2 bg-white">
         {tabs.map((tab) => (
           <button
@@ -1025,7 +1025,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
       {renderReplayFilters()}
 
-      <div className="p-5">
+      <div className="p-5 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'llm' && renderLLM()}
         {activeTab === 'subagents' && renderSubagents()}

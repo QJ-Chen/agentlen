@@ -7,19 +7,17 @@ import {
   ChevronRight,
   Filter,
   LayoutDashboard,
-  Network,
   RefreshCw,
   Search,
   Terminal,
   X,
 } from 'lucide-react';
-import type { OverviewStats, ProjectStats, Trace } from './types';
+import type { OverviewStats, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
-import { AgentInteractionGraph } from './components/AgentInteractionGraph';
-import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
-import type { ProjectsResponse, SessionsResponse } from './lib/sessionApiTypes';
+import type { SessionsResponse } from './lib/sessionApiTypes';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
+  cleanSessionText,
   formatCompactDuration,
   formatInteger,
   formatTimestamp,
@@ -39,7 +37,6 @@ function buildDateRangeLabel(startDate: string, endDate: string): string {
   return '';
 }
 
-type ViewMode = 'sessions' | 'analytics' | 'activity';
 const DEFAULT_EMPTY_SELECTION = {
   title: 'Select a session to inspect',
   description: 'Choose a session from the list.',
@@ -124,16 +121,13 @@ function App() {
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
   const [stats, setStats] = useState<OverviewStats | null>(null);
-  const [projects, setProjects] = useState<ProjectStats[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('sessions');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [lastFetchedAt, setLastFetchedAt] = useState<number | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
@@ -155,28 +149,24 @@ function App() {
         if (endTime) params.set('end_time', endTime);
         const queryString = params.toString();
 
-        const [sessionsRes, statsRes, projectsRes] = await Promise.all([
+        const [sessionsRes, statsRes] = await Promise.all([
           fetch(`${API_URL}/api/v1/sessions?${queryString}`),
           fetch(`${API_URL}/api/v1/stats/overview?${queryString}`),
-          fetch(`${API_URL}/api/v1/stats/projects?${queryString}`),
         ]);
 
-        if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
+        if (!sessionsRes.ok || !statsRes.ok) {
           throw new Error('API request failed');
         }
 
         const sessionsData = (await sessionsRes.json()) as SessionsResponse;
         const statsData = (await statsRes.json()) as OverviewStats;
-        const projectsData = (await projectsRes.json()) as ProjectsResponse;
 
         const transformed = (sessionsData.sessions || []).map(transformSession);
         transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
 
         setTraces(transformed);
         setStats(statsData);
-        setProjects(projectsData.projects || []);
         setError(null);
-        setLastFetchedAt(Date.now());
 
         setSelectedTraceId((current) => {
           if (current) {
@@ -291,7 +281,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="sticky top-0 z-50 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+      <header className="border-b border-slate-200/80 bg-white/90 backdrop-blur">
         <div className="mx-auto max-w-7xl px-4 py-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
@@ -354,24 +344,10 @@ function App() {
         <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
-              {[
-                { id: 'sessions', label: 'Sessions Inbox', icon: Activity },
-                { id: 'analytics', label: 'Analytics', icon: Network },
-                { id: 'activity', label: 'Recent Activity', icon: Terminal },
-              ].map((mode) => (
-                <button
-                  key={mode.id}
-                  onClick={() => setViewMode(mode.id as ViewMode)}
-                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                    viewMode === mode.id
-                      ? 'bg-blue-600 text-white shadow-sm shadow-blue-200'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200 hover:text-slate-900'
-                  }`}
-                >
-                  <mode.icon className="h-4 w-4" />
-                  {mode.label}
-                </button>
-              ))}
+              <div className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-blue-200">
+                <Activity className="h-4 w-4" />
+                Sessions Inbox
+              </div>
             </div>
 
             <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -410,71 +386,66 @@ function App() {
                 )}
               </div>
 
-              {viewMode === 'sessions' && (
-                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end xl:min-w-[28rem]">
-                  <div className="relative flex-1 xl:min-w-[22rem]">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search session, project, or prompt…"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                      <Filter className="h-4 w-4" />
-                      <span className="text-slate-700">Claude Code only</span>
-                    </div>
-                    <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                      <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent focus:outline-none text-slate-700">
-                        <option value="all">All status</option>
-                        <option value="completed">completed</option>
-                        <option value="failed">failed</option>
-                        <option value="running">running</option>
-                        <option value="cancelled">cancelled</option>
-                      </select>
-                    </div>
-                    {hasActiveSessionFilters && (
-                      <button
-                        onClick={() => {
-                          setSearchQuery('');
-                          setStatusFilter('all');
-                        }}
-                        className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                      >
-                        <X className="h-3.5 w-3.5" /> Clear
-                      </button>
-                    )}
-                  </div>
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-end xl:min-w-[28rem]">
+                <div className="relative flex-1 xl:min-w-[22rem]">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search session, project, or prompt…"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none"
+                  />
                 </div>
-              )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                    <Filter className="h-4 w-4" />
+                    <span className="text-slate-700">Claude Code only</span>
+                  </div>
+                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent focus:outline-none text-slate-700">
+                      <option value="all">All status</option>
+                      <option value="completed">completed</option>
+                      <option value="failed">failed</option>
+                      <option value="running">running</option>
+                      <option value="cancelled">cancelled</option>
+                    </select>
+                  </div>
+                  {hasActiveSessionFilters && (
+                    <button
+                      onClick={() => {
+                        setSearchQuery('');
+                        setStatusFilter('all');
+                      }}
+                      className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                    >
+                      <X className="h-3.5 w-3.5" /> Clear
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500">
-            {viewMode === 'sessions' && (
-              <span>
-                Showing <span className="text-slate-900">{formatInteger(filteredTraces.length)}</span> of{' '}
-                <span className="text-slate-900">{formatInteger(traces.length)}</span> imported sessions
-              </span>
-            )}
+            <span>
+              Showing <span className="text-slate-900">{formatInteger(filteredTraces.length)}</span> of{' '}
+              <span className="text-slate-900">{formatInteger(traces.length)}</span> imported sessions
+            </span>
             {hasActiveDateRange && (
               <span className="rounded-full border border-violet-100 bg-violet-50 px-3 py-1 text-violet-700">
                 Date range: {activeDateRangeLabel}
               </span>
             )}
-            {hasActiveSessionFilters && viewMode === 'sessions' && (
+            {hasActiveSessionFilters && (
               <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 border border-blue-100">Inbox filters active</span>
             )}
           </div>
         </section>
 
-        {viewMode === 'sessions' && (
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 xl:sticky xl:top-[13rem] xl:self-start">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)] xl:items-start">
+          <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 xl:sticky xl:top-6 xl:self-start">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-lg font-semibold text-slate-950">Sessions</h2>
@@ -545,7 +516,7 @@ function App() {
               </div>
             </section>
 
-            <section className="space-y-6">
+          <section className="space-y-6">
               {selectedTraceVisible && selectedTrace ? (
                 <EnhancedTraceDetail trace={selectedTrace} />
               ) : (
@@ -559,73 +530,8 @@ function App() {
                   </div>
                 </div>
               )}
-            </section>
-          </div>
-        )}
-
-        {viewMode === 'analytics' && (
-          <div className="space-y-6">
-            <AgentInteractionGraph traces={traces} selectedTraceId={selectedTrace?.id} onSelectTrace={(trace) => setSelectedTraceId(trace.id)} />
-
-            <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
-              <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-200/70">
-                <h3 className="text-lg font-semibold text-slate-950">Top Tools</h3>
-                <div className="mt-4 space-y-2">
-                  {(stats?.top_tools || []).map((tool) => (
-                    <div key={tool.name} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
-                      <span className="text-slate-800">{tool.name}</span>
-                      <span className="text-slate-500">{formatInteger(tool.count)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-3xl border border-slate-200/80 bg-white p-5 shadow-sm shadow-slate-200/70">
-                <h3 className="text-lg font-semibold text-slate-950">Project Rollups</h3>
-                <div className="mt-4 space-y-3 max-h-96 overflow-auto pr-1">
-                  {projects.slice(0, 12).map((project) => (
-                    <div key={project.project_path} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4 text-sm">
-                      <div className="font-medium text-slate-900 break-all">{project.project_path}</div>
-                      <div className="mt-2 text-slate-500">
-                        {project.session_count} sessions · {formatTokens(project.total_tokens)} · ${project.total_cost.toFixed(4)}
-                      </div>
-                      <div className="mt-1 text-xs text-slate-400">Average duration {formatCompactDuration(project.avg_duration_ms)}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {viewMode === 'activity' && (
-          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70">
-              <RealtimeStatusPanel
-                traces={traces}
-                selectedTraceId={selectedTrace?.id}
-                onSelectTrace={(trace) => setSelectedTraceId(trace.id)}
-                lastFetchedAt={lastFetchedAt}
-                isRefreshing={loading}
-              />
-            </section>
-            <section className="space-y-6">
-              {selectedTrace ? (
-                <EnhancedTraceDetail trace={selectedTrace} />
-              ) : (
-                <div className="flex min-h-[34rem] items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center shadow-sm shadow-slate-200/60">
-                  <div className="max-w-md">
-                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
-                      <Terminal className="h-8 w-8" />
-                    </div>
-                    <h3 className="text-xl font-semibold text-slate-900">Review recent session activity</h3>
-                    <p className="mt-3 text-sm text-slate-500">Choose a session.</p>
-                  </div>
-                </div>
-              )}
-            </section>
-          </div>
-        )}
+          </section>
+        </div>
       </main>
     </div>
   );

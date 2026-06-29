@@ -132,14 +132,3 @@ export interface OverviewStats {
   top_tools: Array<{ name: string; count: number }>;
   active_days: string[];
 }
-
-export interface ProjectStats {
-  project_path: string;
-  session_count: number;
-  total_cost: number;
-  total_tokens: number;
-  avg_duration_ms: number;
-  platforms: Record<Platform, number>;
-  models: Record<string, number>;
-  last_updated?: string;
-}
