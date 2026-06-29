@@ -293,7 +293,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
   ] as const;
 
   const renderOverview = () => {
-    const platformConfig = PLATFORM_CONFIG[trace.platform];
+    const platformConfig = PLATFORM_CONFIG[trace.platform] ?? PLATFORM_CONFIG['claude-code'];
 
     return (
       <div className="space-y-6">

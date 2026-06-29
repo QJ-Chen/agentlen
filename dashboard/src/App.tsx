@@ -20,7 +20,6 @@ import { RealtimeStatusPanel } from './components/RealtimeStatusPanel';
 import type { ProjectsResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
-  cleanSessionText,
   formatCompactDuration,
   formatInteger,
   formatTimestamp,
@@ -57,9 +56,6 @@ function TraceListItem({
   onClick: () => void;
   hideProjectLabel?: boolean;
 }) {
-  const promptPreview =
-    cleanSessionText(trace.llmCalls[0]?.prompt || trace.prompt || '').replace(/\n/g, ' ').slice(0, 100) ||
-    'No prompt preview';
   const projectLabel = shortProjectPath(trace.projectPath);
   const createdLabel = formatTimestamp(trace.createdAt || trace.startTime);
   const modifiedLabel = formatTimestamp(trace.lastUpdatedAt || trace.lastRequestTime);
@@ -75,9 +71,8 @@ function TraceListItem({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className={`text-sm font-medium leading-6 ${isSelected ? 'text-slate-950' : 'text-slate-800'}`}>💬 {promptPreview}</div>
           {!hideProjectLabel && projectLabel && (
-            <div className={`text-xs mt-2 truncate ${isSelected ? 'text-blue-700' : 'text-slate-500'}`}>📁 {projectLabel}</div>
+            <div className={`text-sm truncate ${isSelected ? 'text-blue-700' : 'text-slate-700'}`}>📁 {projectLabel}</div>
           )}
         </div>
         {trace.status !== 'completed' && <StatusBadge status={trace.status} compact selected={isSelected} />}
@@ -88,9 +83,6 @@ function TraceListItem({
         <span>Modified {modifiedLabel}</span>
         <span>Created {createdLabel}</span>
         <span>{trace.llmCalls.length} LLM</span>
-        <span>{trace.tools.length} tools</span>
-        <span>{formatTokens(trace.totalTokens)}</span>
-        <span className={isSelected ? 'text-emerald-700' : 'text-emerald-600'}>${trace.cost.toFixed(4)}</span>
       </div>
     </button>
   );
