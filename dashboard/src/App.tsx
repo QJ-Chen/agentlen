@@ -3,8 +3,6 @@ import type { ComponentType } from 'react';
 import {
   Activity,
   BarChart3,
-  ChevronDown,
-  ChevronRight,
   Filter,
   LayoutDashboard,
   RefreshCw,
@@ -12,18 +10,16 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { OverviewStats, ProjectMetadata, Trace } from './types';
-import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
-import { ProjectMetadataPanel } from './components/ProjectMetadataPanel';
-import type { ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
+import type { OverviewStats, HierarchyNode, ProjectMetadata } from './types';
+import { NodeDetailPane } from './components/NodeDetailPane';
+import { HierarchyTree } from './components/HierarchyTree';
+import type { HierarchyResponse, ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
   cleanSessionText,
   formatCompactDuration,
   formatInteger,
-  formatTimestamp,
   formatTokens,
-  shortProjectPath,
   toEndOfLocalDayISOString,
   toStartOfLocalDayISOString,
 } from './lib/sessionUtils';
@@ -36,54 +32,6 @@ function buildDateRangeLabel(startDate: string, endDate: string): string {
   if (startDate) return `from ${startDate}`;
   if (endDate) return `until ${endDate}`;
   return '';
-}
-
-const DEFAULT_EMPTY_SELECTION = {
-  title: 'Select a session to inspect',
-  description: 'Choose a session from the list.',
-};
-
-function TraceListItem({
-  trace,
-  isSelected,
-  onClick,
-  hideProjectLabel = false,
-}: {
-  trace: TraceWithRaw;
-  isSelected: boolean;
-  onClick: () => void;
-  hideProjectLabel?: boolean;
-}) {
-  const projectLabel = shortProjectPath(trace.projectPath);
-  const createdLabel = formatTimestamp(trace.createdAt || trace.startTime);
-  const modifiedLabel = formatTimestamp(trace.lastUpdatedAt || trace.lastRequestTime);
-
-  return (
-    <button
-      onClick={onClick}
-      className={`w-full text-left rounded-2xl border px-4 py-3 transition-all ${
-        isSelected
-          ? 'bg-blue-50 border-blue-300 shadow-sm shadow-blue-100'
-          : 'bg-white hover:bg-slate-50 border-slate-200 hover:border-slate-300 shadow-sm shadow-slate-200/40'
-      }`}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          {!hideProjectLabel && projectLabel && (
-            <div className={`text-sm truncate ${isSelected ? 'text-blue-700' : 'text-slate-700'}`}>📁 {projectLabel}</div>
-          )}
-        </div>
-        {trace.status !== 'completed' && <StatusBadge status={trace.status} compact selected={isSelected} />}
-      </div>
-
-      <div className={`mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] ${isSelected ? 'text-blue-700' : 'text-slate-500'}`}>
-        <span>🆔 {trace.sessionId}</span>
-        <span>Modified {modifiedLabel}</span>
-        <span>Created {createdLabel}</span>
-        <span>{trace.llmCalls.length} LLM</span>
-      </div>
-    </button>
-  );
 }
 
 function StatsCard({
@@ -128,10 +76,13 @@ function App() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
   const [projectMetadataLoading, setProjectMetadataLoading] = useState(false);
   const [projectMetadataError, setProjectMetadataError] = useState<string | null>(null);
+  const [hierarchyRoot, setHierarchyRoot] = useState<HierarchyNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set(['global-root', 'projects-root']));
+  const [leftPanelWidth, setLeftPanelWidth] = useState(320);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
@@ -153,30 +104,34 @@ function App() {
         if (endTime) params.set('end_time', endTime);
         const queryString = params.toString();
 
-        const [sessionsRes, statsRes] = await Promise.all([
+        const [sessionsRes, statsRes, hierarchyRes] = await Promise.all([
           fetch(`${API_URL}/api/v1/sessions?${queryString}`),
           fetch(`${API_URL}/api/v1/stats/overview?${queryString}`),
+          fetch(`${API_URL}/api/v1/hierarchy`),
         ]);
 
-        if (!sessionsRes.ok || !statsRes.ok) {
+        if (!sessionsRes.ok || !statsRes.ok || !hierarchyRes.ok) {
           throw new Error('API request failed');
         }
 
         const sessionsData = (await sessionsRes.json()) as SessionsResponse;
         const statsData = (await statsRes.json()) as OverviewStats;
+        const hierarchyData = (await hierarchyRes.json()) as HierarchyResponse;
 
         const transformed = (sessionsData.sessions || []).map(transformSession);
         transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
 
         setTraces(transformed);
         setStats(statsData);
+        setHierarchyRoot(hierarchyData.root || null);
         setError(null);
 
         setSelectedTraceId((current) => {
-          if (current) {
-            return transformed.find((trace) => trace.id === current)?.id || transformed[0]?.id || null;
-          }
-          return transformed[0]?.id || null;
+          const nextSelectedId = current && transformed.find((trace) => trace.id === current)?.id
+            ? current
+            : transformed[0]?.id || null;
+          setSelectedNodeId((existingNodeId) => existingNodeId || (transformed[0]?.projectPath ? `project:${transformed[0].projectPath}` : (nextSelectedId ? `session:${nextSelectedId}` : 'global-root')));
+          return nextSelectedId;
         });
       } catch {
         setError('无法连接到 AgentLens API 服务器');
@@ -214,8 +169,65 @@ function App() {
     [selectedTraceId, traces],
   );
 
+  const toggleHierarchyNode = useCallback((id: string) => {
+    setExpandedNodeIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleResizeStart = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = leftPanelWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextWidth = Math.min(520, Math.max(240, startWidth + (moveEvent.clientX - startX)));
+      setLeftPanelWidth(nextWidth);
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }, [leftPanelWidth]);
+
+  const handleSelectHierarchyNode = useCallback(
+    (node: HierarchyNode) => {
+      setSelectedNodeId(node.id);
+      if (node.sessionId) {
+        setSelectedTraceId(node.sessionId);
+      }
+    },
+    [],
+  );
+
+  const selectedHierarchyNode = useMemo(() => {
+    if (!hierarchyRoot || !selectedNodeId) return null;
+    const stack: HierarchyNode[] = [hierarchyRoot];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current) continue;
+      if (current.id === selectedNodeId) return current;
+      if (current.children) {
+        for (const child of current.children) stack.push(child);
+      }
+    }
+    return null;
+  }, [hierarchyRoot, selectedNodeId]);
+
+  const selectedProjectPath = useMemo(() => {
+    if (selectedHierarchyNode?.projectPath) return selectedHierarchyNode.projectPath;
+    return selectedTrace?.projectPath || '';
+  }, [selectedHierarchyNode, selectedTrace]);
+
   useEffect(() => {
-    if (!selectedTrace?.projectPath) {
+    if (!selectedProjectPath) {
       setProjectMetadata(null);
       setProjectMetadataError(null);
       setProjectMetadataLoading(false);
@@ -227,7 +239,7 @@ function App() {
       try {
         setProjectMetadataLoading(true);
         setProjectMetadataError(null);
-        const params = new URLSearchParams({ project_path: selectedTrace.projectPath || '' });
+        const params = new URLSearchParams({ project_path: selectedProjectPath || '' });
         const response = await fetch(`${API_URL}/api/v1/projects/by-path?${params.toString()}`, {
           signal: controller.signal,
         });
@@ -249,7 +261,15 @@ function App() {
 
     void loadProjectMetadata();
     return () => controller.abort();
-  }, [selectedTrace?.projectPath]);
+  }, [selectedProjectPath]);
+
+  const selectedProjectSessions = useMemo(() => {
+    const projectPath = selectedProjectPath;
+    if (!projectPath) return [] as TraceWithRaw[];
+    return traces
+      .filter((trace) => trace.projectPath === projectPath)
+      .sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
+  }, [selectedProjectPath, traces]);
 
   const filteredTraces = useMemo(() => {
     return traces.filter((trace) => {
@@ -264,43 +284,6 @@ function App() {
       return matchesSearch && matchesStatus;
     });
   }, [traces, searchQuery, statusFilter]);
-  const groupedTraces = useMemo(() => {
-    const groups = new Map<string, { key: string; label: string; traces: TraceWithRaw[] }>();
-
-    filteredTraces.forEach((trace) => {
-      const groupKey = trace.projectGroup || trace.projectPath || '(unknown-project-folder)';
-      const groupLabel = shortProjectPath(trace.projectPath) || trace.projectPath || 'Unknown project';
-      const existing = groups.get(groupKey);
-      if (existing) {
-        existing.traces.push(trace);
-      } else {
-        groups.set(groupKey, { key: groupKey, label: groupLabel, traces: [trace] });
-      }
-    });
-
-    return Array.from(groups.values()).sort((a, b) => {
-      const aTime = a.traces[0]?.lastRequestTime || a.traces[0]?.startTime || 0;
-      const bTime = b.traces[0]?.lastRequestTime || b.traces[0]?.startTime || 0;
-      return bTime - aTime;
-    });
-  }, [filteredTraces]);
-
-  const toggleGroupCollapsed = useCallback((groupKey: string) => {
-    setCollapsedGroups((current) => ({
-      ...current,
-      [groupKey]: !current[groupKey],
-    }));
-  }, []);
-
-  const collapseAllGroups = useCallback(() => {
-    setCollapsedGroups(
-      Object.fromEntries(groupedTraces.map((group) => [group.key, true])) as Record<string, boolean>,
-    );
-  }, [groupedTraces]);
-
-  const expandAllGroups = useCallback(() => {
-    setCollapsedGroups({});
-  }, []);
   const hasActiveSessionFilters = searchQuery.length > 0 || statusFilter !== 'all';
   const selectedTraceVisible = selectedTrace && filteredTraces.some((trace) => trace.id === selectedTrace.id);
 
@@ -485,123 +468,48 @@ function App() {
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[320px_minmax(0,1fr)_360px] xl:items-start">
-          <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 xl:sticky xl:top-6 xl:self-start">
-              <div className="mb-4 flex items-center justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-950">Sessions</h2>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={expandAllGroups}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                  >
-                    Expand all
-                  </button>
-                  <button
-                    onClick={collapseAllGroups}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                  >
-                    Collapse all
-                  </button>
-                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600 border border-slate-200">{formatInteger(filteredTraces.length)}</span>
-                </div>
-              </div>
-
-              <div className="space-y-3 max-h-[calc(100vh-21rem)] overflow-auto pr-1">
-                {filteredTraces.length === 0 ? (
-                  <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
-                    <Terminal className="mx-auto mb-3 h-10 w-10 text-slate-400" />
-                    <p className="text-base font-medium text-slate-800">No sessions match the current view</p>
-                    <p className="mt-2 text-sm text-slate-500">
-                      {hasActiveDateRange ? 'Try widening the selected date range.' : 'Refresh to load the latest sessions.'}
-                    </p>
-                  </div>
-                ) : (
-                  groupedTraces.map((group) => {
-                    const isCollapsed = !!collapsedGroups[group.key];
-                    return (
-                      <div key={group.key} className="rounded-2xl border border-slate-200/80 bg-slate-50/90 p-3 shadow-sm shadow-slate-200/40">
-                        <button
-                          onClick={() => toggleGroupCollapsed(group.key)}
-                          className="mb-3 flex w-full items-start justify-between gap-3 text-left"
-                        >
-                          <div className="min-w-0 flex items-start gap-2">
-                            <div className="mt-0.5 text-slate-500">
-                              {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                            </div>
-                            <div className="min-w-0">
-                              <div className="text-sm font-semibold text-slate-900 truncate">{group.label}</div>
-                              <div className="text-[11px] text-slate-400 truncate font-mono">{group.key}</div>
-                            </div>
-                          </div>
-                          <span className="rounded-full bg-white px-2.5 py-1 text-[11px] text-slate-600 border border-slate-200">{formatInteger(group.traces.length)}</span>
-                        </button>
-                        {!isCollapsed && (
-                          <div className="space-y-3">
-                            {group.traces.map((trace) => (
-                              <TraceListItem
-                                key={trace.id}
-                                trace={trace}
-                                isSelected={selectedTrace?.id === trace.id}
-                                onClick={() => setSelectedTraceId(trace.id)}
-                                hideProjectLabel
-                              />
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </section>
-
-          <section className="space-y-6">
-            {selectedTraceVisible && selectedTrace ? (
-              <EnhancedTraceDetail trace={selectedTrace} />
-            ) : (
-              <div className="flex min-h-[34rem] items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center shadow-sm shadow-slate-200/60">
-                <div className="max-w-md">
-                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
-                    <Terminal className="h-8 w-8" />
-                  </div>
-                  <h3 className="text-xl font-semibold text-slate-900">{DEFAULT_EMPTY_SELECTION.title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-slate-500">{DEFAULT_EMPTY_SELECTION.description}</p>
-                </div>
-              </div>
-            )}
+        <div
+          className="grid grid-cols-1 gap-6 lg:[grid-template-columns:minmax(240px,var(--left-panel-width))_12px_minmax(0,1fr)] lg:items-start"
+          style={{ '--left-panel-width': `${leftPanelWidth}px` } as React.CSSProperties}
+        >
+          <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+            <HierarchyTree
+              root={hierarchyRoot}
+              expanded={expandedNodeIds}
+              selectedId={selectedNodeId}
+              onToggle={toggleHierarchyNode}
+              onSelect={handleSelectHierarchyNode}
+            />
           </section>
 
-          <section>
-            <ProjectMetadataPanel
-              metadata={projectMetadata}
-              loading={projectMetadataLoading}
-              error={projectMetadataError}
+          <div
+            className="hidden lg:flex cursor-col-resize items-stretch justify-center select-none"
+            onMouseDown={handleResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize left panel"
+          >
+            <div className="h-full min-h-[24rem] w-1 rounded-full bg-slate-300 shadow-sm transition-colors hover:bg-blue-400" />
+          </div>
+
+          <section className="space-y-6 min-w-0">
+            <NodeDetailPane
+              node={selectedHierarchyNode}
+              selectedTrace={selectedTraceVisible && selectedTrace ? selectedTrace : null}
+              projectMetadata={projectMetadata}
+              projectMetadataLoading={projectMetadataLoading}
+              projectMetadataError={projectMetadataError}
+              projectSessions={selectedProjectSessions}
+              selectedTraceId={selectedTrace?.id}
+              onSelectTrace={(traceId) => {
+                setSelectedTraceId(traceId || null);
+              }}
             />
           </section>
         </div>
       </main>
     </div>
   );
-}
-
-function StatusBadge({
-  status,
-  compact = false,
-  selected = false,
-}: {
-  status: Trace['status'];
-  compact?: boolean;
-  selected?: boolean;
-}) {
-  const classes: Record<Trace['status'], string> = {
-    completed: selected ? 'bg-emerald-300 text-emerald-950' : 'bg-emerald-500/15 text-emerald-300',
-    failed: selected ? 'bg-red-300 text-red-950' : 'bg-red-500/15 text-red-300',
-    running: selected ? 'bg-yellow-300 text-yellow-950' : 'bg-yellow-500/15 text-yellow-300',
-    cancelled: selected ? 'bg-slate-300 text-slate-900' : 'bg-slate-500/15 text-slate-300',
-  };
-  return <span className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${classes[status]} ${compact ? '' : ''}`}>{status}</span>;
 }
 
 export default App;

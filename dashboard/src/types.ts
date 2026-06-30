@@ -204,3 +204,29 @@ export interface ProjectMetadata {
     directories: ProjectMetadataTaskDirectory[];
   };
 }
+
+export type HierarchyNodeType =
+  | 'global-root'
+  | 'project'
+  | 'project-instructions'
+  | 'project-memory'
+  | 'project-config'
+  | 'project-sessions'
+  | 'session'
+  | 'session-overview'
+  | 'session-llm'
+  | 'session-subagents'
+  | 'session-tasks';
+
+export interface HierarchyNode {
+  id: string;
+  type: HierarchyNodeType;
+  label: string;
+  subtitle?: string;
+  count?: number;
+  projectPath?: string;
+  traceId?: string;
+  sessionId?: string;
+  status?: Trace['status'];
+  children?: HierarchyNode[];
+}

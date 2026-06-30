@@ -221,6 +221,125 @@ def _build_project_metadata(project_path: str) -> Dict[str, Any]:
     }
 
 
+def _build_hierarchy_root() -> Dict[str, Any]:
+    sessions_payload = storage.list_sessions(platform=CLAUDE_CODE_PLATFORM, period_hours=720, limit=5000, offset=0)
+    sessions = sessions_payload.get("sessions", []) if isinstance(sessions_payload, dict) else []
+
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for session in sessions:
+        project_path = str(session.get("project_path") or "")
+        grouped.setdefault(project_path, []).append(session)
+
+    project_nodes = []
+    for project_path, project_sessions in sorted(grouped.items(), key=lambda item: item[0]):
+        if not project_path:
+            continue
+        project_metadata = _build_project_metadata(project_path)
+        session_nodes = []
+        for session in sorted(project_sessions, key=lambda item: item.get("last_updated") or item.get("start_time") or "", reverse=True):
+            llm_count = len(session.get("llm_calls") or [])
+            subagent_count = len(((session.get("metadata") or {}).get("subagent_logs") or []))
+            task_summary = (session.get("metadata") or {}).get("task_summary") or {}
+            task_count = len(task_summary.get("tasks") or []) if isinstance(task_summary, dict) else 0
+            session_nodes.append(
+                {
+                    "id": f"session:{session.get('session_id')}",
+                    "type": "session",
+                    "label": str(session.get("session_id") or "unknown-session"),
+                    "subtitle": str(session.get("agent_name") or "claude-code"),
+                    "sessionId": str(session.get("session_id") or ""),
+                    "status": str(session.get("status") or "completed"),
+                    "projectPath": project_path,
+                    "children": [
+                        {
+                            "id": f"session-overview:{session.get('session_id')}",
+                            "type": "session-overview",
+                            "label": "Overview",
+                            "sessionId": str(session.get("session_id") or ""),
+                            "projectPath": project_path,
+                        },
+                        {
+                            "id": f"session-llm:{session.get('session_id')}",
+                            "type": "session-llm",
+                            "label": "LLM calls",
+                            "count": llm_count,
+                            "sessionId": str(session.get("session_id") or ""),
+                            "projectPath": project_path,
+                        },
+                        {
+                            "id": f"session-subagents:{session.get('session_id')}",
+                            "type": "session-subagents",
+                            "label": "Subagents",
+                            "count": subagent_count,
+                            "sessionId": str(session.get("session_id") or ""),
+                            "projectPath": project_path,
+                        },
+                        {
+                            "id": f"session-tasks:{session.get('session_id')}",
+                            "type": "session-tasks",
+                            "label": "Tasks",
+                            "count": task_count,
+                            "sessionId": str(session.get("session_id") or ""),
+                            "projectPath": project_path,
+                        },
+                    ],
+                }
+            )
+
+        project_nodes.append(
+            {
+                "id": f"project:{project_metadata['identity']['project_key']}",
+                "type": "project",
+                "label": project_path,
+                "projectPath": project_path,
+                "children": [
+                    {
+                        "id": f"project-instructions:{project_metadata['identity']['project_key']}",
+                        "type": "project-instructions",
+                        "label": "Instruction",
+                        "projectPath": project_path,
+                    },
+                    {
+                        "id": f"project-memory:{project_metadata['identity']['project_key']}",
+                        "type": "project-memory",
+                        "label": "Memory",
+                        "projectPath": project_path,
+                        "count": int(project_metadata.get("memory", {}).get("note_count") or 0),
+                    },
+                    {
+                        "id": f"project-config:{project_metadata['identity']['project_key']}",
+                        "type": "project-config",
+                        "label": "Config",
+                        "projectPath": project_path,
+                    },
+                    {
+                        "id": f"project-sessions:{project_metadata['identity']['project_key']}",
+                        "type": "project-sessions",
+                        "label": "Sessions",
+                        "projectPath": project_path,
+                        "count": len(session_nodes),
+                        "children": session_nodes,
+                    },
+                ],
+            }
+        )
+
+    return {
+        "id": "global-root",
+        "type": "global-root",
+        "label": "global",
+        "children": [
+            {
+                "id": "projects-root",
+                "type": "project",
+                "label": "Projects",
+                "count": len(project_nodes),
+                "children": project_nodes,
+            }
+        ],
+    }
+
+
 
 class TraceIn(BaseModel):
     trace_id: str
@@ -365,6 +484,11 @@ def get_session(session_id: str):
 def get_project_metadata(project_path: str = Query(..., min_length=1)):
     metadata = _build_project_metadata(project_path)
     return metadata
+
+
+@app.get("/api/v1/hierarchy")
+def get_hierarchy():
+    return {"root": _build_hierarchy_root()}
 
 
 def _open_local_path(path: Path) -> None:

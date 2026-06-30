@@ -1,4 +1,4 @@
-import type { ProjectMetadata } from '../types';
+import type { HierarchyNode, ProjectMetadata } from '../types';
 
 export interface RawToolCall {
   tool_use_id?: string;
@@ -96,3 +96,6 @@ export interface SessionsResponse {
 }
 
 export type ProjectMetadataResponse = ProjectMetadata;
+export interface HierarchyResponse {
+  root: HierarchyNode;
+}
