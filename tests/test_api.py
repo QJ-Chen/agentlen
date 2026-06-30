@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -61,6 +63,83 @@ class RangeCaptureStorage:
             }
         )
         return []
+
+
+class ProjectMetadataApiTests(unittest.TestCase):
+    def test_project_metadata_endpoint_returns_memory_and_config(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            project_path = root / "project"
+            project_path.mkdir()
+            (project_path / "CLAUDE.md").write_text("# Demo project\n\nInstruction line\n", encoding="utf-8")
+            repo_claude = project_path / ".claude"
+            repo_claude.mkdir()
+            (repo_claude / "settings.local.json").write_text(
+                json.dumps({"permissions": {"allow": ["Bash(python3:*)", "Skill(run)"]}}),
+                encoding="utf-8",
+            )
+            worktrees_dir = repo_claude / "worktrees"
+            worktrees_dir.mkdir()
+            worktree = worktrees_dir / "demo-worktree"
+            worktree.mkdir(parents=True)
+            (worktree / ".git").mkdir()
+            (worktree / ".git" / "HEAD").write_text("ref: refs/heads/demo-branch\n", encoding="utf-8")
+
+            project_store_root = root / "home" / ".claude" / "projects"
+            tasks_root = root / "home" / ".claude" / "tasks"
+            project_key = api._encode_project_path(str(project_path.resolve()))
+            project_store = project_store_root / project_key
+            memory_dir = project_store / "memory"
+            memory_dir.mkdir(parents=True)
+            (memory_dir / "MEMORY.md").write_text(
+                "- [Demo](demo-memory.md) — demo entry\n",
+                encoding="utf-8",
+            )
+            (memory_dir / "demo-memory.md").write_text(
+                "---\ndescription: demo memory\n---\n\nDemo body\n",
+                encoding="utf-8",
+            )
+            (project_store / "session-1.jsonl").write_text("{}\n", encoding="utf-8")
+            subagents_dir = project_store / "session-1" / "subagents"
+            subagents_dir.mkdir(parents=True)
+            (subagents_dir / "agent-1.jsonl").write_text("{}\n", encoding="utf-8")
+            (subagents_dir / "agent-1.meta.json").write_text("{}\n", encoding="utf-8")
+            tool_results_dir = project_store / "session-1" / "tool-results"
+            tool_results_dir.mkdir(parents=True)
+            (tool_results_dir / "result.txt").write_text("ok\n", encoding="utf-8")
+            task_dir = tasks_root / "session-1"
+            task_dir.mkdir(parents=True)
+            (task_dir / "1.json").write_text('{"id":"1"}\n', encoding="utf-8")
+
+            original_projects_root = api.PROJECTS_ROOT
+            original_tasks_root = api.TASKS_ROOT
+            api.PROJECTS_ROOT = project_store_root
+            api.TASKS_ROOT = tasks_root
+            try:
+                client = TestClient(api.app)
+                response = client.get(
+                    "/api/v1/projects/by-path",
+                    params={"project_path": str(project_path.resolve())},
+                )
+            finally:
+                api.PROJECTS_ROOT = original_projects_root
+                api.TASKS_ROOT = original_tasks_root
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["identity"]["project_key"], project_key)
+        self.assertTrue(payload["instructions"]["exists"])
+        self.assertTrue(payload["memory"]["exists"])
+        self.assertEqual(payload["memory"]["note_count"], 1)
+        self.assertTrue(payload["local_config"]["exists"])
+        self.assertEqual(payload["local_config"]["allow_rule_count"], 2)
+        self.assertEqual(payload["worktrees"]["count"], 1)
+        self.assertEqual(payload["session_artifacts"]["session_count"], 1)
+        self.assertEqual(payload["session_artifacts"]["subagent_log_count"], 1)
+        self.assertEqual(payload["session_artifacts"]["subagent_meta_count"], 1)
+        self.assertEqual(payload["session_artifacts"]["tool_result_count"], 1)
+        self.assertEqual(payload["task_artifacts"]["directory_count"], 1)
+        self.assertEqual(payload["task_artifacts"]["task_file_count"], 1)
 
 
 class StubRealtimeUpdater:

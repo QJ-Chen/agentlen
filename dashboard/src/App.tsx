@@ -12,9 +12,10 @@ import {
   Terminal,
   X,
 } from 'lucide-react';
-import type { OverviewStats, Trace } from './types';
+import type { OverviewStats, ProjectMetadata, Trace } from './types';
 import { EnhancedTraceDetail } from './components/EnhancedTraceDetail';
-import type { SessionsResponse } from './lib/sessionApiTypes';
+import { ProjectMetadataPanel } from './components/ProjectMetadataPanel';
+import type { ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
   cleanSessionText,
@@ -128,6 +129,9 @@ function App() {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
+  const [projectMetadataLoading, setProjectMetadataLoading] = useState(false);
+  const [projectMetadataError, setProjectMetadataError] = useState<string | null>(null);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
@@ -209,6 +213,43 @@ function App() {
     () => traces.find((trace) => trace.id === selectedTraceId) || null,
     [selectedTraceId, traces],
   );
+
+  useEffect(() => {
+    if (!selectedTrace?.projectPath) {
+      setProjectMetadata(null);
+      setProjectMetadataError(null);
+      setProjectMetadataLoading(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    const loadProjectMetadata = async () => {
+      try {
+        setProjectMetadataLoading(true);
+        setProjectMetadataError(null);
+        const params = new URLSearchParams({ project_path: selectedTrace.projectPath || '' });
+        const response = await fetch(`${API_URL}/api/v1/projects/by-path?${params.toString()}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error('Failed to load project metadata');
+        }
+        const payload = (await response.json()) as ProjectMetadataResponse;
+        setProjectMetadata(payload);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setProjectMetadata(null);
+        setProjectMetadataError(error instanceof Error ? error.message : 'Failed to load project metadata');
+      } finally {
+        if (!controller.signal.aborted) {
+          setProjectMetadataLoading(false);
+        }
+      }
+    };
+
+    void loadProjectMetadata();
+    return () => controller.abort();
+  }, [selectedTrace?.projectPath]);
 
   const filteredTraces = useMemo(() => {
     return traces.filter((trace) => {
@@ -444,7 +485,7 @@ function App() {
           </div>
         </section>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[360px_minmax(0,1fr)] xl:items-start">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[320px_minmax(0,1fr)_360px] xl:items-start">
           <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 xl:sticky xl:top-6 xl:self-start">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
@@ -517,19 +558,27 @@ function App() {
             </section>
 
           <section className="space-y-6">
-              {selectedTraceVisible && selectedTrace ? (
-                <EnhancedTraceDetail trace={selectedTrace} />
-              ) : (
-                <div className="flex min-h-[34rem] items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center shadow-sm shadow-slate-200/60">
-                  <div className="max-w-md">
-                    <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
-                      <Terminal className="h-8 w-8" />
-                    </div>
-                    <h3 className="text-xl font-semibold text-slate-900">{DEFAULT_EMPTY_SELECTION.title}</h3>
-                    <p className="mt-3 text-sm leading-6 text-slate-500">{DEFAULT_EMPTY_SELECTION.description}</p>
+            {selectedTraceVisible && selectedTrace ? (
+              <EnhancedTraceDetail trace={selectedTrace} />
+            ) : (
+              <div className="flex min-h-[34rem] items-center justify-center rounded-3xl border border-dashed border-slate-200 bg-white p-10 text-center shadow-sm shadow-slate-200/60">
+                <div className="max-w-md">
+                  <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
+                    <Terminal className="h-8 w-8" />
                   </div>
+                  <h3 className="text-xl font-semibold text-slate-900">{DEFAULT_EMPTY_SELECTION.title}</h3>
+                  <p className="mt-3 text-sm leading-6 text-slate-500">{DEFAULT_EMPTY_SELECTION.description}</p>
                 </div>
-              )}
+              </div>
+            )}
+          </section>
+
+          <section>
+            <ProjectMetadataPanel
+              metadata={projectMetadata}
+              loading={projectMetadataLoading}
+              error={projectMetadataError}
+            />
           </section>
         </div>
       </main>

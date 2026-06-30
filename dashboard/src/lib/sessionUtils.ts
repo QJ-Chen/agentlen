@@ -52,9 +52,12 @@ export function formatInteger(value: number): string {
   return clampNonNegative(value).toLocaleString();
 }
 
-export function formatTimestamp(timestamp?: number): string {
-  if (!timestamp) return '-';
-  const date = new Date(timestamp);
+export function formatTimestamp(timestamp?: number | string): string {
+  if (timestamp === undefined || timestamp === null || timestamp === '') return '-';
+  const raw = typeof timestamp === 'string' ? Number(timestamp) : timestamp;
+  if (!Number.isFinite(raw) || raw <= 0) return '-';
+  const normalized = raw < 10_000_000_000 ? raw * 1000 : raw;
+  const date = new Date(normalized);
   return Number.isNaN(date.getTime())
     ? '-'
     : date.toLocaleString([], {

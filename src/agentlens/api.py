@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
+import json
+import re
 import shutil
 import subprocess
 import sys
@@ -38,6 +40,186 @@ app.add_middleware(
 
 storage = SQLiteStorage()
 realtime_updater: Optional[RealtimeUpdater] = None
+PROJECTS_ROOT = Path.home() / ".claude" / "projects"
+TASKS_ROOT = Path.home() / ".claude" / "tasks"
+
+
+def _encode_project_path(project_path: str) -> str:
+    return re.sub(r"[/\\]+", "-", project_path.strip())
+
+
+def _safe_read_text(path: Path, max_chars: int = 4000) -> str:
+    try:
+        return path.read_text(encoding="utf-8")[:max_chars]
+    except OSError:
+        return ""
+
+
+def _safe_json_load(path: Path) -> Optional[Dict[str, Any]]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _summarize_settings_local(path: Path) -> Dict[str, Any]:
+    payload = _safe_json_load(path) or {}
+    permissions = payload.get("permissions") if isinstance(payload.get("permissions"), dict) else {}
+    allow_rules = permissions.get("allow") if isinstance(permissions.get("allow"), list) else []
+    string_rules = [rule for rule in allow_rules if isinstance(rule, str)]
+    return {
+        "exists": path.exists(),
+        "path": str(path),
+        "modified_at": path.stat().st_mtime if path.exists() else None,
+        "allow_rule_count": len(string_rules),
+        "allow_rules_preview": string_rules[:12],
+    }
+
+
+def _summarize_claude_md(path: Path) -> Dict[str, Any]:
+    text = _safe_read_text(path, max_chars=6000)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    preview = "\n".join(lines[:12])
+    return {
+        "exists": path.exists(),
+        "path": str(path),
+        "modified_at": path.stat().st_mtime if path.exists() else None,
+        "preview": preview,
+    }
+
+
+def _summarize_memory(memory_dir: Path) -> Dict[str, Any]:
+    memory_index = memory_dir / "MEMORY.md"
+    notes = []
+    if memory_dir.exists():
+        for note_path in sorted(memory_dir.glob("*.md")):
+            if note_path.name == "MEMORY.md":
+                continue
+            text = _safe_read_text(note_path, max_chars=1200)
+            lines = [line.strip() for line in text.splitlines() if line.strip()]
+            description = ""
+            for line in lines:
+                if line.startswith("description:"):
+                    description = line.split(":", 1)[1].strip().strip('"')
+                    break
+            preview = "\n".join(lines[:8])
+            notes.append(
+                {
+                    "name": note_path.stem,
+                    "path": str(note_path),
+                    "modified_at": note_path.stat().st_mtime,
+                    "description": description,
+                    "preview": preview,
+                }
+            )
+    return {
+        "exists": memory_dir.exists(),
+        "path": str(memory_dir),
+        "index_exists": memory_index.exists(),
+        "index_path": str(memory_index),
+        "index_preview": _safe_read_text(memory_index, max_chars=2000),
+        "note_count": len(notes),
+        "notes": notes,
+    }
+
+
+def _summarize_worktrees(worktrees_dir: Path) -> Dict[str, Any]:
+    worktrees = []
+    if worktrees_dir.exists():
+        for child in sorted(worktrees_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            git_head = child / ".git" / "HEAD"
+            branch = ""
+            if git_head.exists():
+                head_text = _safe_read_text(git_head, max_chars=200)
+                if head_text.startswith("ref:"):
+                    branch = head_text.rsplit("/", 1)[-1].strip()
+            local_settings = child / ".claude" / "settings.local.json"
+            worktrees.append(
+                {
+                    "name": child.name,
+                    "path": str(child),
+                    "branch": branch,
+                    "has_local_settings": local_settings.exists(),
+                    "modified_at": child.stat().st_mtime,
+                }
+            )
+    return {
+        "exists": worktrees_dir.exists(),
+        "path": str(worktrees_dir),
+        "count": len(worktrees),
+        "items": worktrees,
+    }
+
+
+def _summarize_project_artifacts(project_dir: Path) -> Dict[str, Any]:
+    session_logs = sorted(project_dir.glob("*.jsonl")) if project_dir.exists() else []
+    subagent_logs = sorted(project_dir.glob("*/subagents/agent-*.jsonl")) if project_dir.exists() else []
+    subagent_meta = sorted(project_dir.glob("*/subagents/*.meta.json")) if project_dir.exists() else []
+    tool_results = sorted(project_dir.glob("*/tool-results/*")) if project_dir.exists() else []
+    recent_sessions = [path.stem for path in session_logs[-8:]]
+    return {
+        "exists": project_dir.exists(),
+        "path": str(project_dir),
+        "session_count": len(session_logs),
+        "subagent_log_count": len(subagent_logs),
+        "subagent_meta_count": len(subagent_meta),
+        "tool_result_count": len(tool_results),
+        "recent_sessions": recent_sessions,
+    }
+
+
+def _summarize_task_artifacts(session_ids: List[str]) -> Dict[str, Any]:
+    directories = []
+    total_task_files = 0
+    for session_id in session_ids:
+        task_dir = TASKS_ROOT / session_id
+        if not task_dir.exists() or not task_dir.is_dir():
+            continue
+        task_files = sorted(task_dir.glob("*.json"))
+        total_task_files += len(task_files)
+        directories.append(
+            {
+                "session_id": session_id,
+                "path": str(task_dir),
+                "task_file_count": len(task_files),
+            }
+        )
+    return {
+        "directory_count": len(directories),
+        "task_file_count": total_task_files,
+        "directories": directories[:12],
+    }
+
+
+def _build_project_metadata(project_path: str) -> Dict[str, Any]:
+    normalized_project_path = str(Path(project_path).expanduser().resolve()) if project_path else ""
+    project_key = _encode_project_path(normalized_project_path)
+    project_dir = PROJECTS_ROOT / project_key
+    repo_claude_dir = Path(normalized_project_path) / ".claude"
+    repo_settings_path = repo_claude_dir / "settings.local.json"
+    repo_claude_md = Path(normalized_project_path) / "CLAUDE.md"
+    memory_dir = project_dir / "memory"
+    worktrees_dir = repo_claude_dir / "worktrees"
+    session_logs = sorted(project_dir.glob("*.jsonl")) if project_dir.exists() else []
+    session_ids = [path.stem for path in session_logs]
+
+    return {
+        "identity": {
+            "project_path": normalized_project_path,
+            "project_key": project_key,
+            "project_dir": str(project_dir),
+        },
+        "instructions": _summarize_claude_md(repo_claude_md),
+        "memory": _summarize_memory(memory_dir),
+        "local_config": _summarize_settings_local(repo_settings_path),
+        "worktrees": _summarize_worktrees(worktrees_dir),
+        "session_artifacts": _summarize_project_artifacts(project_dir),
+        "task_artifacts": _summarize_task_artifacts(session_ids),
+    }
+
 
 
 class TraceIn(BaseModel):
@@ -177,6 +359,12 @@ def get_session(session_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@app.get("/api/v1/projects/by-path")
+def get_project_metadata(project_path: str = Query(..., min_length=1)):
+    metadata = _build_project_metadata(project_path)
+    return metadata
 
 
 def _open_local_path(path: Path) -> None:

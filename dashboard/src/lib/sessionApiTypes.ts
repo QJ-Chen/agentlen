@@ -1,3 +1,5 @@
+import type { ProjectMetadata } from '../types';
+
 export interface RawToolCall {
   tool_use_id?: string;
   tool_name?: string;
@@ -92,3 +94,5 @@ export interface RawSessionRecord {
 export interface SessionsResponse {
   sessions: RawSessionRecord[];
 }
+
+export type ProjectMetadataResponse = ProjectMetadata;

@@ -132,3 +132,75 @@ export interface OverviewStats {
   top_tools: Array<{ name: string; count: number }>;
   active_days: string[];
 }
+
+export interface ProjectMetadataNote {
+  name: string;
+  path: string;
+  modified_at?: number;
+  description?: string;
+  preview?: string;
+}
+
+export interface ProjectMetadataWorktree {
+  name: string;
+  path: string;
+  branch?: string;
+  has_local_settings: boolean;
+  modified_at?: number;
+}
+
+export interface ProjectMetadataTaskDirectory {
+  session_id: string;
+  path: string;
+  task_file_count: number;
+}
+
+export interface ProjectMetadata {
+  identity: {
+    project_path: string;
+    project_key: string;
+    project_dir: string;
+  };
+  instructions: {
+    exists: boolean;
+    path: string;
+    modified_at?: number;
+    preview?: string;
+  };
+  memory: {
+    exists: boolean;
+    path: string;
+    index_exists: boolean;
+    index_path: string;
+    index_preview?: string;
+    note_count: number;
+    notes: ProjectMetadataNote[];
+  };
+  local_config: {
+    exists: boolean;
+    path: string;
+    modified_at?: number;
+    allow_rule_count: number;
+    allow_rules_preview: string[];
+  };
+  worktrees: {
+    exists: boolean;
+    path: string;
+    count: number;
+    items: ProjectMetadataWorktree[];
+  };
+  session_artifacts: {
+    exists: boolean;
+    path: string;
+    session_count: number;
+    subagent_log_count: number;
+    subagent_meta_count: number;
+    tool_result_count: number;
+    recent_sessions: string[];
+  };
+  task_artifacts: {
+    directory_count: number;
+    task_file_count: number;
+    directories: ProjectMetadataTaskDirectory[];
+  };
+}
