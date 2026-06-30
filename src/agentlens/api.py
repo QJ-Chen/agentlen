@@ -78,9 +78,9 @@ def _summarize_settings_local(path: Path) -> Dict[str, Any]:
 
 
 def _summarize_claude_md(path: Path) -> Dict[str, Any]:
-    text = _safe_read_text(path, max_chars=6000)
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    preview = "\n".join(lines[:12])
+    text = _safe_read_text(path, max_chars=200_000)
+    lines = [line.rstrip() for line in text.splitlines()]
+    preview = "\n".join(lines)
     return {
         "exists": path.exists(),
         "path": str(path),

@@ -81,7 +81,7 @@ export const ProjectMetadataPanel: React.FC<ProjectMetadataPanelProps> = ({
             <Row label="Path" value={<code className="break-all text-xs text-slate-700">{metadata.instructions.path}</code>} />
             {metadata.instructions.preview && (
               <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <pre className="whitespace-pre-wrap text-xs leading-6 text-slate-700">{metadata.instructions.preview}</pre>
+                <pre className="max-h-56 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-700">{metadata.instructions.preview}</pre>
               </div>
             )}
           </>
@@ -99,7 +99,7 @@ export const ProjectMetadataPanel: React.FC<ProjectMetadataPanelProps> = ({
                 <div className="text-sm font-medium text-slate-900">{note.name}</div>
                 {note.description && <div className="mt-1 text-xs text-slate-500">{note.description}</div>}
                 <div className="mt-2 text-[11px] text-slate-400">Modified {formatTimestamp(note.modified_at)}</div>
-                {note.preview && <pre className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-700">{note.preview}</pre>}
+                {note.preview && <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-700">{note.preview}</pre>}
               </div>
             ))}
           </div>
@@ -115,7 +115,7 @@ export const ProjectMetadataPanel: React.FC<ProjectMetadataPanelProps> = ({
             <Row label="Allow rules" value={String(metadata.local_config.allow_rule_count)} />
             {metadata.local_config.allow_rules_preview.length > 0 && (
               <div className="rounded-xl border border-slate-200 bg-white p-3">
-                <ul className="space-y-1 text-xs text-slate-700">
+                <ul className="max-h-48 space-y-1 overflow-auto text-xs text-slate-700">
                   {metadata.local_config.allow_rules_preview.map((rule) => (
                     <li key={rule} className="break-all">{rule}</li>
                   ))}
