@@ -120,6 +120,7 @@ function App() {
 
         const transformed = (sessionsData.sessions || []).map(transformSession);
         transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
+        const firstProjectNodeId = hierarchyData.root?.children?.[0]?.children?.[0]?.id || null;
 
         setTraces(transformed);
         setStats(statsData);
@@ -130,7 +131,7 @@ function App() {
           const nextSelectedId = current && transformed.find((trace) => trace.id === current)?.id
             ? current
             : transformed[0]?.id || null;
-          setSelectedNodeId((existingNodeId) => existingNodeId || (transformed[0]?.projectPath ? `project:${transformed[0].projectPath}` : (nextSelectedId ? `session:${nextSelectedId}` : 'global-root')));
+          setSelectedNodeId((existingNodeId) => existingNodeId || firstProjectNodeId || (nextSelectedId ? `session:${nextSelectedId}` : 'global-root'));
           return nextSelectedId;
         });
       } catch {

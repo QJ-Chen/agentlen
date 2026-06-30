@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronDown, ChevronRight, FolderTree } from 'lucide-react';
 import type { HierarchyNode } from '../types';
+import { shortProjectPath } from '../lib/sessionUtils';
 
 interface HierarchyTreeProps {
   root: HierarchyNode | null;
@@ -44,6 +45,7 @@ function NodeRow({
   const hasChildren = visibleChildren.length > 0;
   const isExpanded = expanded.has(node.id);
   const isSelected = selectedId === node.id;
+  const displayLabel = node.type === 'project' ? (shortProjectPath(node.label) || node.label) : node.label;
 
   return (
     <div>
@@ -65,8 +67,8 @@ function NodeRow({
           )}
         </button>
 
-        <button type="button" onClick={() => onSelect(node)} className="min-w-0 flex-1 text-left">
-          <div className={`truncate ${typeTone(node.type)}`}>{node.label}</div>
+        <button type="button" onClick={() => onSelect(node)} className="min-w-0 flex-1 text-left" title={node.label}>
+          <div className={`truncate ${typeTone(node.type)}`}>{displayLabel}</div>
           {(node.subtitle || node.count != null) && (
             <div className="truncate text-[11px] text-slate-400">
               {node.subtitle}
