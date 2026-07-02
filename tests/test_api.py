@@ -24,10 +24,29 @@ class RangeCaptureStorage:
         self.sessions_calls = []
         self.overview_calls = []
         self.projects_calls = []
+        self.session_detail = {
+            "session_id": "session-1",
+            "project_path": "/demo/project",
+            "agent_name": "claude-code",
+            "status": "completed",
+            "llm_calls": [
+                {"id": "turn-1", "is_assistant_turn": True},
+                {"id": "turn-2", "is_assistant_turn": True},
+            ],
+            "metadata": {
+                "subagent_logs": [{"id": "subagent-1"}],
+                "task_summary": {"tasks": [{"taskId": "1"}, {"taskId": "2"}]},
+            },
+        }
 
     def list_sessions(self, **kwargs):
         self.sessions_calls.append(kwargs)
         return {"sessions": [], "count": 0, "total": 0}
+
+    def get_session(self, session_id: str):
+        if session_id == self.session_detail["session_id"]:
+            return self.session_detail
+        return None
 
     def get_overview_stats(self, period_hours, start_time=None, end_time=None):
         self.overview_calls.append(
@@ -389,6 +408,48 @@ class DateRangeApiTests(unittest.TestCase):
                 }
             ],
         )
+
+
+class HierarchyApiTests(unittest.TestCase):
+    def setUp(self):
+        self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        self.realtime_patcher = patch.object(api, "RealtimeUpdater", StubRealtimeUpdater)
+        self.realtime_patcher.start()
+        self.storage = RangeCaptureStorage()
+        api.storage = self.storage
+        api.realtime_updater = None
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+        self.realtime_patcher.stop()
+
+    def test_hierarchy_root_returns_lightweight_structure(self):
+        response = self.client.get("/api/v1/hierarchy")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["root"]
+        self.assertEqual(payload["type"], "global-root")
+        self.assertIn("children", payload)
+        self.assertNotIn("detail", payload)
+
+    def test_hierarchy_children_returns_session_summaries(self):
+        response = self.client.get(
+            "/api/v1/hierarchy/children",
+            params={"node_id": "session:session-1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["node_id"], "session:session-1")
+        self.assertEqual([child["type"] for child in payload["children"]], [
+            "session-llm",
+            "session-subagents",
+            "session-tasks",
+            "session-raw",
+        ])
 
 
 class AsyncIngestApiTests(unittest.TestCase):

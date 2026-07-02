@@ -18,6 +18,17 @@ export interface RawToolCall {
   assistant_record_id?: string;
 }
 
+export interface RawContentBlock {
+  type?: string;
+  id?: string;
+  name?: string;
+  text?: string;
+  thinking?: string;
+  input?: Record<string, unknown>;
+  content?: unknown;
+  tool_use_id?: string;
+}
+
 export interface RawLLMCall {
   id?: string;
   message_id?: string;
@@ -36,6 +47,7 @@ export interface RawLLMCall {
   prompt?: string;
   response?: string;
   prompt_id?: string;
+  content_blocks?: RawContentBlock[];
 }
 
 export interface RawSubagentLog {
@@ -98,4 +110,9 @@ export interface SessionsResponse {
 export type ProjectMetadataResponse = ProjectMetadata;
 export interface HierarchyResponse {
   root: HierarchyNode;
+}
+
+export interface HierarchyChildrenResponse {
+  node_id: string;
+  children: HierarchyNode[];
 }

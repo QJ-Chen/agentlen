@@ -134,6 +134,9 @@ function normalizeChildLLMCall(
     sourceEventIds: Array.isArray(child.source_event_ids)
       ? child.source_event_ids.filter((item): item is string => typeof item === 'string')
       : [],
+    contentBlocks: Array.isArray(child.content_blocks)
+      ? child.content_blocks.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
+      : [],
     model: child.model || fallbackCall.model || fallbackModel,
     startTime,
     endTime,
@@ -175,6 +178,9 @@ export function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordS
       messageId: call.message_id || '',
       sourceEventIds: Array.isArray(call.source_event_ids)
         ? call.source_event_ids.filter((item): item is string => typeof item === 'string')
+        : [],
+      contentBlocks: Array.isArray(call.content_blocks)
+        ? call.content_blocks.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object')
         : [],
       model: call.model || record.model || 'unknown',
       startTime,

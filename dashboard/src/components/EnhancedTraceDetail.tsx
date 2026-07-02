@@ -39,9 +39,11 @@ import {
 
 interface EnhancedTraceDetailProps {
   trace: Trace;
+  initialTab?: TabType;
+  hideTabs?: boolean;
 }
 
-type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'raw';
+export type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'raw';
 type DetailLevel = 'summary' | 'standard' | 'verbose';
 type ReplayMessageKind = 'user' | 'thinking' | 'tool' | 'text' | 'empty' | 'subagent';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
@@ -74,9 +76,13 @@ const PLATFORM_CONFIG = {
   'claude-code': { name: 'Claude Code', color: 'text-orange-700', bg: 'bg-orange-50 border border-orange-100' },
 } as const;
 
-export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace }) => {
+export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
+  trace,
+  initialTab = 'overview',
+  hideTabs = false,
+}) => {
   const typedTrace = trace as TraceWithRaw;
-  const [activeTab, setActiveTab] = useState<TabType>('overview');
+  const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('standard');
   const [visibleKinds, setVisibleKinds] = useState<Record<ReplayMessageKind, boolean>>(DEFAULT_VISIBLE_KINDS);
   const [expandedLLMs, setExpandedLLMs] = useState<Set<string>>(new Set(['group-0']));
@@ -283,6 +289,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
     setPendingLaunchPromptId(promptId);
     setActiveTab('llm');
   };
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab, trace.sessionId]);
 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
@@ -1008,20 +1018,22 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({ trace 
 
   return (
     <div className="rounded-3xl border border-slate-200/80 bg-white overflow-hidden shadow-sm shadow-slate-200/70 xl:max-h-[calc(100vh-3rem)] xl:flex xl:flex-col">
-      <div className="border-b border-slate-200 px-4 py-3 flex flex-wrap gap-2 bg-white">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors ${
-              activeTab === tab.id ? 'bg-blue-600 text-white shadow-sm shadow-blue-100' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-            }`}
-          >
-            <tab.icon className="w-4 h-4" />
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      {!hideTabs && (
+        <div className="border-b border-slate-200 px-4 py-3 flex flex-wrap gap-2 bg-white">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors ${
+                activeTab === tab.id ? 'bg-blue-600 text-white shadow-sm shadow-blue-100' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <tab.icon className="w-4 h-4" />
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {renderReplayFilters()}
 

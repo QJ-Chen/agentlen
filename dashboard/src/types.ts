@@ -139,6 +139,7 @@ export interface ProjectMetadataNote {
   modified_at?: number;
   description?: string;
   preview?: string;
+  content?: string;
 }
 
 export interface ProjectMetadataWorktree {
@@ -153,6 +154,13 @@ export interface ProjectMetadataTaskDirectory {
   session_id: string;
   path: string;
   task_file_count: number;
+}
+
+export interface SkillSummary {
+  name: string;
+  path: string;
+  description?: string;
+  content?: string;
 }
 
 export interface ProjectMetadata {
@@ -182,6 +190,13 @@ export interface ProjectMetadata {
     modified_at?: number;
     allow_rule_count: number;
     allow_rules_preview: string[];
+    content?: string;
+  };
+  skills: {
+    exists: boolean;
+    path: string;
+    count: number;
+    items: SkillSummary[];
   };
   worktrees: {
     exists: boolean;
@@ -207,16 +222,64 @@ export interface ProjectMetadata {
 
 export type HierarchyNodeType =
   | 'global-root'
+  | 'global-instruction'
+  | 'global-skills'
+  | 'global-config'
+  | 'projects-root'
+  | 'skill'
   | 'project'
   | 'project-instructions'
   | 'project-memory'
   | 'project-config'
+  | 'project-skills'
   | 'project-sessions'
   | 'session'
-  | 'session-overview'
   | 'session-llm'
   | 'session-subagents'
-  | 'session-tasks';
+  | 'session-tasks'
+  | 'session-raw'
+  | 'assistant-turn'
+  | 'command'
+  | 'thinking'
+  | 'text'
+  | 'tool-call'
+  | 'tool-result'
+  | 'subagents'
+  | 'subagent';
+
+export interface HierarchyNodeDetailItem {
+  label: string;
+  description?: string;
+  path?: string;
+  content?: string;
+}
+
+export interface HierarchyNodeDetail {
+  kind:
+    | 'summary'
+    | 'file'
+    | 'skills'
+    | 'memory'
+    | 'session-overview'
+    | 'assistant-turn'
+    | 'command'
+    | 'thinking'
+    | 'text'
+    | 'tool-call'
+    | 'tool-result'
+    | 'subagent-overview';
+  title?: string;
+  description?: string;
+  path?: string;
+  content?: string;
+  prompt?: string;
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  status?: string;
+  items?: HierarchyNodeDetailItem[];
+  meta?: Record<string, unknown>;
+}
 
 export interface HierarchyNode {
   id: string;
@@ -227,6 +290,11 @@ export interface HierarchyNode {
   projectPath?: string;
   traceId?: string;
   sessionId?: string;
+  assistantTurnId?: string;
+  toolCallId?: string;
+  subagentId?: string;
   status?: Trace['status'];
+  hasChildren?: boolean;
+  detail?: HierarchyNodeDetail;
   children?: HierarchyNode[];
 }

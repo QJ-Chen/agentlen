@@ -1,5 +1,18 @@
 import React from 'react';
-import { ChevronDown, ChevronRight, FolderTree } from 'lucide-react';
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronRight,
+  FileCode2,
+  FileJson,
+  FileText,
+  FolderTree,
+  ListTree,
+  ScrollText,
+  Sparkles,
+  TerminalSquare,
+  Wrench,
+} from 'lucide-react';
 import type { HierarchyNode } from '../types';
 import { shortProjectPath } from '../lib/sessionUtils';
 
@@ -13,12 +26,86 @@ interface HierarchyTreeProps {
 
 const INDENT = 16;
 
+function nodeIcon(node: HierarchyNode): { kind: 'folder' | 'book' | 'json' | 'code' | 'scroll' | 'list' | 'terminal' | 'sparkles' | 'text' | 'wrench' } {
+  switch (node.type) {
+    case 'global-root':
+    case 'projects-root':
+    case 'project':
+    case 'project-sessions':
+      return { kind: 'folder' };
+    case 'global-instruction':
+    case 'project-instructions':
+      return { kind: 'book' };
+    case 'global-config':
+    case 'project-config':
+      return { kind: 'json' };
+    case 'global-skills':
+    case 'project-skills':
+    case 'skill':
+      return { kind: 'code' };
+    case 'project-memory':
+      return { kind: 'scroll' };
+    case 'session':
+    case 'session-llm':
+    case 'session-subagents':
+    case 'session-tasks':
+    case 'session-raw':
+      return { kind: 'list' };
+    case 'assistant-turn':
+      return { kind: 'terminal' };
+    case 'thinking':
+      return { kind: 'sparkles' };
+    case 'text':
+      return { kind: 'text' };
+    case 'tool-call':
+    case 'tool-result':
+      return { kind: 'wrench' };
+    default:
+      return { kind: 'folder' };
+  }
+}
+
+function renderNodeIcon(icon: ReturnType<typeof nodeIcon>) {
+  const className = 'h-3.5 w-3.5 shrink-0 text-slate-400';
+  switch (icon.kind) {
+    case 'book':
+      return <BookOpen className={className} />;
+    case 'json':
+      return <FileJson className={className} />;
+    case 'code':
+      return <FileCode2 className={className} />;
+    case 'scroll':
+      return <ScrollText className={className} />;
+    case 'list':
+      return <ListTree className={className} />;
+    case 'terminal':
+      return <TerminalSquare className={className} />;
+    case 'sparkles':
+      return <Sparkles className={className} />;
+    case 'text':
+      return <FileText className={className} />;
+    case 'wrench':
+      return <Wrench className={className} />;
+    default:
+      return <FolderTree className={className} />;
+  }
+}
+
 function typeTone(type: HierarchyNode['type']): string {
   switch (type) {
     case 'global-root':
+    case 'projects-root':
       return 'text-slate-900 font-semibold';
     case 'project':
+    case 'session':
       return 'text-slate-900';
+    case 'thinking':
+      return 'text-amber-700';
+    case 'tool-call':
+    case 'tool-result':
+      return 'text-violet-700';
+    case 'command':
+      return 'text-cyan-700';
     default:
       return 'text-slate-600';
   }
@@ -31,7 +118,6 @@ function NodeRow({
   selectedId,
   onToggle,
   onSelect,
-  maxDepth = 2,
 }: {
   node: HierarchyNode;
   depth: number;
@@ -39,13 +125,13 @@ function NodeRow({
   selectedId: string | null;
   onToggle: (id: string) => void;
   onSelect: (node: HierarchyNode) => void;
-  maxDepth?: number;
 }) {
-  const visibleChildren = depth >= maxDepth ? [] : (Array.isArray(node.children) ? node.children : []);
-  const hasChildren = visibleChildren.length > 0;
+  const visibleChildren = Array.isArray(node.children) ? node.children : [];
+  const hasChildren = node.hasChildren || visibleChildren.length > 0;
   const isExpanded = expanded.has(node.id);
   const isSelected = selectedId === node.id;
   const displayLabel = node.type === 'project' ? (shortProjectPath(node.label) || node.label) : node.label;
+  const icon = nodeIcon(node);
 
   return (
     <div>
@@ -68,7 +154,10 @@ function NodeRow({
         </button>
 
         <button type="button" onClick={() => onSelect(node)} className="min-w-0 flex-1 text-left" title={node.label}>
-          <div className={`truncate ${typeTone(node.type)}`}>{displayLabel}</div>
+          <div className="flex items-center gap-2">
+            {renderNodeIcon(icon)}
+            <div className={`truncate ${typeTone(node.type)}`}>{displayLabel}</div>
+          </div>
           {(node.subtitle || node.count != null) && (
             <div className="truncate text-[11px] text-slate-400">
               {node.subtitle}
@@ -90,7 +179,6 @@ function NodeRow({
               selectedId={selectedId}
               onToggle={onToggle}
               onSelect={onSelect}
-              maxDepth={maxDepth}
             />
           ))}
         </div>

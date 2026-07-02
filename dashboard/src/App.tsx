@@ -13,7 +13,7 @@ import {
 import type { OverviewStats, HierarchyNode, ProjectMetadata } from './types';
 import { NodeDetailPane } from './components/NodeDetailPane';
 import { HierarchyTree } from './components/HierarchyTree';
-import type { HierarchyResponse, ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
+import type { HierarchyChildrenResponse, HierarchyResponse, ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
   cleanSessionText,
@@ -26,6 +26,28 @@ import {
 import './index.css';
 
 const API_URL = 'http://localhost:8080';
+
+function collectExpandableNodeIds(node: HierarchyNode | null, result: Set<string> = new Set()): Set<string> {
+  if (!node) return result;
+  if (node.hasChildren || (Array.isArray(node.children) && node.children.length > 0)) {
+    result.add(node.id);
+    node.children?.forEach((child) => collectExpandableNodeIds(child, result));
+  }
+  return result;
+}
+
+function mergeNodeChildren(node: HierarchyNode, nodeId: string, children: HierarchyNode[]): HierarchyNode {
+  if (node.id === nodeId) {
+    return { ...node, children, hasChildren: children.length > 0 || node.hasChildren };
+  }
+  if (!Array.isArray(node.children) || node.children.length === 0) {
+    return node;
+  }
+  return {
+    ...node,
+    children: node.children.map((child) => mergeNodeChildren(child, nodeId, children)),
+  };
+}
 
 function buildDateRangeLabel(startDate: string, endDate: string): string {
   if (startDate && endDate) return `${startDate} → ${endDate}`;
@@ -80,14 +102,41 @@ function App() {
   const [projectMetadataLoading, setProjectMetadataLoading] = useState(false);
   const [projectMetadataError, setProjectMetadataError] = useState<string | null>(null);
   const [hierarchyRoot, setHierarchyRoot] = useState<HierarchyNode | null>(null);
+  const [sessionDetailsById, setSessionDetailsById] = useState<Record<string, TraceWithRaw>>({});
+  const [, setLoadingNodeChildrenIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set(['global-root', 'projects-root']));
   const [leftPanelWidth, setLeftPanelWidth] = useState(320);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
+  const hierarchyFetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
   const hasActiveDateRange = startDate.length > 0 || endDate.length > 0;
   const activeDateRangeLabel = buildDateRangeLabel(startDate, endDate);
+
+  const fetchHierarchyRoot = useCallback(async () => {
+    if (hierarchyFetchInFlightRef.current) {
+      return hierarchyFetchInFlightRef.current;
+    }
+
+    const request = (async () => {
+      const response = await fetch(`${API_URL}/api/v1/hierarchy`);
+      if (!response.ok) {
+        throw new Error('Failed to load hierarchy');
+      }
+      const hierarchyData = (await response.json()) as HierarchyResponse;
+      const firstProjectNodeId = hierarchyData.root?.children?.find((child) => child.type === 'projects-root')?.children?.[0]?.id || null;
+      const defaultExpandedNodeIds = collectExpandableNodeIds(hierarchyData.root || null);
+      setHierarchyRoot(hierarchyData.root || null);
+      setExpandedNodeIds(defaultExpandedNodeIds);
+      setSelectedNodeId((existingNodeId) => existingNodeId || firstProjectNodeId || 'global-root');
+    })();
+
+    hierarchyFetchInFlightRef.current = request.finally(() => {
+      hierarchyFetchInFlightRef.current = null;
+    });
+    return hierarchyFetchInFlightRef.current;
+  }, []);
 
   const fetchData = useCallback(async () => {
     if (fetchInFlightRef.current) {
@@ -97,6 +146,7 @@ function App() {
     const request = (async () => {
       try {
         setLoading(true);
+        setError(null);
         const params = new URLSearchParams({ limit: '200' });
         const startTime = toStartOfLocalDayISOString(startDate);
         const endTime = toEndOfLocalDayISOString(endDate);
@@ -104,34 +154,29 @@ function App() {
         if (endTime) params.set('end_time', endTime);
         const queryString = params.toString();
 
-        const [sessionsRes, statsRes, hierarchyRes] = await Promise.all([
+        const [sessionsRes, statsRes] = await Promise.all([
           fetch(`${API_URL}/api/v1/sessions?${queryString}`),
           fetch(`${API_URL}/api/v1/stats/overview?${queryString}`),
-          fetch(`${API_URL}/api/v1/hierarchy`),
         ]);
 
-        if (!sessionsRes.ok || !statsRes.ok || !hierarchyRes.ok) {
+        if (!sessionsRes.ok || !statsRes.ok) {
           throw new Error('API request failed');
         }
 
         const sessionsData = (await sessionsRes.json()) as SessionsResponse;
         const statsData = (await statsRes.json()) as OverviewStats;
-        const hierarchyData = (await hierarchyRes.json()) as HierarchyResponse;
 
         const transformed = (sessionsData.sessions || []).map(transformSession);
         transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
-        const firstProjectNodeId = hierarchyData.root?.children?.[0]?.children?.[0]?.id || null;
 
         setTraces(transformed);
         setStats(statsData);
-        setHierarchyRoot(hierarchyData.root || null);
         setError(null);
 
         setSelectedTraceId((current) => {
           const nextSelectedId = current && transformed.find((trace) => trace.id === current)?.id
             ? current
             : transformed[0]?.id || null;
-          setSelectedNodeId((existingNodeId) => existingNodeId || firstProjectNodeId || (nextSelectedId ? `session:${nextSelectedId}` : 'global-root'));
           return nextSelectedId;
         });
       } catch {
@@ -149,8 +194,8 @@ function App() {
   useEffect(() => {
     if (hasLoadedInitiallyRef.current) return;
     hasLoadedInitiallyRef.current = true;
-    void fetchData();
-  }, [fetchData]);
+    void Promise.all([fetchData(), fetchHierarchyRoot()]);
+  }, [fetchData, fetchHierarchyRoot]);
 
   useEffect(() => {
     if (!dateRangeEffectReadyRef.current) {
@@ -165,19 +210,63 @@ function App() {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
   }, [traces]);
 
-  const selectedTrace = useMemo(
-    () => traces.find((trace) => trace.id === selectedTraceId) || null,
-    [selectedTraceId, traces],
-  );
+  const selectedTrace = useMemo(() => {
+    if (selectedTraceId && sessionDetailsById[selectedTraceId]) {
+      return sessionDetailsById[selectedTraceId];
+    }
+    return traces.find((trace) => trace.id === selectedTraceId) || null;
+  }, [selectedTraceId, sessionDetailsById, traces]);
 
-  const toggleHierarchyNode = useCallback((id: string) => {
+  const toggleHierarchyNode = useCallback(async (id: string) => {
+    const targetNode = (() => {
+      if (!hierarchyRoot) return null;
+      const stack: HierarchyNode[] = [hierarchyRoot];
+      while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) continue;
+        if (current.id === id) return current;
+        if (current.children) {
+          for (const child of current.children) stack.push(child);
+        }
+      }
+      return null;
+    })();
+
+    const shouldLoadChildren = Boolean(
+      targetNode
+      && targetNode.hasChildren
+      && targetNode.id.startsWith('session:')
+      && (!Array.isArray(targetNode.children) || targetNode.children.length <= 1),
+    );
+
+    if (shouldLoadChildren) {
+      setLoadingNodeChildrenIds((current) => new Set(current).add(id));
+      try {
+        const params = new URLSearchParams({ node_id: id });
+        const response = await fetch(`${API_URL}/api/v1/hierarchy/children?${params.toString()}`);
+        if (!response.ok) {
+          throw new Error('Failed to load node children');
+        }
+        const payload = (await response.json()) as HierarchyChildrenResponse;
+        setHierarchyRoot((currentRoot) => (currentRoot ? mergeNodeChildren(currentRoot, id, payload.children) : currentRoot));
+      } catch {
+        setError('无法加载层级子节点');
+      } finally {
+        setLoadingNodeChildrenIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+      }
+    }
+
     setExpandedNodeIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }, []);
+  }, [hierarchyRoot]);
 
   const handleResizeStart = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -203,9 +292,25 @@ function App() {
       setSelectedNodeId(node.id);
       if (node.sessionId) {
         setSelectedTraceId(node.sessionId);
+        setError(null);
+        if (!sessionDetailsById[node.sessionId]) {
+          void (async () => {
+            try {
+              const response = await fetch(`${API_URL}/api/v1/sessions/${encodeURIComponent(node.sessionId || '')}`);
+              if (!response.ok) {
+                throw new Error('Failed to load session detail');
+              }
+              const payload = (await response.json()) as TraceWithRaw['raw'];
+              const normalized = transformSession(payload as SessionsResponse['sessions'][number]);
+              setSessionDetailsById((current) => ({ ...current, [node.sessionId as string]: normalized }));
+            } catch {
+              setError('无法加载会话详情');
+            }
+          })();
+        }
       }
     },
-    [],
+    [sessionDetailsById],
   );
 
   const selectedHierarchyNode = useMemo(() => {
@@ -263,14 +368,6 @@ function App() {
     void loadProjectMetadata();
     return () => controller.abort();
   }, [selectedProjectPath]);
-
-  const selectedProjectSessions = useMemo(() => {
-    const projectPath = selectedProjectPath;
-    if (!projectPath) return [] as TraceWithRaw[];
-    return traces
-      .filter((trace) => trace.projectPath === projectPath)
-      .sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
-  }, [selectedProjectPath, traces]);
 
   const filteredTraces = useMemo(() => {
     return traces.filter((trace) => {
@@ -500,11 +597,6 @@ function App() {
               projectMetadata={projectMetadata}
               projectMetadataLoading={projectMetadataLoading}
               projectMetadataError={projectMetadataError}
-              projectSessions={selectedProjectSessions}
-              selectedTraceId={selectedTrace?.id}
-              onSelectTrace={(traceId) => {
-                setSelectedTraceId(traceId || null);
-              }}
             />
           </section>
         </div>

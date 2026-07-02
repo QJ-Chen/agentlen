@@ -20,6 +20,7 @@ function ExpandableSection({
   expanded,
   onToggle,
   children,
+  indent = 0,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
@@ -27,9 +28,10 @@ function ExpandableSection({
   expanded: boolean;
   onToggle: () => void;
   children: React.ReactNode;
+  indent?: number;
 }) {
   return (
-    <section className="rounded-2xl border border-slate-200/80 bg-slate-50/80">
+    <section className="rounded-2xl border border-slate-200/80 bg-slate-50/80" style={{ marginLeft: indent }}>
       <button
         type="button"
         onClick={onToggle}
@@ -70,6 +72,7 @@ function ProjectMetadataBody({ metadata }: { metadata: ProjectMetadata }) {
         subtitle={metadata.instructions.exists ? formatTimestamp(metadata.instructions.modified_at) : 'No CLAUDE.md'}
         expanded={!!expandedSections.instructions}
         onToggle={() => toggleSection('instructions')}
+        indent={16}
       >
         {metadata.instructions.exists ? (
           <div className="space-y-3 text-sm text-slate-600">
@@ -91,6 +94,7 @@ function ProjectMetadataBody({ metadata }: { metadata: ProjectMetadata }) {
         subtitle={`${metadata.memory.note_count} notes`}
         expanded={!!expandedSections.memory}
         onToggle={() => toggleSection('memory')}
+        indent={16}
       >
         {metadata.memory.notes.length > 0 ? (
           <div className="space-y-2">
@@ -114,6 +118,7 @@ function ProjectMetadataBody({ metadata }: { metadata: ProjectMetadata }) {
         subtitle={metadata.local_config.exists ? `${metadata.local_config.allow_rule_count} allow rules` : 'No local Claude config'}
         expanded={!!expandedSections.config}
         onToggle={() => toggleSection('config')}
+        indent={16}
       >
         {metadata.local_config.exists ? (
           <div className="space-y-3 text-sm text-slate-600">
@@ -177,7 +182,7 @@ function SessionsSection({
   onSelectTrace: (traceId: string) => void;
 }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 pl-4 border-l border-slate-200/80 ml-2">
       {traces.map((trace) => (
         <SessionExpandable
           key={trace.id}
