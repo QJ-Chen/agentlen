@@ -249,6 +249,16 @@ def _build_project_metadata(project_path: str) -> Dict[str, Any]:
     repo_settings_path = repo_claude_dir / "settings.local.json"
     repo_claude_md = Path(normalized_project_path) / "CLAUDE.md"
     repo_skills_dir = repo_claude_dir / "skills"
+    repo_skills = (
+        {
+            "exists": False,
+            "path": str(repo_skills_dir),
+            "count": 0,
+            "items": [],
+        }
+        if repo_claude_dir.resolve() == CLAUDE_ROOT.resolve()
+        else _summarize_skills(repo_skills_dir)
+    )
     memory_dir = project_dir / "memory"
     worktrees_dir = repo_claude_dir / "worktrees"
     session_logs = sorted(project_dir.glob("*.jsonl")) if project_dir.exists() else []
@@ -263,7 +273,7 @@ def _build_project_metadata(project_path: str) -> Dict[str, Any]:
         "instructions": _summarize_claude_md(repo_claude_md),
         "memory": _summarize_memory(memory_dir),
         "local_config": _summarize_settings_local(repo_settings_path),
-        "skills": _summarize_skills(repo_skills_dir),
+        "skills": repo_skills,
         "worktrees": _summarize_worktrees(worktrees_dir),
         "session_artifacts": _summarize_project_artifacts(project_dir),
         "task_artifacts": _summarize_task_artifacts(session_ids),
@@ -427,6 +437,11 @@ def _build_hierarchy_root() -> Dict[str, Any]:
                 "type": "global-instruction",
                 "label": "Global instruction",
                 "hasChildren": False,
+                "detail": _node_file_detail(
+                    "Global instruction",
+                    global_metadata.get("instructions") or {},
+                    "Global ~/.claude/CLAUDE.md",
+                ),
             },
             {
                 "id": "global-skills",
@@ -434,12 +449,22 @@ def _build_hierarchy_root() -> Dict[str, Any]:
                 "label": "Global skills",
                 "count": global_skill_count,
                 "hasChildren": False,
+                "detail": _node_skills_detail(
+                    "Global skills",
+                    global_metadata.get("skills") or {},
+                    "Installed global Claude skills",
+                ),
             },
             {
                 "id": "global-config",
                 "type": "global-config",
                 "label": "Global config",
                 "hasChildren": False,
+                "detail": _node_file_detail(
+                    "Global config",
+                    global_metadata.get("config") or {},
+                    "Global ~/.claude/settings.json",
+                ),
             },
             {
                 "id": "projects-root",
@@ -495,14 +520,6 @@ def _build_node_children(node_id: str) -> List[Dict[str, Any]]:
             "sessionId": session_id,
             "projectPath": project_path,
             "count": task_count,
-            "hasChildren": False,
-        },
-        {
-            "id": f"session-raw:{session_id}",
-            "type": "session-raw",
-            "label": "Raw",
-            "sessionId": session_id,
-            "projectPath": project_path,
             "hasChildren": False,
         },
     ]

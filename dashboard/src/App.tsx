@@ -27,15 +27,6 @@ import './index.css';
 
 const API_URL = 'http://localhost:8080';
 
-function collectExpandableNodeIds(node: HierarchyNode | null, result: Set<string> = new Set()): Set<string> {
-  if (!node) return result;
-  if (node.hasChildren || (Array.isArray(node.children) && node.children.length > 0)) {
-    result.add(node.id);
-    node.children?.forEach((child) => collectExpandableNodeIds(child, result));
-  }
-  return result;
-}
-
 function mergeNodeChildren(node: HierarchyNode, nodeId: string, children: HierarchyNode[]): HierarchyNode {
   if (node.id === nodeId) {
     return { ...node, children, hasChildren: children.length > 0 || node.hasChildren };
@@ -105,7 +96,7 @@ function App() {
   const [sessionDetailsById, setSessionDetailsById] = useState<Record<string, TraceWithRaw>>({});
   const [, setLoadingNodeChildrenIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set(['global-root', 'projects-root']));
+  const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set());
   const [leftPanelWidth, setLeftPanelWidth] = useState(320);
   const fetchInFlightRef = useRef<Promise<void> | null>(null);
   const hierarchyFetchInFlightRef = useRef<Promise<void> | null>(null);
@@ -126,9 +117,8 @@ function App() {
       }
       const hierarchyData = (await response.json()) as HierarchyResponse;
       const firstProjectNodeId = hierarchyData.root?.children?.find((child) => child.type === 'projects-root')?.children?.[0]?.id || null;
-      const defaultExpandedNodeIds = collectExpandableNodeIds(hierarchyData.root || null);
       setHierarchyRoot(hierarchyData.root || null);
-      setExpandedNodeIds(defaultExpandedNodeIds);
+      setExpandedNodeIds(new Set());
       setSelectedNodeId((existingNodeId) => existingNodeId || firstProjectNodeId || 'global-root');
     })();
 
@@ -328,7 +318,9 @@ function App() {
   }, [hierarchyRoot, selectedNodeId]);
 
   const selectedProjectPath = useMemo(() => {
-    if (selectedHierarchyNode?.projectPath) return selectedHierarchyNode.projectPath;
+    if (selectedHierarchyNode) {
+      return selectedHierarchyNode.projectPath || '';
+    }
     return selectedTrace?.projectPath || '';
   }, [selectedHierarchyNode, selectedTrace]);
 

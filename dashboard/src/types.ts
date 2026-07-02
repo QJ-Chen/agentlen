@@ -237,7 +237,6 @@ export type HierarchyNodeType =
   | 'session-llm'
   | 'session-subagents'
   | 'session-tasks'
-  | 'session-raw'
   | 'assistant-turn'
   | 'command'
   | 'thinking'

@@ -175,8 +175,6 @@ function sessionTabForNode(nodeType: HierarchyNode['type']): TabType {
       return 'subagents';
     case 'session-tasks':
       return 'taskStatus';
-    case 'session-raw':
-      return 'raw';
     default:
       return 'overview';
   }
@@ -231,6 +229,38 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
         projectMetadata={projectMetadata}
         projectMetadataLoading={projectMetadataLoading}
         projectMetadataError={projectMetadataError}
+      />
+    );
+  }
+
+  if (node.type === 'global-instruction') {
+    return (
+      <FileDetailPane
+        title="Global instruction"
+        subtitle="Global ~/.claude/CLAUDE.md"
+        path={node.detail?.path}
+        content={node.detail?.content}
+      />
+    );
+  }
+
+  if (node.type === 'global-skills') {
+    return (
+      <SkillsDetailPane
+        title="Global skills"
+        subtitle="Installed global Claude skills"
+        items={node.detail?.items || []}
+      />
+    );
+  }
+
+  if (node.type === 'global-config') {
+    return (
+      <FileDetailPane
+        title="Global config"
+        subtitle="Global ~/.claude/settings.json"
+        path={node.detail?.path}
+        content={node.detail?.content}
       />
     );
   }
@@ -346,7 +376,6 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
     || node.type === 'session-llm'
     || node.type === 'session-subagents'
     || node.type === 'session-tasks'
-    || node.type === 'session-raw'
     || node.type === 'assistant-turn'
     || node.type === 'subagents'
     || node.type === 'subagent') && selectedTrace) {

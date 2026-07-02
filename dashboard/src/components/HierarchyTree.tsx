@@ -49,7 +49,6 @@ function nodeIcon(node: HierarchyNode): { kind: 'folder' | 'book' | 'json' | 'co
     case 'session-llm':
     case 'session-subagents':
     case 'session-tasks':
-    case 'session-raw':
       return { kind: 'list' };
     case 'assistant-turn':
       return { kind: 'terminal' };
@@ -153,7 +152,13 @@ function NodeRow({
           )}
         </button>
 
-        <button type="button" onClick={() => onSelect(node)} className="min-w-0 flex-1 text-left" title={node.label}>
+        <button
+          type="button"
+          onClick={() => onSelect(node)}
+          onDoubleClick={() => hasChildren && onToggle(node.id)}
+          className="min-w-0 flex-1 text-left"
+          title={node.label}
+        >
           <div className="flex items-center gap-2">
             {renderNodeIcon(icon)}
             <div className={`truncate ${typeTone(node.type)}`}>{displayLabel}</div>

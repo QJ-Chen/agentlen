@@ -18,7 +18,6 @@ import {
   Sparkles,
   User,
   Wrench,
-  X as XIcon,
 } from 'lucide-react';
 import type { LLMCall, PromptThread, ToolCall, Trace } from '../types';
 import {
@@ -633,25 +632,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       return <EmptyState icon={Bot} label="当前筛选条件下无可见 Subagent 日志" />;
     }
 
-    const completedCount = subagentLogs.filter((item) => item.status === 'completed').length;
-    const failedCount = subagentLogs.filter((item) => item.status === 'failed').length;
-    const runningCount = subagentLogs.filter((item) => item.status === 'running').length;
-
     return (
       <div className="space-y-4">
-        <div className={surfaceClass}>
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <Bot className="h-4 w-4 text-slate-400" />
-            Subagent 概览
-          </h3>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4 text-sm">
-            <MetricCard icon={Bot} color="text-cyan-600" value={String(subagentLogs.length)} label="Subagents" />
-            <MetricCard icon={Check} color="text-emerald-600" value={String(completedCount)} label="已完成" />
-            <MetricCard icon={Clock} color="text-amber-600" value={String(runningCount)} label="运行中" />
-            <MetricCard icon={XIcon} color="text-red-600" value={String(failedCount)} label="失败" />
-          </div>
-        </div>
-
         <div className="space-y-4">
           {groupedSubagentLogs.map((group, groupIdx) => {
             const groupKey = `subagent-batch-${group.batchId}`;

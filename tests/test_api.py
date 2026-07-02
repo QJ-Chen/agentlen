@@ -448,7 +448,6 @@ class HierarchyApiTests(unittest.TestCase):
             "session-llm",
             "session-subagents",
             "session-tasks",
-            "session-raw",
         ])
 
 
