@@ -399,7 +399,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       const { relatedTools, responseStyle, formattedToolResponse, toolResultAppendix } = getCallRenderState(call, toolScope);
 
       return (
-        <div key={callKey} className={`rounded-2xl border ${isCallExpanded ? 'bg-white border-slate-300 shadow-sm shadow-slate-200/60' : 'bg-slate-50/80 border-slate-200/80'}`}>
+        <div key={callKey} className={`rounded-2xl border-l-4 transition-all ${isCallExpanded ? 'bg-white border-violet-300 shadow-md shadow-violet-100/40 ring-1 ring-violet-100' : 'bg-slate-50/80 border-slate-200/80 border-l-slate-300'}`}>
           <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
             <div className={`w-6 h-6 rounded-full flex items-center justify-center ring-1 ring-white ${responseStyle.badge}`}>
               <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
@@ -435,7 +435,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
           </button>
 
           {detailLevel !== 'summary' && isCallExpanded && (
-            <div className="px-3 pb-3 pt-3 border-t border-slate-200/80 space-y-3 bg-slate-50/70">
+            <div className="ml-6 border-l-2 border-violet-100 px-3 pb-3 pt-3 space-y-3 bg-violet-50/35 rounded-bl-2xl">
               {call.response && !formattedToolResponse && (
                 <JsonOrTextBlock
                   title={responseStyle.label}
@@ -498,8 +498,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             llmGroupRefs.current[thread.promptId || thread.id] = node;
           }
         }}
-        className={`rounded-2xl border transition-all ${
-          isThreadExpanded ? 'bg-white border-slate-300 shadow-sm shadow-slate-200/60' : 'bg-slate-50/80 border-slate-200/80'
+        className={`rounded-2xl border-l-4 transition-all ${
+          isThreadExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/40 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'
         }`}
       >
         <button onClick={() => toggleLLM(threadKey)} className="w-full px-4 py-3.5 flex items-center gap-3 text-left">
@@ -530,7 +530,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
         </button>
 
         {isThreadExpanded && (
-          <div className="border-t border-slate-200/80">
+          <div className="border-t border-cyan-100/80">
             {showPromptBlock && (
               <div className="px-4 py-3 bg-slate-50/80 border-b border-slate-200/80">
                 <div className="flex items-center justify-between mb-2">
@@ -549,7 +549,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
               </div>
             )}
 
-            <div className="space-y-3 p-4 bg-white">
+            <div className="space-y-3 p-4 bg-white ml-4 border-l-2 border-cyan-100/80 rounded-bl-2xl">
               {visibleTurns.map(({ turn, visibleChildRecords }, turnIdx) => {
                 const turnKey = `${threadKey}-turn-${turn.messageId || turn.id || turnIdx}`;
                 const isSingleChild = visibleChildRecords.length === 1;
@@ -565,7 +565,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                 }
 
                 return (
-                  <div key={turnKey} className={`rounded-2xl border ${isTurnExpanded ? 'bg-white border-slate-300 shadow-sm shadow-slate-200/60' : 'bg-slate-50/80 border-slate-200/80'}`}>
+                  <div key={turnKey} className={`rounded-2xl border-l-4 ${isTurnExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/35 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'}`}>
                     <button onClick={() => toggleLLM(turnKey)} className="w-full px-4 py-3.5 flex items-center gap-3 text-left">
                       <div className="w-7 h-7 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
                         <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
@@ -582,7 +582,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                     </button>
 
                     {detailLevel !== 'summary' && isTurnExpanded && (
-                      <div className="border-t border-slate-200/80 space-y-2 p-3 bg-slate-50/70">
+                      <div className="ml-5 border-l-2 border-cyan-100/80 space-y-2 p-3 bg-cyan-50/35 rounded-bl-2xl">
                         {visibleChildRecords.map((call, callIdx) =>
                           renderChildRecord({
                             call,
@@ -648,8 +648,8 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             return (
               <div
                 key={group.batchId}
-                className={`overflow-hidden rounded-xl border transition-all ${
-                  isGroupExpanded ? 'border-slate-300 bg-white shadow-sm shadow-slate-200/60' : 'border-slate-200/80 bg-slate-50/80 hover:border-slate-300 hover:bg-white'
+                className={`overflow-hidden rounded-xl border-l-4 transition-all ${
+                  isGroupExpanded ? 'border-cyan-300 bg-white shadow-md shadow-cyan-100/35 ring-1 ring-cyan-100' : 'border-slate-200/80 border-l-cyan-200 bg-slate-50/80 hover:border-slate-300 hover:bg-white'
                 }`}
               >
                 <div className="w-full px-4 py-3.5">
@@ -723,7 +723,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                 </div>
 
                 {isGroupExpanded && (
-                  <div className="border-t border-slate-200/80 px-3 py-3 space-y-3 bg-slate-50/60">
+                  <div className="ml-4 border-l-2 border-cyan-100/80 px-3 py-3 space-y-3 bg-cyan-50/30 rounded-bl-xl">
                     {group.subagents.map((subagent, subagentIdx) => {
                       const subagentKey = `${groupKey}-subagent-${subagent.id}`;
                       const isSubagentExpanded = expandedLLMs.has(subagentKey);
@@ -755,7 +755,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                       const statusTone = statusBadgeTone(subagent.status);
 
                       return (
-                        <div key={subagent.id} className={`overflow-hidden rounded-xl border transition-all ${isSubagentExpanded ? 'border-slate-300 bg-white shadow-sm shadow-slate-200/60' : 'border-slate-200/80 bg-white/80 hover:border-slate-300 hover:bg-white'}`}>
+                        <div key={subagent.id} className={`overflow-hidden rounded-xl border-l-4 transition-all ${isSubagentExpanded ? 'border-violet-300 bg-white shadow-md shadow-violet-100/35 ring-1 ring-violet-100' : 'border-slate-200/80 border-l-violet-200 bg-white/80 hover:border-slate-300 hover:bg-white'}`}>
                           <button onClick={() => toggleLLM(subagentKey)} className="w-full px-3.5 py-3 text-left">
                             <div className="flex items-center gap-3">
                               <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-violet-200 bg-violet-50 text-[10px] font-mono text-violet-700">
@@ -801,7 +801,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                           </button>
 
                           {isSubagentExpanded && (
-                            <div className="border-t border-slate-200/80 px-3.5 pb-3 pt-3 space-y-4 bg-slate-50/60">
+                            <div className="ml-5 border-l-2 border-violet-100/80 px-3.5 pb-3 pt-3 space-y-4 bg-violet-50/25 rounded-bl-xl">
                               {hasSubagentDetails && (
                                 <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-3 space-y-2">
                                   <div className="flex items-center gap-2 text-xs font-semibold text-sky-700">
