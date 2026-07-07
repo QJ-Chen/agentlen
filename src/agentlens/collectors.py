@@ -759,6 +759,12 @@ class SessionAggregator:
             "metadata": {
                 "message_count": session["message_count"],
                 "llm_call_count": sum(turn.get("child_record_count", 0) for turn in session["assistant_turns"]),
+                "tool_call_count": len(merged_tool_calls),
+                "tool_name_counts": dict(Counter(
+                    tool.get("name") or tool.get("tool_name") or "unknown"
+                    for tool in merged_tool_calls
+                    if tool.get("name") or tool.get("tool_name")
+                )),
                 "project_group": session.get("project_group") or project_path,
                 "major_cwd": project_path,
                 "task_summary": summarize_task_tools(session_id, merged_tool_calls),

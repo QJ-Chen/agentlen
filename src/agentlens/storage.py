@@ -471,6 +471,52 @@ class SQLiteStorage(Storage):
         sessions.sort(key=lambda session: session.get("last_updated") or session.get("start_time") or "", reverse=True)
         return sessions
 
+    def _to_light_session(self, session: Dict[str, Any]) -> Dict[str, Any]:
+        metadata = session.get("metadata") or {}
+        subagent_logs = metadata.get("subagent_logs") or []
+        task_summary = metadata.get("task_summary") or {}
+        tasks = task_summary.get("tasks") or [] if isinstance(task_summary, dict) else []
+        vision_references = metadata.get("vision_references") or []
+
+        light_metadata = {
+            "trace_count": metadata.get("trace_count"),
+            "tool_call_count": metadata.get("tool_call_count", len(session.get("tool_calls") or [])),
+            "llm_call_count": metadata.get("llm_call_count", len(session.get("llm_calls") or [])),
+            "models": metadata.get("models"),
+            "project_group": metadata.get("project_group"),
+            "major_cwd": metadata.get("major_cwd"),
+            "subagent_count": len(subagent_logs) if isinstance(subagent_logs, list) else 0,
+            "task_count": len(tasks) if isinstance(tasks, list) else 0,
+            "vision_count": len(vision_references) if isinstance(vision_references, list) else 0,
+        }
+
+        return {
+            "id": session.get("id"),
+            "trace_id": session.get("trace_id"),
+            "session_id": session.get("session_id"),
+            "platform": session.get("platform"),
+            "agent_name": session.get("agent_name"),
+            "start_time": session.get("start_time"),
+            "end_time": session.get("end_time"),
+            "duration_ms": session.get("duration_ms"),
+            "model": session.get("model"),
+            "prompt": session.get("prompt"),
+            "response": session.get("response"),
+            "input_tokens": session.get("input_tokens"),
+            "output_tokens": session.get("output_tokens"),
+            "total_tokens": session.get("total_tokens"),
+            "cost_usd": session.get("cost_usd"),
+            "tool_calls": [],
+            "llm_calls": [],
+            "status": session.get("status"),
+            "error_message": session.get("error_message"),
+            "project_path": session.get("project_path"),
+            "session_file_path": session.get("session_file_path"),
+            "metadata": light_metadata,
+            "created_at": session.get("created_at"),
+            "last_updated": session.get("last_updated"),
+        }
+
     def _resolve_time_range(
         self,
         period_hours: Optional[int] = None,
@@ -510,6 +556,7 @@ class SQLiteStorage(Storage):
         end_time: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        light: bool = False,
     ) -> Dict[str, Any]:
         effective_start_time, effective_end_time = self._resolve_time_range(
             period_hours=period_hours,
@@ -547,8 +594,11 @@ class SQLiteStorage(Storage):
             ]
 
         total = len(sessions)
+        page = sessions[offset : offset + limit]
+        if light:
+            page = [self._to_light_session(session) for session in page]
         return {
-            "sessions": sessions[offset : offset + limit],
+            "sessions": page,
             "count": min(limit, max(total - offset, 0)),
             "total": total,
         }
@@ -557,6 +607,46 @@ class SQLiteStorage(Storage):
         traces = self.get_traces(session_id=session_id, limit=5000)
         sessions = self._collapse_sessions(traces)
         return sessions[0] if sessions else None
+
+    def _get_light_trace_rows(
+        self,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        limit: int = 50000,
+    ) -> List[Dict[str, Any]]:
+        query = (
+            "SELECT trace_id, session_id, platform, agent_name, start_time, end_time, "
+            "duration_ms, model, input_tokens, output_tokens, cost_usd, status, "
+            "project_path, metadata FROM traces WHERE platform = ?"
+        )
+        params: List[Any] = [CLAUDE_CODE_PLATFORM]
+        if start_time:
+            query += " AND start_time >= ?"
+            params.append(self._coerce_iso_datetime(start_time))
+        if end_time:
+            query += " AND start_time <= ?"
+            params.append(self._coerce_iso_datetime(end_time))
+        query += " ORDER BY start_time DESC LIMIT ?"
+        params.append(limit)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute(query, params)
+            rows = cursor.fetchall()
+
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            metadata = item.get("metadata")
+            if metadata:
+                try:
+                    item["metadata"] = json.loads(metadata)
+                except (TypeError, json.JSONDecodeError):
+                    item["metadata"] = {}
+            else:
+                item["metadata"] = {}
+            result.append(item)
+        return result
 
     def get_overview_stats(
         self,
@@ -569,29 +659,78 @@ class SQLiteStorage(Storage):
             start_time=start_time,
             end_time=end_time,
         )
-        traces = self.get_traces(
+        rows = self._get_light_trace_rows(
             start_time=effective_start_time,
             end_time=effective_end_time,
             limit=50000,
         )
-        sessions = self._collapse_sessions(traces)
+
+        grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            key = str(row.get("session_id") or row.get("trace_id"))
+            grouped[key].append(row)
+
+        sessions: List[Dict[str, Any]] = []
+        for items in grouped.values():
+            items.sort(key=lambda item: item.get("start_time") or "")
+            first = items[0]
+            last = items[-1]
+            total_input = sum(int(item.get("input_tokens") or 0) for item in items)
+            total_output = sum(int(item.get("output_tokens") or 0) for item in items)
+            total_cost = sum(float(item.get("cost_usd") or 0.0) for item in items)
+            statuses = [self._normalize_status(item.get("status")) for item in items]
+            status = "completed"
+            if any(value == "failed" for value in statuses):
+                status = "failed"
+            elif any(value == "running" for value in statuses):
+                status = "running"
+            elif any(value == "cancelled" for value in statuses):
+                status = "cancelled"
+            metadata_items = [item.get("metadata") or {} for item in items]
+            llm_call_count = sum(int(meta.get("llm_call_count") or 0) for meta in metadata_items)
+            tool_call_count = sum(int(meta.get("tool_call_count") or 0) for meta in metadata_items)
+            top_tools_counter: Counter = Counter()
+            for meta in metadata_items:
+                counts = meta.get("tool_name_counts")
+                if isinstance(counts, dict):
+                    for name, count in counts.items():
+                        top_tools_counter[name] += int(count or 0)
+            start = first.get("start_time")
+            end = last.get("end_time") or last.get("start_time")
+            duration_ms = self._duration_from_times(start, end)
+            if duration_ms == 0:
+                duration_ms = sum(int(item.get("duration_ms") or 0) for item in items)
+            models = [item.get("model") for item in items if item.get("model")]
+            unique_models = list(dict.fromkeys(models))
+            sessions.append(
+                {
+                    "platform": last.get("platform") or first.get("platform"),
+                    "model": unique_models[-1] if unique_models else (last.get("model") or "unknown"),
+                    "status": status,
+                    "start_time": start,
+                    "duration_ms": duration_ms,
+                    "total_tokens": total_input + total_output,
+                    "cost_usd": round(total_cost, 6),
+                    "llm_call_count": llm_call_count,
+                    "tool_call_count": tool_call_count,
+                    "tool_name_counts": top_tools_counter,
+                }
+            )
 
         total_tokens = sum(session["total_tokens"] for session in sessions)
         total_cost = round(sum(session["cost_usd"] for session in sessions), 4)
         avg_duration_ms = round(
             sum(session["duration_ms"] for session in sessions) / len(sessions), 2
         ) if sessions else 0.0
-        total_llm_calls = sum(len(session.get("llm_calls", [])) for session in sessions)
-        total_tool_calls = sum(len(session.get("tool_calls", [])) for session in sessions)
+        total_llm_calls = sum(session["llm_call_count"] for session in sessions)
+        total_tool_calls = sum(session["tool_call_count"] for session in sessions)
 
         platform_counter = Counter(session.get("platform") or "unknown" for session in sessions)
         model_counter = Counter(session.get("model") or "unknown" for session in sessions)
         status_counter = Counter(session.get("status") or "unknown" for session in sessions)
-        tool_counter = Counter(
-            tool.get("name") or tool.get("tool_name") or "unknown"
-            for session in sessions
-            for tool in session.get("tool_calls", [])
-        )
+        tool_counter: Counter = Counter()
+        for session in sessions:
+            tool_counter.update(session.get("tool_name_counts") or {})
         active_days = sorted(
             {
                 (session.get("start_time") or "")[:10]
@@ -622,7 +761,7 @@ class SQLiteStorage(Storage):
         return {
             "period_hours": period_hours,
             "total_sessions": len(sessions),
-            "total_traces": len(traces),
+            "total_traces": len(rows),
             "total_llm_calls": total_llm_calls,
             "total_tool_calls": total_tool_calls,
             "total_tokens": total_tokens,

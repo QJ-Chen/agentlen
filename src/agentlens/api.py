@@ -14,8 +14,9 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
@@ -43,6 +44,19 @@ realtime_updater: Optional[RealtimeUpdater] = None
 CLAUDE_ROOT = Path.home() / ".claude"
 PROJECTS_ROOT = CLAUDE_ROOT / "projects"
 TASKS_ROOT = CLAUDE_ROOT / "tasks"
+
+_CACHE_TTL_SECONDS = 5.0
+_response_cache: Dict[str, Tuple[float, Any]] = {}
+
+
+def _cached(key: str, builder):
+    now = time.monotonic()
+    cached = _response_cache.get(key)
+    if cached and (now - cached[0]) < _CACHE_TTL_SECONDS:
+        return cached[1]
+    value = builder()
+    _response_cache[key] = (now, value)
+    return value
 
 
 def _encode_project_path(project_path: str) -> str:
@@ -335,6 +349,10 @@ def _build_session_overview_node(session: Dict[str, Any], project_path: str) -> 
 
 def _build_session_shallow_node(session: Dict[str, Any], project_path: str) -> Dict[str, Any]:
     session_id = str(session.get("session_id") or "")
+    metadata = session.get("metadata") or {}
+    llm_call_count = metadata.get("llm_call_count")
+    if llm_call_count is None:
+        llm_call_count = len(session.get("llm_calls") or [])
     return {
         "id": f"session:{session_id}",
         "type": "session",
@@ -343,14 +361,14 @@ def _build_session_shallow_node(session: Dict[str, Any], project_path: str) -> D
         "sessionId": session_id,
         "status": str(session.get("status") or "completed"),
         "projectPath": project_path,
-        "count": len(session.get("llm_calls") or []),
+        "count": llm_call_count,
         "hasChildren": True,
         "children": [],
     }
 
 
 def _build_hierarchy_root() -> Dict[str, Any]:
-    sessions_payload = storage.list_sessions(platform=CLAUDE_CODE_PLATFORM, period_hours=720, limit=5000, offset=0)
+    sessions_payload = storage.list_sessions(platform=CLAUDE_CODE_PLATFORM, period_hours=720, limit=5000, offset=0, light=True)
     sessions = sessions_payload.get("sessions", []) if isinstance(sessions_payload, dict) else []
     global_metadata = _build_global_metadata()
 
@@ -629,6 +647,7 @@ def get_sessions(
         end_time=end_time,
         limit=limit,
         offset=offset,
+        light=True,
     )
 
 
@@ -648,7 +667,7 @@ def get_project_metadata(project_path: str = Query(..., min_length=1)):
 
 @app.get("/api/v1/hierarchy")
 def get_hierarchy():
-    return {"root": _build_hierarchy_root()}
+    return {"root": _cached("hierarchy", _build_hierarchy_root)}
 
 
 @app.get("/api/v1/hierarchy/children")
@@ -712,7 +731,11 @@ def get_overview_stats(
     end_time: Optional[str] = None,
     period_hours: int = Query(720, ge=1, le=8760),
 ):
-    return storage.get_overview_stats(period_hours, start_time=start_time, end_time=end_time)
+    cache_key = f"overview:{period_hours}:{start_time}:{end_time}"
+    return _cached(
+        cache_key,
+        lambda: storage.get_overview_stats(period_hours, start_time=start_time, end_time=end_time),
+    )
 
 
 @app.get("/api/v1/stats/projects")
