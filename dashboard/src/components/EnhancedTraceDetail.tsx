@@ -567,20 +567,55 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
 
                 return (
                   <div key={turnKey} className={`rounded-2xl border-l-4 ${isTurnExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/35 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'}`}>
-                    <button onClick={() => toggleLLM(turnKey)} className="w-full px-4 py-3.5 flex items-center gap-3 text-left">
-                      <div className="w-7 h-7 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
-                        <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-cyan-700 font-medium">Assistant turn</div>
-                        <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
-                          <span>{visibleChildRecords.length} child records</span>
-                          {turn.totalTokens > 0 && <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>}
-                          {detailLevel === 'verbose' && turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
+                    <div className="w-full px-4 py-3.5 flex items-center gap-3">
+                      <button
+                        onClick={() => toggleLLM(turnKey)}
+                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                      >
+                        <div className="w-7 h-7 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
+                          <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
                         </div>
-                      </div>
-                      {detailLevel !== 'summary' && (isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
-                    </button>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-cyan-700 font-medium">Assistant turn</div>
+                          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
+                            <span>{visibleChildRecords.length} child records</span>
+                            {turn.totalTokens > 0 && <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>}
+                            {detailLevel === 'verbose' && turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
+                          </div>
+                        </div>
+                      </button>
+                      {detailLevel !== 'summary' && visibleChildRecords.length > 0 && (() => {
+                        const childKeys = visibleChildRecords.map((_call, callIdx) => `${turnKey}-call-${callIdx}`);
+                        const allExpanded = childKeys.every((key) => expandedLLMs.has(key));
+                        return (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedLLMs((current) => {
+                                const next = new Set(current);
+                                if (allExpanded) {
+                                  childKeys.forEach((key) => next.delete(key));
+                                } else {
+                                  childKeys.forEach((key) => next.add(key));
+                                }
+                                return next;
+                              })
+                            }
+                            className="shrink-0 rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[11px] text-cyan-700 hover:border-cyan-300 hover:bg-cyan-50 shadow-sm"
+                          >
+                            {allExpanded ? '折叠详情' : '展开详情'}
+                          </button>
+                        );
+                      })()}
+                      <button
+                        type="button"
+                        onClick={() => toggleLLM(turnKey)}
+                        aria-label={isTurnExpanded ? 'Collapse assistant turn' : 'Expand assistant turn'}
+                        className="shrink-0 rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-slate-300 hover:text-slate-900 shadow-sm"
+                      >
+                        {detailLevel !== 'summary' && (isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
+                      </button>
+                    </div>
 
                     {detailLevel !== 'summary' && isTurnExpanded && (
                       <div className="ml-5 border-l-2 border-cyan-100/80 space-y-2 p-3 bg-cyan-50/35 rounded-bl-2xl">
