@@ -175,6 +175,8 @@ function sessionTabForNode(nodeType: HierarchyNode['type']): TabType {
       return 'subagents';
     case 'session-tasks':
       return 'taskStatus';
+    case 'session-vision':
+      return 'vision';
     default:
       return 'overview';
   }
@@ -376,6 +378,7 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
     || node.type === 'session-llm'
     || node.type === 'session-subagents'
     || node.type === 'session-tasks'
+    || node.type === 'session-vision'
     || node.type === 'assistant-turn'
     || node.type === 'subagents'
     || node.type === 'subagent') && selectedTrace) {

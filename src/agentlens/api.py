@@ -491,6 +491,7 @@ def _build_node_children(node_id: str) -> List[Dict[str, Any]]:
     llm_calls = session.get("llm_calls") or []
     assistant_turns = [turn for turn in llm_calls if isinstance(turn, dict) and turn.get("is_assistant_turn")]
     subagent_logs = ((session.get("metadata") or {}).get("subagent_logs") or [])
+    vision_references = ((session.get("metadata") or {}).get("vision_references") or [])
     task_summary = (session.get("metadata") or {}).get("task_summary") or {}
     task_count = len(task_summary.get("tasks") or []) if isinstance(task_summary, dict) else 0
 
@@ -511,6 +512,15 @@ def _build_node_children(node_id: str) -> List[Dict[str, Any]]:
             "sessionId": session_id,
             "projectPath": project_path,
             "count": len(subagent_logs) if isinstance(subagent_logs, list) else 0,
+            "hasChildren": False,
+        },
+        {
+            "id": f"session-vision:{session_id}",
+            "type": "session-vision",
+            "label": "Vision",
+            "sessionId": session_id,
+            "projectPath": project_path,
+            "count": len(vision_references),
             "hasChildren": False,
         },
         {

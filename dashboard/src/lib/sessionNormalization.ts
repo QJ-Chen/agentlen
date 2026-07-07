@@ -299,6 +299,9 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
     ? (record.metadata?.subagent_logs as RawSubagentLog[])
     : [];
   const subagentLogs = rawSubagentLogs.map(normalizeSubagentLog);
+  const visionReferences = Array.isArray(record.metadata?.vision_references)
+    ? (record.metadata?.vision_references as Trace['visionReferences'])
+    : [];
 
   const startTime = recordStartTime || Date.now();
   const endTime = toTimestamp(record.end_time);
@@ -334,6 +337,7 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
     assistantTurns,
     promptThreads,
     subagentLogs,
+    visionReferences,
     totalTokens: record.total_tokens || (record.input_tokens || 0) + (record.output_tokens || 0),
     cost: record.cost_usd || 0,
     projectPath: record.project_path || '',

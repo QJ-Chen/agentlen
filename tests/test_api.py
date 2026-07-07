@@ -447,6 +447,7 @@ class HierarchyApiTests(unittest.TestCase):
         self.assertEqual([child["type"] for child in payload["children"]], [
             "session-llm",
             "session-subagents",
+            "session-vision",
             "session-tasks",
         ])
 

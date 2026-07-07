@@ -49,6 +49,7 @@ function nodeIcon(node: HierarchyNode): { kind: 'folder' | 'book' | 'json' | 'co
     case 'session-llm':
     case 'session-subagents':
     case 'session-tasks':
+    case 'session-vision':
       return { kind: 'list' };
     case 'assistant-turn':
       return { kind: 'terminal' };

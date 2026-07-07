@@ -105,6 +105,7 @@ export interface Trace {
   assistantTurns?: AssistantTurn[];
   promptThreads?: PromptThread[];
   subagentLogs?: SubagentLog[];
+  visionReferences?: VisionReference[];
   totalTokens: number;
   cost: number;
   projectPath?: string;
@@ -161,6 +162,18 @@ export interface SkillSummary {
   path: string;
   description?: string;
   content?: string;
+}
+
+export interface VisionReference {
+  path: string;
+  absolute_path?: string;
+  origin?: 'pasted' | 'attached' | 'unknown';
+  message_id?: string;
+  event_id?: string;
+  timestamp?: string;
+  mime_type?: string;
+  source_uuid?: string;
+  image_paste_ids?: number[];
 }
 
 export interface ProjectMetadata {
@@ -237,6 +250,7 @@ export type HierarchyNodeType =
   | 'session-llm'
   | 'session-subagents'
   | 'session-tasks'
+  | 'session-vision'
   | 'assistant-turn'
   | 'command'
   | 'thinking'

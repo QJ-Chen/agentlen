@@ -42,7 +42,7 @@ interface EnhancedTraceDetailProps {
   hideTabs?: boolean;
 }
 
-export type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'raw';
+export type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'vision' | 'raw';
 type DetailLevel = 'summary' | 'standard' | 'verbose';
 type ReplayMessageKind = 'user' | 'thinking' | 'tool' | 'text' | 'empty' | 'subagent';
 type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
@@ -298,6 +298,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     { id: 'llm', label: `LLM (${assistantTurnGroups.length}组)`, icon: MessageSquare },
     { id: 'subagents', label: `Subagents (${subagentLogs.length})`, icon: Bot },
     { id: 'taskStatus', label: '任务状态', icon: Layers },
+    { id: 'vision', label: `Vision (${trace.visionReferences?.length || 0})`, icon: FileText },
     { id: 'raw', label: '原始', icon: Code },
   ] as const;
 
@@ -937,6 +938,46 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     );
   };
 
+  const renderVision = () => {
+    const references = trace.visionReferences || [];
+    if (references.length === 0) {
+      return <EmptyState icon={FileText} label="No vision context found." />;
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className={surfaceClass}>
+          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
+            <FileText className="h-4 w-4 text-slate-400" />
+            Vision context
+          </h3>
+          <div className="space-y-3">
+            {references.map((reference, index) => (
+              <div key={`${reference.path}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
+                <div className="text-sm font-medium text-slate-900 break-all">{reference.path}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
+                  {reference.origin && <span>{reference.origin}</span>}
+                  {reference.mime_type && (
+                    <>
+                      <span>·</span>
+                      <span>{reference.mime_type}</span>
+                    </>
+                  )}
+                  {reference.absolute_path && reference.absolute_path !== reference.path && (
+                    <>
+                      <span>·</span>
+                      <span className="break-all font-mono">{reference.absolute_path}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const rawJson = JSON.stringify(typedTrace.raw || trace, null, 2);
 
   const renderRaw = () => (
@@ -1024,6 +1065,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
         {activeTab === 'llm' && renderLLM()}
         {activeTab === 'subagents' && renderSubagents()}
         {activeTab === 'taskStatus' && renderTaskStatus()}
+        {activeTab === 'vision' && renderVision()}
         {activeTab === 'raw' && renderRaw()}
       </div>
     </div>

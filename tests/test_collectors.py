@@ -1,11 +1,90 @@
 from pathlib import Path
 
-from agentlens.collectors import ClaudeCodeCollector
+from agentlens import collectors
+from agentlens.collectors import ClaudeCodeCollector, extract_vision_references
 
 
 class DummyStorage:
     def save_traces(self, traces):
         self.traces = traces
+
+
+def test_extract_vision_references_supports_pasted_images_and_top_level_attachments(tmp_path: Path):
+    cache_root = tmp_path / ".claude" / "image_cache"
+    session_dir = cache_root / "session-1"
+    session_dir.mkdir(parents=True)
+    cached_image = session_dir / "3.png"
+    cached_image.write_bytes(b"png")
+
+    original_dirs = collectors.CLAUDE_IMAGE_CACHE_DIRS
+    collectors.CLAUDE_IMAGE_CACHE_DIRS = [cache_root]
+    try:
+        content = [
+            {
+                "type": "text",
+                "text": "Look through the UI [Image #3]",
+            },
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "uuid": "caa4f722-300f-4234-91b9-72e6a9b81e47",
+                    "imagePasteIds": [3],
+                },
+            },
+            {
+                "attachment": {
+                    "type": "file",
+                    "filename": "/Users/findai/workspace/tools/agentlens/agentlens-ui-review.png",
+                    "content": {
+                        "type": "image",
+                        "file": {
+                            "type": "image/png",
+                        },
+                    },
+                    "displayPath": "../agentlens-ui-review.png",
+                },
+            },
+        ]
+
+        references = extract_vision_references(content, "session-1", {
+            "type": "attachment",
+            "attachment": {
+                "type": "file",
+                "filename": "/Users/findai/workspace/tools/agentlens/agentlens-ui-review.png",
+                "content": {
+                    "type": "image",
+                    "file": {
+                        "type": "image/png",
+                    },
+                },
+                "displayPath": "../agentlens-ui-review.png",
+            },
+            "imagePasteIds": [3],
+            "uuid": "caa4f722-300f-4234-91b9-72e6a9b81e47",
+            "sessionId": "session-1",
+        })
+    finally:
+        collectors.CLAUDE_IMAGE_CACHE_DIRS = original_dirs
+
+    assert references == [
+        {
+            "path": str(cached_image),
+            "origin": "pasted",
+            "source_uuid": "caa4f722-300f-4234-91b9-72e6a9b81e47",
+            "mime_type": "image/png",
+            "image_paste_ids": [3],
+            "pasted_id": 3,
+            "cache_path": str(cached_image),
+        },
+        {
+            "path": "../agentlens-ui-review.png",
+            "absolute_path": "/Users/findai/workspace/tools/agentlens/agentlens-ui-review.png",
+            "origin": "attached",
+            "mime_type": "image/png",
+        },
+    ]
 
 
 def test_decode_path_preserves_posix_shape():

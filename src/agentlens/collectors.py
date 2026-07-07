@@ -20,6 +20,10 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
 CLAUDE_TASKS_DIR = Path.home() / ".claude" / "tasks"
+CLAUDE_IMAGE_CACHE_DIRS = [
+    Path.home() / ".claude" / "image-cache",
+    Path.home() / ".claude" / "image_cache",
+]
 
 CLAUDE_CODE_PLATFORM = "claude-code"
 CLAUDE_CODE_PRICING = {"input_per_1m": 3.0, "output_per_1m": 15.0}
@@ -184,6 +188,173 @@ def extract_user_prompt_text(content: Any) -> Optional[str]:
         prompt = "\n".join(text_parts).strip()
         return prompt or None
     return None
+
+
+def cache_extension_for_media_type(media_type: Any) -> Optional[str]:
+    value = str(media_type or "").strip().lower()
+    if value == "image/png":
+        return "png"
+    if value in {"image/jpeg", "image/jpg"}:
+        return "jpg"
+    if value == "image/webp":
+        return "webp"
+    if value == "image/gif":
+        return "gif"
+    return None
+
+
+def resolve_cached_pasted_image_path(session_id: str, pasted_id: int, media_type: Any) -> Optional[str]:
+    extension = cache_extension_for_media_type(media_type)
+    if extension is None:
+        return None
+
+    candidates = [
+        f"{pasted_id}.{extension}",
+    ]
+    if extension == "jpg":
+        candidates.append(f"{pasted_id}.jpeg")
+    elif extension == "jpeg":
+        candidates.append(f"{pasted_id}.jpg")
+
+    for cache_dir in CLAUDE_IMAGE_CACHE_DIRS:
+        session_dir = cache_dir / session_id
+        for name in candidates:
+            candidate = session_dir / name
+            if candidate.exists():
+                return str(candidate)
+    return None
+
+
+def extract_vision_references(content: Any, session_id: str = "", event_data: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    if not isinstance(content, list):
+        content = []
+
+    references: List[Dict[str, Any]] = []
+    seen = set()
+
+    def add_reference(reference: Dict[str, Any]) -> None:
+        path = str(reference.get("path") or "").strip()
+        if not path:
+            return
+        key = (
+            path,
+            str(reference.get("origin") or ""),
+            str(reference.get("source_uuid") or ""),
+            str(reference.get("message_id") or ""),
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        references.append(reference)
+
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+
+        item_type = item.get("type")
+        if item_type == "image":
+            source = item.get("source") or {}
+            if not isinstance(source, dict):
+                source = {}
+            image_paste_ids = source.get("imagePasteIds") or []
+            if (not image_paste_ids) and isinstance(event_data, dict):
+                top_level_ids = event_data.get("imagePasteIds") or []
+                if isinstance(top_level_ids, list):
+                    image_paste_ids = top_level_ids
+            paste_id = image_paste_ids[0] if isinstance(image_paste_ids, list) and image_paste_ids else None
+            source_uuid = source.get("uuid")
+            if not source_uuid and isinstance(event_data, dict):
+                source_uuid = event_data.get("uuid")
+            effective_session_id = session_id or (str(event_data.get("sessionId") or "") if isinstance(event_data, dict) else "")
+            cache_path = None
+            if paste_id is not None and effective_session_id:
+                try:
+                    cache_path = resolve_cached_pasted_image_path(effective_session_id, int(paste_id), source.get("media_type"))
+                except (TypeError, ValueError):
+                    cache_path = None
+            synthetic_path = cache_path or (
+                f"pasted:imagePasteId={paste_id}" if paste_id is not None else f"pasted:image:{source_uuid or 'unknown'}"
+            )
+            add_reference(
+                {
+                    "path": synthetic_path,
+                    "origin": "pasted",
+                    "source_uuid": source_uuid,
+                    "mime_type": source.get("media_type"),
+                    "image_paste_ids": image_paste_ids,
+                    "pasted_id": paste_id,
+                    "cache_path": cache_path,
+                }
+            )
+            continue
+
+        if item_type == "attachment":
+            attachment = item.get("attachment") or {}
+            if not isinstance(attachment, dict):
+                continue
+            content_payload = attachment.get("content") or {}
+            if not isinstance(content_payload, dict) or content_payload.get("type") != "image":
+                continue
+            display_path = str(attachment.get("displayPath") or "").strip()
+            filename = str(attachment.get("filename") or "").strip()
+            path = display_path or filename
+            mime_type = None
+            file_payload = content_payload.get("file") or {}
+            if isinstance(file_payload, dict):
+                mime_type = file_payload.get("type")
+            add_reference(
+                {
+                    "path": path,
+                    "absolute_path": filename or None,
+                    "origin": "attached",
+                    "mime_type": mime_type,
+                }
+            )
+            continue
+
+        attachment = item.get("attachment")
+        if isinstance(attachment, dict):
+            content_payload = attachment.get("content") or {}
+            if isinstance(content_payload, dict) and content_payload.get("type") == "image":
+                display_path = str(attachment.get("displayPath") or item.get("displayPath") or "").strip()
+                filename = str(attachment.get("filename") or item.get("filename") or "").strip()
+                path = display_path or filename
+                mime_type = None
+                file_payload = content_payload.get("file") or {}
+                if isinstance(file_payload, dict):
+                    mime_type = file_payload.get("type")
+                add_reference(
+                    {
+                        "path": path,
+                        "absolute_path": filename or None,
+                        "origin": "attached",
+                        "mime_type": mime_type,
+                    }
+                )
+                continue
+
+    if isinstance(event_data, dict) and event_data.get("type") == "attachment":
+        attachment = event_data.get("attachment") or {}
+        if isinstance(attachment, dict):
+            content_payload = attachment.get("content") or {}
+            if isinstance(content_payload, dict) and content_payload.get("type") == "image":
+                display_path = str(attachment.get("displayPath") or "").strip()
+                filename = str(attachment.get("filename") or "").strip()
+                path = display_path or filename
+                mime_type = None
+                file_payload = content_payload.get("file") or {}
+                if isinstance(file_payload, dict):
+                    mime_type = file_payload.get("type")
+                add_reference(
+                    {
+                        "path": path,
+                        "absolute_path": filename or None,
+                        "origin": "attached",
+                        "mime_type": mime_type,
+                    }
+                )
+
+    return references
 
 
 def summarize_task_tools(session_id: str, tool_calls: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -353,6 +524,7 @@ class SessionAggregator:
                 "last_response": None,
                 "message_count": 0,
                 "assistant_turns": [],
+                "vision_references": [],
                 "current_assistant_turn": None,
                 "last_role": None,
             }
@@ -440,6 +612,12 @@ class SessionAggregator:
             session["project_group"] = message["project_group"]
         session["platform"] = CLAUDE_CODE_PLATFORM
         session["agent_name"] = CLAUDE_CODE_PLATFORM
+
+        if message.get("vision_references"):
+            for reference in message.get("vision_references") or []:
+                if not isinstance(reference, dict):
+                    continue
+                session["vision_references"].append(dict(reference))
 
         role = message.get("role")
         current_turn = session.get("current_assistant_turn")
@@ -584,6 +762,7 @@ class SessionAggregator:
                 "project_group": session.get("project_group") or project_path,
                 "major_cwd": project_path,
                 "task_summary": summarize_task_tools(session_id, merged_tool_calls),
+                "vision_references": session.get("vision_references", []),
             },
         }
 
@@ -1023,7 +1202,7 @@ class ClaudeCodeCollector(LogCollector):
             return
 
         msg_type = data.get("type")
-        if msg_type not in ["user", "assistant"]:
+        if msg_type not in ["user", "assistant", "attachment"]:
             return
 
         message = data.get("message", {})
@@ -1060,6 +1239,43 @@ class ClaudeCodeCollector(LogCollector):
         response = None
         is_command_only = False
         pending_command: Dict[str, str] = state["pending_command"]
+        vision_references = extract_vision_references(content, state["session_id"], data)
+
+        if msg_type == "attachment":
+            cwd = data.get("cwd", "")
+            msg_data = {
+                "trace_id": data.get("uuid"),
+                "message_id": None,
+                "platform": CLAUDE_CODE_PLATFORM,
+                "agent_name": CLAUDE_CODE_PLATFORM,
+                "session_id": state["session_id"],
+                "start_time": data.get("timestamp"),
+                "model": "unknown",
+                "role": "user",
+                "prompt": None,
+                "response": None,
+                "content_blocks": [],
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0,
+                "tool_calls": [],
+                "vision_references": [
+                    {
+                        **reference,
+                        "message_id": None,
+                        "event_id": data.get("uuid"),
+                        "timestamp": data.get("timestamp"),
+                    }
+                    for reference in vision_references
+                    if isinstance(reference, dict)
+                ],
+                "project_path": cwd or state["project_path"],
+                "major_cwd": cwd or state["project_path"],
+                "project_group": state["project_group"],
+                "prompt_id": data.get("promptId") or message.get("prompt_id") or message.get("promptId"),
+            }
+            state["aggregator"].add_message(state["session_id"], msg_data)
+            return
 
         if role == "user" and content:
             if isinstance(content, str):
@@ -1141,6 +1357,16 @@ class ClaudeCodeCollector(LogCollector):
             "output_tokens": usage.get("output_tokens", 0),
             "cost_usd": 0,
             "tool_calls": tool_calls,
+            "vision_references": [
+                {
+                    **reference,
+                    "message_id": message.get("id"),
+                    "event_id": data.get("uuid"),
+                    "timestamp": data.get("timestamp"),
+                }
+                for reference in vision_references
+                if isinstance(reference, dict)
+            ],
             "project_path": cwd or state["project_path"],
             "major_cwd": cwd or state["project_path"],
             "project_group": state["project_group"],
