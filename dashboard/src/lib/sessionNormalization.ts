@@ -1,5 +1,5 @@
-import type { AssistantTurn, SubagentLog, ToolCall, Trace } from '../types';
-import type { RawLLMCall, RawSessionRecord, RawSubagentLog } from './sessionApiTypes';
+import type { AssistantTurn, CommandOnlyRecord, SubagentLog, ToolCall, Trace } from '../types';
+import type { RawCommandOnlyRecord, RawLLMCall, RawSessionRecord, RawSubagentLog } from './sessionApiTypes';
 import { buildPromptThreadsFromAssistantTurns } from './conversationModel';
 
 export type TraceWithRaw = Trace & { raw?: RawSessionRecord };
@@ -149,6 +149,13 @@ function normalizeChildLLMCall(
     prompt: child.prompt || fallbackCall.prompt || '',
     response: child.response || '',
     promptId: child.prompt_id || fallbackCall.prompt_id || '',
+    command: child.command
+      ? {
+          name: child.command.name || '',
+          args: child.command.args || '',
+          message: child.command.message || '',
+        }
+      : undefined,
   } as const;
 }
 
@@ -232,11 +239,37 @@ export function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, r
       cost: call.cost_usd || 0,
       childRecords,
       childRecordCount: call.child_record_count || childRecords.length,
+      command: call.command
+        ? {
+            name: call.command.name || '',
+            args: call.command.args || '',
+            message: call.command.message || '',
+          }
+        : undefined,
       sourceEventIds: Array.isArray(call.source_event_ids)
         ? call.source_event_ids.filter((item): item is string => typeof item === 'string')
         : [],
     } satisfies AssistantTurn];
   });
+}
+
+function extractCommandOnlyRecords(
+  source: Record<string, unknown>,
+  fallbackTimestamp: number,
+): CommandOnlyRecord[] {
+  const raw = source.command_only_records;
+  if (!Array.isArray(raw)) return [];
+  return (raw as RawCommandOnlyRecord[])
+    .filter((entry): entry is RawCommandOnlyRecord => !!entry && typeof entry === 'object')
+    .map((entry, index) => ({
+      name: entry.name || '',
+      args: entry.args || '',
+      message: entry.message || '',
+      promptId: entry.prompt_id || '',
+      sourceEventId: entry.source_event_id || `command-only-${index}`,
+      timestamp: toTimestamp(entry.timestamp) ?? fallbackTimestamp,
+    }))
+    .filter((entry) => entry.name);
 }
 
 export function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
@@ -246,7 +279,8 @@ export function normalizeSubagentLog(subagent: RawSubagentLog): SubagentLog {
   const toolCalls = buildMergedTools(subagent, startTime);
   const llmCalls = buildLLMCalls(subagent, startTime);
   const assistantTurns = buildAssistantTurns(subagent, startTime);
-  const promptThreads = buildPromptThreadsFromAssistantTurns(assistantTurns);
+  const commandOnlyRecords = extractCommandOnlyRecords(subagent.meta || {}, startTime);
+  const promptThreads = buildPromptThreadsFromAssistantTurns(assistantTurns, commandOnlyRecords);
   const normalizedSubagentUsage = normalizeDisplayedTokenUsage(
     subagent.input_tokens,
     subagent.output_tokens,
@@ -294,7 +328,8 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
   const tools = buildMergedTools(record, recordStartTime);
   const llmCalls = buildLLMCalls(record, recordStartTime);
   const assistantTurns = buildAssistantTurns(record, recordStartTime);
-  const promptThreads = buildPromptThreadsFromAssistantTurns(assistantTurns);
+  const commandOnlyRecords = extractCommandOnlyRecords(record.metadata || {}, recordStartTime);
+  const promptThreads = buildPromptThreadsFromAssistantTurns(assistantTurns, commandOnlyRecords);
   const rawSubagentLogs = Array.isArray(record.metadata?.subagent_logs)
     ? (record.metadata?.subagent_logs as RawSubagentLog[])
     : [];

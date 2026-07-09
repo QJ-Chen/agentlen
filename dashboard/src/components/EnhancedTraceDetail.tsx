@@ -357,10 +357,19 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     const threadKey = `${scopePrefix}-thread-${thread.id}`;
     const isThreadExpanded = expandedLLMs.has(threadKey);
     const cleanedPrompt = cleanSessionText(thread.prompt || '');
-    const promptPreview = cleanedPrompt
-      ? `${cleanedPrompt.replace(/\n/g, ' ').slice(0, 80)}${cleanedPrompt.length > 80 ? '...' : ''}`
+    const formatCommandLabel = (name: string) => (name.startsWith('/') ? name : `/${name}`);
+    const commandLabel = thread.command?.name ? formatCommandLabel(thread.command.name) : '';
+    const commandPreview = thread.command?.name
+      ? `${commandLabel}${thread.command.args ? ` ${thread.command.args}` : ''}`
+      : '';
+    const promptPreviewSource = cleanedPrompt || commandPreview;
+    const promptPreview = promptPreviewSource
+      ? `${promptPreviewSource.replace(/\n/g, ' ').slice(0, 80)}${promptPreviewSource.length > 80 ? '...' : ''}`
       : '无提示词';
+    const hasCommandOnlyRecords = !!thread.commandOnlyRecords && thread.commandOnlyRecords.length > 0;
+    const showCommandBlock = isKindVisible('user') && detailLevel !== 'summary' && !!thread.command?.name && !hasCommandOnlyRecords;
     const showPromptBlock = isKindVisible('user') && detailLevel !== 'summary' && cleanedPrompt.length > 0;
+    const showCommandOnlyBlocks = isKindVisible('user') && detailLevel !== 'summary' && hasCommandOnlyRecords;
 
     const visibleTurns = thread.assistantTurns
       .map((turn) => {
@@ -376,7 +385,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       })
       .filter(({ visibleChildRecords }) => visibleChildRecords.length > 0);
 
-    if (!showPromptBlock && visibleTurns.length === 0) {
+    if (!showCommandBlock && !showPromptBlock && !showCommandOnlyBlocks && visibleTurns.length === 0) {
       return null;
     }
 
@@ -397,7 +406,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     }) => {
       const callKey = `${parentKey}-call-${callIdx}`;
       const isCallExpanded = detailLevel !== 'summary' && expandedLLMs.has(callKey);
-      const { relatedTools, responseStyle, formattedToolResponse, toolResultAppendix } = getCallRenderState(call, toolScope);
+      const { responseStyle, formattedToolResponse, toolResultAppendix } = getCallRenderState(call, toolScope);
 
       return (
         <div key={callKey} className={`rounded-2xl border-l-4 transition-all ${isCallExpanded ? 'bg-white border-violet-300 shadow-md shadow-violet-100/40 ring-1 ring-violet-100' : 'bg-slate-50/80 border-slate-200/80 border-l-slate-300'}`}>
@@ -415,15 +424,15 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                 </div>
               </div>
               <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
-                <span>{call.model}</span>
+                {call.model && call.model !== 'unknown' && <span>{call.model}</span>}
                 {showTokenUsage && call.totalTokens > 0 && (
                   <>
-                    <span>·</span>
+                    {call.model && call.model !== 'unknown' && <span>·</span>}
                     <span>{formatTokenPair(call.inputTokens, call.outputTokens)}</span>
                   </>
                 )}
-                <span>·</span>
-                <span>{formatDuration(call.duration)}</span>
+                {call.duration > 0 && <span>·</span>}
+                {call.duration > 0 && <span>{formatDuration(call.duration)}</span>}
                 {detailLevel === 'verbose' && call.sourceEventIds && call.sourceEventIds[0] && (
                   <>
                     <span>·</span>
@@ -472,19 +481,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                   onCopy={copyToClipboard}
                 />
               )}
-              {relatedTools.length > 0 && !formattedToolResponse && responseStyle.kind !== 'thinking' && detailLevel === 'verbose' && (
-                <div>
-                  <div className="text-xs font-semibold text-violet-700 mb-2">相关工具调用</div>
-                  <div className="space-y-2">
-                    {relatedTools.map((tool) => (
-                      <div key={`${callKey}-${tool.id}`} className="rounded-xl bg-white border border-slate-200 p-2 text-xs text-slate-700">
-                        <div className="font-medium text-violet-700">{tool.name}</div>
-                        {tool.input && <pre className="mt-1 whitespace-pre-wrap text-slate-500">{JSON.stringify(tool.input, null, 2)}</pre>}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -511,6 +507,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             <div className="text-sm font-medium text-slate-900 truncate">{promptPreview}</div>
             <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
               <span>{assistantTurnCount} 个 assistant turn</span>
+              {hasCommandOnlyRecords && (
+                <>
+                  <span>·</span>
+                  <span>{thread.commandOnlyRecords!.length} 个 command</span>
+                </>
+              )}
               {(threadInputTokens > 0 || threadOutputTokens > 0) && (
                 <>
                   <span>·</span>
@@ -531,24 +533,59 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
         </button>
 
         {isThreadExpanded && (
-          <div className="border-t border-cyan-100/80">
-            {showPromptBlock && (
-              <div className="px-4 py-3 bg-slate-50/80 border-b border-slate-200/80">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs font-semibold text-cyan-700 flex items-center gap-1">
-                    <MessageSquare className="w-3 h-3" /> 用户提示词
-                  </span>
-                  <button
-                    onClick={() => copyToClipboard(thread.prompt || '', `${threadKey}-prompt`)}
-                    className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
-                  >
-                    {copiedId === `${threadKey}-prompt` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                    {copiedId === `${threadKey}-prompt` ? '已复制' : '复制'}
-                  </button>
+          <div className="border-t border-cyan-100/80 bg-white">
+            <div className="space-y-3 p-4">
+              {showCommandBlock && thread.command && thread.command.name && (
+                <div className="rounded-2xl border border-sky-200/80 bg-sky-50/70">
+                  <div className="flex items-center gap-2 border-b border-sky-100/80 px-4 py-3">
+                    <span className="text-xs font-semibold text-sky-700 rounded-full border border-sky-200 bg-white px-2 py-0.5">Command</span>
+                    <span className="text-sm font-medium text-sky-900">{formatCommandLabel(thread.command.name)}</span>
+                    {thread.command.args && <span className="text-xs text-slate-600 font-mono break-all">{thread.command.args}</span>}
+                  </div>
+                  {thread.command.message && (
+                    <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">
+                      {thread.command.message}
+                    </div>
+                  )}
                 </div>
-                <div className="text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-32 overflow-auto">{cleanedPrompt}</div>
-              </div>
-            )}
+              )}
+              {isKindVisible('user') && detailLevel !== 'summary' && thread.commandOnlyRecords?.map((record, commandIdx) => (
+                <div key={`${threadKey}-cmdonly-${commandIdx}`} className="rounded-2xl border border-sky-200/60 bg-sky-50/50">
+                  <div className="flex items-center gap-2 border-b border-sky-100/80 px-4 py-3">
+                    <span className="text-xs font-semibold text-sky-700 rounded-full border border-sky-200 bg-white px-2 py-0.5">Command</span>
+                    <span className="text-sm font-medium text-sky-900">{formatCommandLabel(record.name)}</span>
+                    {record.args && <span className="text-xs text-slate-600 font-mono break-all">{record.args}</span>}
+                    {record.timestamp && (
+                      <span className="ml-auto text-[11px] text-slate-500 font-mono">
+                        {new Date(record.timestamp).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
+                  {record.message && (
+                    <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">
+                      {record.message}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {showPromptBlock && (
+                <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80">
+                  <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-3">
+                    <span className="text-xs font-semibold text-cyan-700 flex items-center gap-1">
+                      <MessageSquare className="w-3 h-3" /> 用户提示词
+                    </span>
+                    <button
+                      onClick={() => copyToClipboard(thread.prompt || '', `${threadKey}-prompt`)}
+                      className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
+                    >
+                      {copiedId === `${threadKey}-prompt` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                      {copiedId === `${threadKey}-prompt` ? '已复制' : '复制'}
+                    </button>
+                  </div>
+                  <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">{cleanedPrompt}</div>
+                </div>
+              )}
+            </div>
 
             <div className="space-y-3 p-4 bg-white ml-4 border-l-2 border-cyan-100/80 rounded-bl-2xl">
               {visibleTurns.map(({ turn, visibleChildRecords }, turnIdx) => {
@@ -577,9 +614,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm text-cyan-700 font-medium">Assistant turn</div>
-                          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap gap-x-2 gap-y-1">
+                          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
                             <span>{visibleChildRecords.length} child records</span>
-                            {turn.totalTokens > 0 && <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>}
+                            {turn.totalTokens > 0 && (
+                              <>
+                                <span>·</span>
+                                <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>
+                              </>
+                            )}
                             {detailLevel === 'verbose' && turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
                           </div>
                         </div>

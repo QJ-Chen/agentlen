@@ -1,4 +1,4 @@
-import type { AssistantTurn, LLMCall, PromptThread, SubagentLog } from '../types';
+import type { AssistantTurn, CommandOnlyRecord, LLMCall, PromptThread, SubagentLog } from '../types';
 
 export interface SubagentLaunchGroup {
   batchId: string;
@@ -59,7 +59,7 @@ export function groupLLMCallsByPrompt(calls: LLMCall[]): LLMCallPromptGroup[] {
       (promptId && currentGroup.promptId !== promptId) ||
       (!promptId && currentGroup.prompt !== (call.prompt || ''))
     ) {
-      currentGroup = { key: groupKey, prompt: call.prompt || '', promptId, calls: [] };
+      currentGroup = { key: groupKey, prompt: call.prompt || '', promptId, calls: [], command: undefined } as LLMCallPromptGroup & { command?: AssistantTurn['command'] };
       groups.push(currentGroup);
     }
     currentGroup.calls.push(call);
@@ -68,7 +68,10 @@ export function groupLLMCallsByPrompt(calls: LLMCall[]): LLMCallPromptGroup[] {
   return groups;
 }
 
-export function buildPromptThreadsFromAssistantTurns(assistantTurns: AssistantTurn[]): PromptThread[] {
+export function buildPromptThreadsFromAssistantTurns(
+  assistantTurns: AssistantTurn[],
+  commandOnlyRecords: CommandOnlyRecord[] = [],
+): PromptThread[] {
   const threads: PromptThread[] = [];
   let currentThread: PromptThread | null = null;
 
@@ -87,6 +90,8 @@ export function buildPromptThreadsFromAssistantTurns(assistantTurns: AssistantTu
         id: threadKey,
         prompt,
         promptId,
+        command: turn.command,
+        commandOnlyRecords: [],
         assistantTurns: [],
       };
       threads.push(currentThread);
@@ -95,7 +100,40 @@ export function buildPromptThreadsFromAssistantTurns(assistantTurns: AssistantTu
     currentThread.assistantTurns.push(turn);
   }
 
+  attachCommandOnlyRecordsToThreads(threads, commandOnlyRecords);
+  threads.sort((a, b) => threadStartTime(a) - threadStartTime(b));
   return threads;
+}
+
+function attachCommandOnlyRecordsToThreads(
+  threads: PromptThread[],
+  commandOnlyRecords: CommandOnlyRecord[],
+): void {
+  if (!commandOnlyRecords.length) return;
+
+  // Slash commands are independent user actions, not attachments to a text
+  // prompt. Give each command-only record its own row in the prompt-thread
+  // list so /model, /compact, /recap, etc. are first-class entries.
+  const sortedCommands = [...commandOnlyRecords].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+  sortedCommands.forEach((command, index) => {
+    threads.push({
+      id: `command-only-${command.sourceEventId || `standalone-${index}`}`,
+      prompt: '',
+      promptId: '',
+      command: { name: command.name, args: command.args, message: command.message },
+      commandOnlyRecords: [command],
+      assistantTurns: [],
+    });
+  });
+}
+
+function threadStartTime(thread: PromptThread): number {
+  const firstTurn = thread.assistantTurns[0];
+  if (firstTurn?.startTime) return firstTurn.startTime;
+  if (thread.commandOnlyRecords?.length) {
+    return Math.min(...thread.commandOnlyRecords.map((c) => c.timestamp || 0));
+  }
+  return Number.MAX_SAFE_INTEGER;
 }
 
 export function assistantTurnsToPromptThreads(
@@ -106,6 +144,7 @@ export function assistantTurnsToPromptThreads(
     id: turn.messageId || turn.id || `${idPrefix}-thread-${index}`,
     prompt: turn.prompt || '',
     promptId: turn.promptId || '',
+    command: turn.command,
     assistantTurns: [turn],
   }));
 }

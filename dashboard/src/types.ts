@@ -34,11 +34,27 @@ export interface LLMCall {
   promptId?: string;
 }
 
+export interface CommandInvocation {
+  name: string;
+  args?: string;
+  message?: string;
+}
+
+export interface CommandOnlyRecord {
+  name: string;
+  args?: string;
+  message?: string;
+  promptId?: string;
+  sourceEventId?: string;
+  timestamp?: number;
+}
+
 export interface AssistantTurn {
   id: string;
   messageId?: string;
   prompt?: string;
   promptId?: string;
+  command?: CommandInvocation;
   startTime: number;
   endTime: number;
   inputTokens: number;
@@ -54,6 +70,8 @@ export interface PromptThread {
   id: string;
   prompt?: string;
   promptId?: string;
+  command?: CommandInvocation;
+  commandOnlyRecords?: CommandOnlyRecord[];
   assistantTurns: AssistantTurn[];
 }
 

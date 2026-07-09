@@ -29,6 +29,21 @@ export interface RawContentBlock {
   tool_use_id?: string;
 }
 
+export interface RawCommandInvocation {
+  name?: string;
+  args?: string;
+  message?: string;
+}
+
+export interface RawCommandOnlyRecord {
+  name?: string;
+  args?: string;
+  message?: string;
+  prompt_id?: string;
+  source_event_id?: string;
+  timestamp?: string | number;
+}
+
 export interface RawLLMCall {
   id?: string;
   message_id?: string;
@@ -47,6 +62,7 @@ export interface RawLLMCall {
   prompt?: string;
   response?: string;
   prompt_id?: string;
+  command?: RawCommandInvocation;
   content_blocks?: RawContentBlock[];
 }
 

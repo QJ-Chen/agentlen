@@ -184,6 +184,146 @@ def test_consecutive_assistant_records_with_same_message_id_group_under_one_pare
     }
 
 
+def test_process_line_preserves_structured_command_on_assistant_turn(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"cmd1","promptId":"prompt-cmd-1","timestamp":"2026-07-08T00:00:00Z","message":{"role":"user","content":"<command-name>/recap</command-name>\\n<command-message>recap</command-message>\\n<command-args></command-args>"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","promptId":"prompt-cmd-1","timestamp":"2026-07-08T00:00:01Z","message":{"id":"msg_turn_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":10,"output_tokens":2}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+    turn = trace["llm_calls"][0]
+
+    assert turn["command"] == {
+        "name": "/recap",
+        "args": "",
+        "message": "recap",
+    }
+    assert turn["child_records"][0]["command"] == {
+        "name": "/recap",
+        "args": "",
+        "message": "recap",
+    }
+
+
+def test_command_only_entry_preserves_record_when_assistant_turn_prompt_id_differs(tmp_path: Path):
+    """Command-only events that don't match a later assistant turn by promptId
+    should still be visible as a standalone command record (modeled as a
+    separate sibling on the prompt thread that follows)."""
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    # /compact command-only
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"cmd1","promptId":"prompt-compact","timestamp":"2026-07-08T00:00:00Z","message":{"role":"user","content":"<command-name>/compact</command-name>\\n<command-message>compact</command-message>\\n<command-args></command-args>"}}',
+    )
+    # A normal user prompt with a different promptId follows
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"u2","promptId":"prompt-next","timestamp":"2026-07-08T00:00:01Z","message":{"role":"user","content":"continue"}}',
+    )
+    # And its assistant turn
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","promptId":"prompt-next","timestamp":"2026-07-08T00:00:02Z","message":{"id":"msg_turn_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"continuing"}],"usage":{"input_tokens":12,"output_tokens":3}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+
+    # Assistant turn was not tagged with /compact (different promptId)
+    assert trace["llm_calls"][0]["command"] is None
+    # But the command-only record survives in metadata
+    command_only = trace["metadata"]["command_only_records"]
+    assert len(command_only) == 1
+    assert command_only[0]["name"] == "/compact"
+    assert command_only[0]["message"] == "compact"
+    assert command_only[0]["prompt_id"] == "prompt-compact"
+    assert command_only[0]["source_event_id"] == "cmd1"
+
+
+def test_command_only_entry_removed_when_matching_assistant_turn_consumes_it(tmp_path: Path):
+    """If a command-only event is followed by a same-promptId assistant turn,
+    the command should attach to the turn AND not also appear as a
+    standalone command-only record."""
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"cmd1","promptId":"prompt-compact","timestamp":"2026-07-08T00:00:00Z","message":{"role":"user","content":"<command-name>/compact</command-name>\\n<command-message>compact</command-message>\\n<command-args></command-args>"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","promptId":"prompt-compact","timestamp":"2026-07-08T00:00:01Z","message":{"id":"msg_turn_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"compacted"}],"usage":{"input_tokens":10,"output_tokens":2}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+
+    # Command is on the assistant turn
+    assert trace["llm_calls"][0]["command"] == {
+        "name": "/compact",
+        "args": "",
+        "message": "compact",
+    }
+    # And not also as a standalone record
+    assert trace["metadata"]["command_only_records"] == []
+
+
+def test_command_only_entry_applies_only_to_matching_next_assistant_turn(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"cmd1","promptId":"prompt-compact","timestamp":"2026-07-08T00:00:00Z","message":{"role":"user","content":"<command-name>/compact</command-name>\\n<command-message>compact</command-message>\\n<command-args></command-args>"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","promptId":"prompt-compact","timestamp":"2026-07-08T00:00:01Z","message":{"id":"msg_turn_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"compacted"}],"usage":{"input_tokens":10,"output_tokens":2}}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"u2","promptId":"prompt-next","timestamp":"2026-07-08T00:00:02Z","message":{"role":"user","content":"continue"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a2","promptId":"prompt-next","timestamp":"2026-07-08T00:00:03Z","message":{"id":"msg_turn_2","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"continuing"}],"usage":{"input_tokens":12,"output_tokens":3}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+
+    assert trace["llm_calls"][0]["command"] == {
+        "name": "/compact",
+        "args": "",
+        "message": "compact",
+    }
+    assert trace["llm_calls"][1]["command"] is None
+    assert trace["llm_calls"][1]["child_records"][0]["command"] is None
+
+
 def test_same_message_id_after_user_message_creates_new_parent_turn(tmp_path: Path):
     project_dir = tmp_path / "-Users-example-repo"
     project_dir.mkdir()

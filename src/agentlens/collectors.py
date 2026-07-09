@@ -525,6 +525,8 @@ class SessionAggregator:
                 "message_count": 0,
                 "assistant_turns": [],
                 "vision_references": [],
+                "pending_user_command": None,
+                "command_only_records": [],
                 "current_assistant_turn": None,
                 "last_role": None,
             }
@@ -578,6 +580,7 @@ class SessionAggregator:
             "child_records": child_records,
             "child_record_count": len(child_records),
             "response": build_assistant_response(turn.get("content_blocks", [])),
+            "command": dict(turn.get("command")) if isinstance(turn.get("command"), dict) else None,
             "is_assistant_turn": True,
         }
         if isinstance(turn_data.get("response"), str):
@@ -594,6 +597,27 @@ class SessionAggregator:
         current_turn = session.get("current_assistant_turn")
         if current_turn:
             self._append_assistant_turn(session, current_turn)
+
+    def _consume_command_only_record(
+        self,
+        session: Dict[str, Any],
+        command: Dict[str, Any],
+    ) -> None:
+        """Remove a command-only record once it has been attached to an assistant turn."""
+        records = session.get("command_only_records")
+        if not records:
+            return
+        name = command.get("name", "")
+        message = command.get("message", "")
+        for index, existing in enumerate(list(records)):
+            if not isinstance(existing, dict):
+                continue
+            if existing.get("name") != name:
+                continue
+            if (existing.get("message") or "") != (message or ""):
+                continue
+            records.pop(index)
+            return
 
     def add_message(self, session_id: str, message: Dict[str, Any]):
         session = self._ensure_session(session_id)
@@ -634,6 +658,17 @@ class SessionAggregator:
 
         if role == "assistant" and message.get("model"):
             last_user_prompt = session.get("last_user_prompt")
+            pending_user_command = session.get("pending_user_command")
+            assistant_prompt_id = message.get("prompt_id") or message.get("promptId")
+            command_for_turn = None
+            if isinstance(pending_user_command, dict):
+                pending_prompt_id = pending_user_command.get("prompt_id") or ""
+                if not pending_prompt_id or pending_prompt_id == assistant_prompt_id:
+                    command_for_turn = {
+                        "name": pending_user_command.get("name", ""),
+                        "args": pending_user_command.get("args", ""),
+                        "message": pending_user_command.get("message", ""),
+                    }
             if can_merge_assistant:
                 current_turn["source_event_ids"].append(message.get("trace_id"))
                 current_turn["record_ids"].append(message.get("trace_id"))
@@ -662,6 +697,7 @@ class SessionAggregator:
                     "cost_usd": float(message.get("cost_usd") or 0.0),
                     "prompt": last_user_prompt[:500] if last_user_prompt else None,
                     "prompt_id": message.get("prompt_id") or message.get("promptId"),
+                    "command": dict(command_for_turn) if isinstance(command_for_turn, dict) else None,
                     "content_blocks": merge_content_blocks([], message.get("content_blocks", [])),
                     "records": [],
                 }
@@ -685,9 +721,13 @@ class SessionAggregator:
                 "prompt": last_user_prompt[:500] if last_user_prompt else None,
                 "response": response,
                 "prompt_id": message.get("prompt_id") or message.get("promptId") or "",
+                "command": dict(command_for_turn) if isinstance(command_for_turn, dict) else None,
                 "is_assistant_turn": False,
             }
             current_turn.setdefault("records", []).append(child_record)
+            if command_for_turn is not None:
+                session["pending_user_command"] = None
+                self._consume_command_only_record(session, command_for_turn)
             session["last_response"] = response or session.get("last_response")
         else:
             session["total_input_tokens"] += int(message.get("input_tokens") or 0)
@@ -715,6 +755,15 @@ class SessionAggregator:
             if not session["first_prompt"]:
                 session["first_prompt"] = prompt
             session["last_user_prompt"] = prompt
+            if not message.get("command"):
+                session["pending_user_command"] = None
+        if message.get("role") == "user" and message.get("command"):
+            session["pending_user_command"] = {
+                "name": message["command"].get("name", ""),
+                "args": message["command"].get("args", ""),
+                "message": message["command"].get("message", ""),
+                "prompt_id": message.get("prompt_id") or "",
+            }
 
         session["last_role"] = role
 
@@ -769,6 +818,7 @@ class SessionAggregator:
                 "major_cwd": project_path,
                 "task_summary": summarize_task_tools(session_id, merged_tool_calls),
                 "vision_references": session.get("vision_references", []),
+                "command_only_records": list(session.get("command_only_records") or []),
             },
         }
 
@@ -1245,6 +1295,7 @@ class ClaudeCodeCollector(LogCollector):
         response = None
         is_command_only = False
         pending_command: Dict[str, str] = state["pending_command"]
+        parsed_command: Optional[Dict[str, Any]] = None
         vision_references = extract_vision_references(content, state["session_id"], data)
 
         if msg_type == "attachment":
@@ -1294,6 +1345,9 @@ class ClaudeCodeCollector(LogCollector):
                     pending_command["args"] = (
                         args_match.group(1).strip() if args_match else ""
                     )
+                    msg_match = re.search(r"<command-message>(.*?)</command-message>", content, re.DOTALL)
+                    pending_command["message"] = msg_match.group(1).strip() if msg_match else ""
+                    parsed_command = dict(pending_command)
                     remaining = content
                     for pattern in [
                         r"<command-name>.*?</command-name>",
@@ -1339,11 +1393,46 @@ class ClaudeCodeCollector(LogCollector):
                         cmd_str += f" {pending_command['args']}"
                     cmd_str += "]"
                     prompt = f"{cmd_str}\n{prompt}"
+                    parsed_command = dict(pending_command)
                     pending_command.clear()
         elif role == "assistant" and content:
             response = build_assistant_response(content)
 
         if is_command_only:
+            session = state["aggregator"]._ensure_session(state["session_id"])
+            if parsed_command:
+                prompt_id = (
+                    data.get("promptId")
+                    or message.get("prompt_id")
+                    or message.get("promptId")
+                    or ""
+                )
+                session["pending_user_command"] = {
+                    "name": parsed_command.get("name", ""),
+                    "args": parsed_command.get("args", ""),
+                    "message": parsed_command.get("message", ""),
+                    "prompt_id": prompt_id,
+                }
+                # Always keep a structured command-only record so it can be
+                # rendered even when the next assistant turn uses a different
+                # promptId (or no turn follows at all). The record is removed
+                # in add_message() if a matching assistant turn consumes it.
+                command_only = session.setdefault("command_only_records", [])
+                if not any(
+                    isinstance(existing, dict)
+                    and existing.get("name") == parsed_command.get("name", "")
+                    and (existing.get("message") or "") == (parsed_command.get("message") or "")
+                    and existing.get("source_event_id") == data.get("uuid")
+                    for existing in command_only
+                ):
+                    command_only.append({
+                        "name": parsed_command.get("name", ""),
+                        "args": parsed_command.get("args", ""),
+                        "message": parsed_command.get("message", ""),
+                        "prompt_id": prompt_id,
+                        "source_event_id": data.get("uuid"),
+                        "timestamp": data.get("timestamp"),
+                    })
             return
 
         cwd = data.get("cwd", "")
@@ -1358,6 +1447,7 @@ class ClaudeCodeCollector(LogCollector):
             "role": role,
             "prompt": prompt,
             "response": response,
+            "command": dict(parsed_command) if parsed_command else None,
             "content_blocks": content_blocks,
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
