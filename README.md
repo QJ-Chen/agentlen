@@ -1,264 +1,293 @@
 # AgentLens
 
-**Local-first session intelligence for Claude Code.**
+> **Local-first session intelligence for Claude Code.**
 
-AgentLens turns raw local Claude Code session logs into:
+AgentLens reads your local `~/.claude/projects/.../*.jsonl` session logs, normalizes them into structured session records, stores them in SQLite, and serves a searchable inbox, a hierarchy explorer, and a per-session inspector from a FastAPI + React dashboard.
 
-- searchable session inboxes
-- replayable tool / LLM timelines
-- token & cost analytics
-- debugging views for “what actually happened?”
-
-It is **not** a remote-control platform or a general-purpose LLM observability stack. The core niche is:
-
-> **inspect, replay, and analyze Claude Code sessions from local artifacts — privately, quickly, and without a cloud dependency.**
+It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic OpenTelemetry backend. The product is best understood as a forensic replay and analytics layer for the Claude Code history that already exists on your machine.
 
 ---
 
-## Why AgentLens exists
+## Table of contents
 
-Claude Code leaves behind valuable evidence in local session logs:
+- [Highlights](#highlights)
+- [Screenshots](#screenshots)
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Run](#run)
+- [Configuration](#configuration)
+- [Project layout](#project-layout)
+- [HTTP API](#http-api)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Contributing](#contributing)
+- [License](#license)
 
-- prompts and responses
-- tool calls and outputs
-- model usage
-- token consumption
-- session timing
-- project paths and working context
+---
 
-But these logs are hard to inspect directly.
+## Highlights
 
-AgentLens provides a lightweight local pipeline:
+- **Hierarchy explorer.** Browse global → projects → sessions → subagents/llm/vision/tasks. Recap text drives the session labels so the most recent intent is always visible.
+- **Session inspector with Recap card.** Every session surfaces an `away_summary` recap, prompt-thread list, tool calls, subagent activity, and provenance (project path + source JSONL).
+- **Structured control-plane cards.** `<task-notification>`, `<bash-stdout>`, `<bash-stderr>`, `<bash-input>`, `<bash-output>`, and `<bash-exit-code>` wrappers are decoded into typed UI cards with explicit `无输出` / `无错误输出` / `不完整` badges.
+- **Slash commands as first-class prompt threads.** `/loop`, `/clear`, `/model`, `/compact` and friends are preserved with their `command-name` / `command-args` / `command-message` fields and rendered as standalone rows. `/loop` dedupes across its `isMeta: true` skill expansion.
+- **Lightweight hierarchy projection.** Lazy `/api/v1/hierarchy` + `/api/v1/hierarchy/children` keep the inbox responsive on long sessions.
+- **Project metadata panel.** CLAUDE.md instructions, `MEMORY.md` index, local `.claude/settings.local.json` permissions, git worktrees, and counts of session/subagent/task artifacts.
+- **Date-range filter** on sessions, overview stats, and project rollups.
+- **Local-first, no cloud dependency.** SQLite at `~/.agentlens/agentlens.db`; no third-party services required.
+
+See [`FEATURES.md`](FEATURES.md) for the full list and [`CHANGELOG.md`](CHANGELOG.md) for release-by-release notes.
+
+---
+
+## Screenshots
+
+**Session overview with the Recap card and provenance.**
+
+![Session overview with recap](docs/assets/session-overview-recap.png)
+
+**Hierarchy explorer with sessions bucketed under each project.**
+
+![Hierarchy with sessions](docs/assets/hierarchy-sessions.png)
+
+**Per-session LLM prompt-thread list with control-plane cards.**
+
+![Control-plane cards](docs/assets/control-plane-cards.png)
+
+**Prompt-thread detail with tool calls and assistant turns.**
+
+![Prompt thread detail](docs/assets/prompt-thread-detail.png)
+
+**LLM node with prompt-thread counts and assistant-turn summarization.**
+
+![LLM prompt threads](docs/assets/llm-prompt-threads.png)
+
+---
+
+## How it works
 
 ```text
-Claude Code session logs
-        ↓
-Claude Code collector
-        ↓
-normalized session records
-        ↓
-SQLite
-        ↓
-API + dashboard
+Claude Code session logs (JSONL)
+        │
+        ▼
+CollectorManager + Claude Code collector
+        │  historical backfill + watch mode
+        ▼
+SessionAggregator (collectors.py)
+        │  parse messages, attach tools, attach subagents,
+        │  collect vision references, capture recap, model commands
+        ▼
+SQLiteStorage (storage.py)
+        │  session projection + traces-compatible persistence
+        ▼
+FastAPI (api.py)
+        │  /sessions, /sessions/{id}, /stats, /hierarchy, /projects/by-path
+        ▼
+React dashboard (dashboard/)
+        │  inbox, hierarchy, inspector, control-plane cards
+        ▼
+You
 ```
 
-The result is a practical **forensic replay + analytics layer** for Claude Code workflows.
+The collector is the canonical entrypoint. `src/agentlens/api.py` starts it on FastAPI startup. `session_scanner.py` is a thin CLI wrapper around the same pipeline for use as a standalone process.
 
 ---
 
-## Core product surfaces
+## Requirements
 
-### 1. Sessions Inbox
-Find recent sessions quickly and filter by:
-- project path
-- model
-- status
-- text query
-- cost / tokens / duration
+- Python ≥ 3.10
+- Node.js ≥ 18 (for the dashboard)
+- A populated `~/.claude/projects/` directory (i.e. you have used Claude Code locally)
 
-### 2. Session Inspector
-Open a single session and inspect:
-- cleaned prompt / response previews
-- tool-call sequence
-- LLM call sequence
-- timestamps and duration
-- source session file path
-- project/workdir context
+Optional:
 
-### 3. Analytics
-Answer questions like:
-- where did token/cost go?
-- which projects were most active?
-- which models were used most?
-- which tools show up most often?
-- which sessions failed or were unusually expensive?
+- `xdg-open` (Linux), `open` (macOS), or `startfile` (Windows) for the "Open project" / "Open folder" actions.
 
 ---
 
-## Supported source
-
-### Local session-log ingestion (core path)
-- **Claude Code** — `~/.claude/projects/.../*.jsonl` (same logical location on Windows, under the current user's home directory)
-
-### Secondary ingestion path
-- **Manual Claude-oriented trace ingestion** through the compatibility API endpoints
-
-> The local Claude Code session-log pipeline is the main product. Compatibility ingestion remains available only through the existing API contract; old manual tracing modules are no longer part of the supported runtime.
-
----
-
-## Architecture
-
-```text
-┌──────────────────────────────────────────────────────┐
-│ Local sources                                        │
-│  - Claude Code session logs                          │
-│  - optional compatibility trace payloads             │
-└──────────────────────────┬───────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────┐
-│ Canonical ingestion                                   │
-│  CollectorManager + Claude Code collector             │
-│  - historical scan                                    │
-│  - polling watch mode                                 │
-│  - normalized session records                         │
-└──────────────────────────┬───────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────┐
-│ Local storage                                         │
-│  SQLite (~/.agentlens/agentlens.db)                  │
-└──────────────────────────┬───────────────────────────┘
-                           │
-                           ▼
-┌──────────────────────────────────────────────────────┐
-│ API + UI                                              │
-│  FastAPI backend + React dashboard                    │
-└──────────────────────────────────────────────────────┘
-```
-
----
-
-## Quick start
-
-### 1. Install
+## Install
 
 ```bash
-git clone git@github.com:QJ-Chen/agentlen.git
+git clone https://github.com/QJ-Chen/agentlen.git
 cd agentlen
 
+# backend
 pip install -e .
-cd dashboard && npm install && cd ..
+
+# frontend
+cd dashboard
+npm install
+cd ..
 ```
 
-> On Windows, use PowerShell or CMD equivalents as needed. `python` or `py -3` may be available instead of `python3`.
+On Windows, use PowerShell or CMD as needed. `python` or `py -3` may be available instead of `python3`.
 
-### 2. Start the backend API
+---
+
+## Run
+
+Three processes make up the local dev workflow. They can each run in their own terminal.
 
 ```bash
+# 1. backend (auto-backfills local Claude Code sessions on startup, then watches)
 python3 -m src.agentlens.api
-```
 
-### 3. Start the dashboard
-
-```bash
+# 2. dashboard (Vite dev server with HMR)
 cd dashboard
 npm run dev
+# prints a URL like http://localhost:5173
 ```
 
-### 4. Backfill and watch local Claude Code sessions
+The backend listens on `http://localhost:8080`. The dashboard reads `API_URL = 'http://localhost:8080'` by default — see [Configuration](#configuration) to point it elsewhere.
+
+To run a dedicated local scanner (for example, on a machine that does not run the API):
 
 ```bash
 python3 session_scanner.py --watch --interval 5
 ```
 
-Then open:
-- API: `http://localhost:8080`
-- Dashboard: check the Vite dev server URL printed by `npm run dev`
-
-On native Windows, the dashboard's **Open project** / **Open folder** actions now use the backend to launch Explorer for valid local session paths.
-
----
-
-## Canonical runtime mode
-
-Use this when you want to inspect real Claude Code history.
+### Sanity check
 
 ```bash
-python3 -m src.agentlens.api
-python3 session_scanner.py --watch
-cd dashboard && npm run dev
+curl -s http://localhost:8080/api/v1/sessions | python3 -m json.tool | head
 ```
 
-### Removed experimental paths
-
-The old manual tracing / orchestration experiment files have been removed from the supported repo surface. AgentLens should now be understood primarily as a Claude Code session-log ingestion and inspection tool.
+You should see Claude Code sessions indexed from `~/.claude/projects/...`.
 
 ---
 
-## Project structure
+## Configuration
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `AGENTLENS_API_URL` | `http://localhost:8080` | Frontend API base URL. Edit `dashboard/src/App.tsx` `API_URL` if you change it for the dev server. |
+| `AGENTLENS_DB_PATH` | `~/.agentlens/agentlens.db` | SQLite database file. Set this if you want the DB to live outside your home directory. |
+| `AGENTLENS_LOG_LEVEL` | `INFO` | Standard Python logging level. |
+
+The backend port (8080) is hardcoded in `src/agentlens/api.py`. Frontend `dashboard/src/App.tsx` mirrors it via `API_URL`. If you change one, change the other.
+
+---
+
+## Project layout
 
 ```text
 agentlen/
 ├── src/agentlens/
-│   ├── api.py              # FastAPI backend
-│   ├── storage.py          # SQLite storage + query helpers
-│   ├── collectors.py       # canonical Claude Code ingestion pipeline
-│   ├── realtime.py         # collector watch service
-│   └── adapters/           # optional adapters / experiments
+│   ├── api.py                # FastAPI backend
+│   ├── storage.py            # SQLite persistence + query helpers
+│   ├── collectors.py         # Claude Code ingestion pipeline
+│   ├── realtime.py           # background collector watch
+│   └── ...
 ├── dashboard/
 │   └── src/
-│       ├── App.tsx         # main dashboard shell
-│       └── components/     # inspector / activity / analytics UI
-├── session_scanner.py      # thin CLI wrapper for CollectorManager
+│       ├── main.tsx          # mounts App
+│       ├── App.tsx           # dashboard shell
+│       ├── components/       # HierarchyTree, NodeDetailPane, EnhancedTraceDetail, ...
+│       └── lib/              # sessionUtils, conversationModel, sessionNormalization, ...
+├── session_scanner.py        # CLI around CollectorManager
 ├── docs/
-└── tests/
+│   ├── architecture.md
+│   ├── session-log-formats.md
+│   └── PLATFORM_LOGS.md
+├── tests/
+└── pyproject.toml
 ```
 
 ---
 
-## API overview
+## HTTP API
 
-### Session APIs
-- `GET /api/v1/sessions`
-- `GET /api/v1/sessions/{session_id}`
+Base URL: `http://localhost:8080`.
 
-### Stats APIs
-- `GET /api/v1/stats/overview`
-- `GET /api/v1/stats/projects`
-- `GET /api/v1/platforms` (returns Claude Code only)
+### Sessions
 
-### Ingestion APIs
-- `POST /api/v1/traces`
-- `POST /api/v1/traces/batch`
-- `POST /api/v1/ingest/rescan`
+- `GET /api/v1/sessions` — list sessions, with `start_time`, `end_time`, `period_hours`, `limit`, `status`, and free-text search parameters.
+- `GET /api/v1/sessions/{session_id}` — full session record (prompt threads, tool calls, LLM calls, subagent logs, tasks, vision, recap).
 
-Compatibility trace endpoints remain available, but only accept Claude Code payloads.
+### Stats
 
----
+- `GET /api/v1/stats/overview` — totals, model mix, status counts, top tools, active days. Supports `start_time`, `end_time`, `period_hours`.
+- `GET /api/v1/stats/projects` — project rollups. Same date-range parameters.
 
-## Development status
+### Hierarchy
 
-### Stable direction
-- local-first Claude Code session ingestion
-- SQLite-backed storage
-- session-centric API
-- dashboard for inbox / inspector / analytics
-- real local parsing for Claude Code session logs
+- `GET /api/v1/hierarchy` — lightweight root (no detail payload).
+- `GET /api/v1/hierarchy/children` — children for a given `node_id`. Opens a session / project lazily.
 
-### In-progress opportunities
-- better full-text search
-- richer project rollups
-- better diff/tool-output inspection
-- improved parser fixtures/tests
+### Project metadata
 
-### Explicit non-goal for this phase
-- becoming a full mission-control / remote-control system for running agents
+- `GET /api/v1/projects/by-path?project_path=...` — CLAUDE.md instructions, memory index, local config, worktrees, session/task artifact counts.
 
----
+### Ingestion
 
-## Verification checklist
+- `POST /api/v1/ingest/rescan` — request a manual rescan.
+- `GET /api/v1/ingest/status` — current job state and per-collector health.
 
-After changes, verify:
+### Session actions
 
-1. backend starts and backfills Claude Code session data
-2. scanner/watch mode detects new Claude Code session activity
-3. dashboard shows sessions list and detail view correctly
-4. project / model / tool analytics render from real data
-5. non-Claude traces are rejected or purged from the supported runtime path
+- `POST /api/v1/sessions/{session_id}/open?target=project|session_folder` — open the project or session folder in the OS file manager.
+
+### Compatibility
+
+- `POST /api/v1/traces` and `POST /api/v1/traces/batch` remain available for Claude Code-shaped payloads. They are not the primary product path.
+
+Full schema is best discovered via OpenAPI: `GET /openapi.json`.
 
 ---
 
-## Related docs
+## Development
 
-- [Architecture](docs/architecture.md)
-- [Data sources](DATA_SOURCES.md)
-- [Claude Code log notes](docs/PLATFORM_LOGS.md)
-- [Claude Code session log reference](docs/session-log-formats.md)
+```bash
+# backend
+pytest
+pytest tests/test_collectors.py::test_loop_command_threads_attach_through_meta_expansion
+ruff check .
+mypy
+
+# frontend
+cd dashboard
+npm run lint
+npm run build
+npm run preview
+```
+
+Recommended workflow:
+
+1. Open a branch off `main`.
+2. Make the change.
+3. Run the targeted test (e.g. `pytest tests/test_collectors.py -k loop`).
+4. Run the full lint + test sweep before pushing.
+5. Reference the affected module in your commit body.
+
+If you change backend models, verify both `tests/test_api.py` and `tests/test_collectors.py` still pass — the API uses a `RangeCaptureStorage` test double so date-range additions are usually covered with a small new test.
+
+---
+
+## Troubleshooting
+
+- **"Path does not exist" from `/api/v1/sessions/{id}/open`** — the session's `session_file_path` no longer points to a real file. Run a rescan (`POST /api/v1/ingest/rescan`) to repopulate provenance.
+- **Inbox shows 0 sessions but `~/.claude/projects/` has data** — confirm the backend is on port 8080 and that the Vite dev server `API_URL` matches. Check `~/.agentlens/agentlens.db` mtime.
+- **`<task-notification>` shows as `不完整`** — the collector truncates `last_user_prompt` to 500 chars, so a long task notification may have its closing tag clipped. The parser tolerates this and marks the block as incomplete. This is by design.
+- **Hierarchies are slow on huge sessions** — confirm `SQLiteStorage` is using the lightweight projection table. Re-run the migration by deleting `~/.agentlens/agentlens.db` and restarting the backend (it will re-ingest from local logs).
+- **Watcher misses new sessions** — confirm the backend is still running (`GET /api/v1/ingest/status` should report `watching: true`). Restart if it died.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome. Useful entrypoints for newcomers:
+
+- `src/agentlens/collectors.py` — Claude Code log parsing.
+- `src/agentlens/storage.py` — SQLite schema and query helpers.
+- `dashboard/src/lib/sessionUtils.ts` — text and control-plane parsing for the UI.
+- `dashboard/src/components/EnhancedTraceDetail.tsx` — session inspector.
+- `dashboard/src/components/HierarchyTree.tsx` + `NodeDetailPane.tsx` — hierarchy surfaces.
+
+When changing backend models, add or update the matching test in `tests/`. When changing the UI, add or update the `dashboard/src/lib/conversationModel.ts` snapshot tests if they apply to your change.
 
 ---
 
 ## License
 
-MIT
+[MIT](LICENSE)
