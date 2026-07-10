@@ -664,7 +664,11 @@ class SessionAggregator:
             command_for_turn = None
             if isinstance(pending_user_command, dict):
                 pending_prompt_id = pending_user_command.get("prompt_id") or ""
-                if not pending_prompt_id or pending_prompt_id == assistant_prompt_id:
+                if (
+                    not pending_prompt_id
+                    or not assistant_prompt_id
+                    or pending_prompt_id == assistant_prompt_id
+                ):
                     command_for_turn = {
                         "name": pending_user_command.get("name", ""),
                         "args": pending_user_command.get("args", ""),
@@ -756,7 +760,15 @@ class SessionAggregator:
             if not session["first_prompt"]:
                 session["first_prompt"] = prompt
             session["last_user_prompt"] = prompt
-            if not message.get("command"):
+            pending = session.get("pending_user_command")
+            user_prompt_id = message.get("prompt_id") or ""
+            is_meta_expansion = bool(message.get("is_meta_expansion"))
+            if is_meta_expansion and isinstance(pending, dict):
+                pending_id = pending.get("prompt_id") or ""
+                if pending_id and pending_id != user_prompt_id:
+                    session["pending_user_command"] = None
+                # else: same prompt_id; keep pending command for the next assistant turn.
+            elif not message.get("command"):
                 session["pending_user_command"] = None
         if message.get("role") == "user" and message.get("command"):
             session["pending_user_command"] = {
@@ -1303,6 +1315,7 @@ class ClaudeCodeCollector(LogCollector):
         prompt = None
         response = None
         is_command_only = False
+        is_meta_expansion = False
         pending_command: Dict[str, str] = state["pending_command"]
         parsed_command: Optional[Dict[str, Any]] = None
         vision_references = extract_vision_references(content, state["session_id"], data)
@@ -1375,6 +1388,7 @@ class ClaudeCodeCollector(LogCollector):
                 prompt = "\n".join(
                     item.get("text", "") for item in content if item.get("type") == "text"
                 )
+                is_meta_expansion = bool(data.get("isMeta"))
 
                 if not prompt:
                     has_text_content = any(
@@ -1457,6 +1471,7 @@ class ClaudeCodeCollector(LogCollector):
             "prompt": prompt,
             "response": response,
             "command": dict(parsed_command) if parsed_command else None,
+            "is_meta_expansion": is_meta_expansion,
             "content_blocks": content_blocks,
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),

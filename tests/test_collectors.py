@@ -412,3 +412,92 @@ def test_same_message_id_after_user_message_creates_new_parent_turn(tmp_path: Pa
     assert [turn["child_record_count"] for turn in trace["llm_calls"]] == [1, 1]
     assert trace["input_tokens"] == 22
     assert trace["output_tokens"] == 5
+
+
+def test_loop_command_threads_attach_through_meta_expansion(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    command_event = (
+        '{"type":"user","uuid":"7ef95e8f","promptId":"07fb4dd9-0310-4550-81c4-cc59ce091388",'
+        '"timestamp":"2026-07-08T03:39:41.904Z",'
+        '"message":{"role":"user","content":"<command-message>loop</command-message>'
+        '\\n<command-name>/loop</command-name>'
+        '\\n<command-args>1m This is just a test, do nothing</command-args>"}}'
+    )
+    collector.process_line(state, command_event)
+
+    expansion_event = (
+        '{"type":"user","uuid":"643c82fb","promptId":"07fb4dd9-0310-4550-81c4-cc59ce091388",'
+        '"isMeta":true,'
+        '"timestamp":"2026-07-08T03:39:41.904Z",'
+        '"message":{"role":"user","content":[{"type":"text","text":"# /loop — schedule a recurring prompt\\nParse the input below..."}]}}'
+    )
+    collector.process_line(state, expansion_event)
+
+    assistant_event = (
+        '{"type":"assistant","uuid":"38864803","timestamp":"2026-07-08T03:39:53.545Z",'
+        '"message":{"id":"msg_loop_1","role":"assistant","model":"claude-opus-4-8",'
+        '"content":[{"type":"tool_use","id":"toolu_cron","name":"CronCreate","input":{"cron":"*/1 * * * *","prompt":"This is just a test, do nothing","recurring":true}}],'
+        '"usage":{"input_tokens":100,"output_tokens":50}}}'
+    )
+    collector.process_line(state, assistant_event)
+
+    final_event = (
+        '{"type":"assistant","uuid":"49e4c961","timestamp":"2026-07-08T03:40:05.125Z",'
+        '"message":{"id":"msg_loop_2","role":"assistant","model":"claude-opus-4-8",'
+        '"content":[{"type":"text","text":"Scheduled"}],"usage":{"input_tokens":100,"output_tokens":50}}}'
+    )
+    collector.process_line(state, final_event)
+
+    trace = state["aggregator"].get_traces()[0]
+
+    assert trace["metadata"]["command_only_records"] == []
+    assistant_turns = trace["llm_calls"]
+    loop_turn = next(turn for turn in assistant_turns if turn["command"] is not None)
+    assert loop_turn["command"]["name"] == "/loop"
+    assert loop_turn["command"]["args"] == "1m This is just a test, do nothing"
+    assert loop_turn["command"]["message"] == "loop"
+    assert {"CronCreate"} <= {tool["name"] for tool in trace["tool_calls"]}
+
+
+def test_command_only_stays_standalone_after_unrelated_user_prompt(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"cmd1","promptId":"prompt-cmd",'
+        '"timestamp":"2026-07-08T03:00:00Z",'
+        '"message":{"role":"user","content":"<command-message>recap</command-message>'
+        '\\n<command-name>/recap</command-name>\\n<command-args></command-args>"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"user","uuid":"u2","promptId":"prompt-next",'
+        '"timestamp":"2026-07-08T03:00:01Z","message":{"role":"user","content":"continue"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","promptId":"prompt-next",'
+        '"timestamp":"2026-07-08T03:00:02Z",'
+        '"message":{"id":"msg_next","role":"assistant","model":"claude-opus-4-8",'
+        '"content":[{"type":"text","text":"continuing"}],'
+        '"usage":{"input_tokens":10,"output_tokens":2}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+
+    command_only = trace["metadata"]["command_only_records"]
+    assert len(command_only) == 1
+    assert command_only[0]["name"] == "/recap"
+    assistant_turns = trace["llm_calls"]
+    assert all(turn["command"] is None for turn in assistant_turns)

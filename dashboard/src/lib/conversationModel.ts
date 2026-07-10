@@ -114,13 +114,24 @@ function attachCommandOnlyRecordsToThreads(
   // Slash commands are independent user actions, not attachments to a text
   // prompt. Give each command-only record its own row in the prompt-thread
   // list so /model, /compact, /recap, etc. are first-class entries.
+  const representedPromptIds = new Set<string>();
+  threads.forEach((thread) => {
+    const claimedId = thread.promptId || thread.assistantTurns.find((turn) => turn.promptId)?.promptId;
+    if (claimedId) representedPromptIds.add(claimedId);
+    thread.commandOnlyRecords?.forEach((record) => {
+      if (record.promptId) representedPromptIds.add(record.promptId);
+    });
+  });
+
   const sortedCommands = [...commandOnlyRecords].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
   sortedCommands.forEach((command, index) => {
+    if (command.promptId && representedPromptIds.has(command.promptId)) {
+      return;
+    }
     threads.push({
       id: `command-only-${command.sourceEventId || `standalone-${index}`}`,
       prompt: '',
       promptId: '',
-      command: { name: command.name, args: command.args, message: command.message },
       commandOnlyRecords: [command],
       assistantTurns: [],
     });
