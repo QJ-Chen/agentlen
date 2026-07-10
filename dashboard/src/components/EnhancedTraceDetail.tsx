@@ -228,12 +228,22 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             error: tool.error,
           }))
         : null;
+    // Basename of file_path inputs for any file-operating tool (Read, Edit, Write, etc.),
+    // shown collapsed in the row and again above the "工具调用" card
+    const toolFileLabel =
+      formattedToolResponse
+        ? relatedTools
+            .filter((t) => typeof t.input === 'object' && t.input && 'file_path' in t.input)
+            .map((t) => `${(t.input as { file_path: string }).file_path.split('/').pop()}`)
+            .join(' · ')
+        : undefined;
 
     return {
       relatedTools,
       responseStyle,
       formattedToolResponse,
       toolResultAppendix,
+      toolFileLabel,
     };
   };
 
@@ -433,7 +443,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     }) => {
       const callKey = `${parentKey}-call-${callIdx}`;
       const isCallExpanded = detailLevel !== 'summary' && expandedLLMs.has(callKey);
-      const { responseStyle, formattedToolResponse, toolResultAppendix } = getCallRenderState(call, toolScope);
+      const { responseStyle, formattedToolResponse, toolResultAppendix, toolFileLabel } = getCallRenderState(call, toolScope);
 
       return (
         <div key={callKey} className={`rounded-2xl border-l-4 transition-all ${isCallExpanded ? 'bg-white border-violet-300 shadow-md shadow-violet-100/40 ring-1 ring-violet-100' : 'bg-slate-50/80 border-slate-200/80 border-l-slate-300'}`}>
@@ -460,6 +470,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                 )}
                 {call.duration > 0 && <span>·</span>}
                 {call.duration > 0 && <span>{formatDuration(call.duration)}</span>}
+                {toolFileLabel && detailLevel !== 'summary' && (
+                  <>
+                    <span>·</span>
+                    <span className="font-mono text-slate-600">{toolFileLabel}</span>
+                  </>
+                )}
                 {detailLevel === 'verbose' && call.sourceEventIds && call.sourceEventIds[0] && (
                   <>
                     <span>·</span>
@@ -489,6 +505,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
               {formattedToolResponse && (
                 <StructuredResponseBlock
                   title="工具调用"
+                  subtitle={toolFileLabel}
                   color="violet"
                   icon={Wrench}
                   value={formattedToolResponse}
