@@ -372,9 +372,12 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     const cleanedPrompt = textBlocks.map((block) => block.text).join('\n\n').trim();
     const controlBlocks = promptBlocks.filter((block) => block.kind !== 'text');
     const formatCommandLabel = (name: string) => (name.startsWith('/') ? name : `/${name}`);
-    const commandLabel = thread.command?.name ? formatCommandLabel(thread.command.name) : '';
-    const commandPreview = thread.command?.name
-      ? `${commandLabel}${thread.command.args ? ` ${thread.command.args}` : ''}`
+    const primaryCommand = thread.command?.name
+      ? { name: thread.command.name, args: thread.command.args || '' }
+      : thread.commandOnlyRecords?.[0];
+    const commandLabel = primaryCommand?.name ? formatCommandLabel(primaryCommand.name) : '';
+    const commandPreview = primaryCommand?.name
+      ? `${commandLabel}${primaryCommand.args ? ` ${primaryCommand.args}` : ''}`
       : '';
     const firstControl = controlBlocks[0];
     const controlPreview = firstControl?.kind === 'task-notification'
