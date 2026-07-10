@@ -1,11 +1,218 @@
-export function cleanSessionText(text?: string | null): string {
-  if (!text) return '';
+export interface SessionTextBlockText {
+  kind: 'text';
+  text: string;
+}
+
+export interface SessionTextBlockTaskNotification {
+  kind: 'task-notification';
+  taskId?: string;
+  toolUseId?: string;
+  outputFile?: string;
+  status?: string;
+  summary?: string;
+  note?: string;
+  truncated: boolean;
+}
+
+export interface SessionTextBlockBashOutput {
+  kind: 'bash-output';
+  stdout?: string;
+  stderr?: string;
+  exitCode?: string;
+  hasStdout: boolean;
+  hasStderr: boolean;
+  hasInput: boolean;
+  truncated: boolean;
+}
+
+export type SessionTextBlock =
+  | SessionTextBlockText
+  | SessionTextBlockTaskNotification
+  | SessionTextBlockBashOutput;
+
+export type SessionControlBlock = Exclude<SessionTextBlock, SessionTextBlockText>;
+
+const OUTER_CONTROL_NAMES = [
+  'task-notification',
+  'bash-stdout',
+  'bash-stderr',
+  'bash-input',
+  'bash-output',
+  'bash-exit-code',
+] as const;
+
+const OUTER_CONTROL_PATTERN = OUTER_CONTROL_NAMES.join('|');
+const TASK_FIELD_PATTERN = [
+  'task-id',
+  'task_id',
+  'tool-use-id',
+  'tool_use_id',
+  'output-file',
+  'output_file',
+  'status',
+  'summary',
+  'note',
+].join('|');
+
+interface ControlOpener {
+  name: string;
+  index: number;
+  end: number;
+}
+
+function findNextControlOpener(text: string, start: number): ControlOpener | null {
+  const pattern = new RegExp(`<\\s*(${OUTER_CONTROL_PATTERN})\\b[^>]*>`, 'gi');
+  pattern.lastIndex = start;
+  const match = pattern.exec(text);
+  if (!match) return null;
+  return {
+    name: match[1].toLowerCase(),
+    index: match.index,
+    end: pattern.lastIndex,
+  };
+}
+
+function cleanLegacyControlText(text: string): string {
   return text
-    .replace(/<local-command-caveat>[\s\S]*?<\/local-command-caveat>/gi, '')
-    .replace(/<command-name>.*?<\/command-name>/gi, '')
-    .replace(/<command-args>.*?<\/command-args>/gi, '')
-    .replace(/<command-message>.*?<\/command-message>/gi, '')
-    .replace(/<local-command-stdout>[\s\S]*?<\/local-command-stdout>/gi, '')
+    .replace(/<local-command-caveat\b[^>]*>[\s\S]*?<\/local-command-caveat>/gi, '')
+    .replace(/<local-command-caveat\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<local-command-stdout\b[^>]*>[\s\S]*?<\/local-command-stdout>/gi, '')
+    .replace(/<local-command-stdout\b[^>]*>[\s\S]*$/gi, '')
+    .replace(/<(command-name|command-args|command-message)\b[^>]*>[^<]*(?:<\/\1>|$)/gi, '')
+    .replace(/<(task-id|task_id|tool-use-id|tool_use_id|output-file|output_file|status|summary)\b[^>]*>[^<]*(?:<\/\1>|$)/gi, '')
+    .replace(/<note\b[^>]*>[\s\S]*?(?:<\/note>|$)/gi, '')
+    .replace(new RegExp(`<\\/?\\s*(?:${OUTER_CONTROL_PATTERN})\\b[^>]*>`, 'gi'), '')
+    .replace(/<\/?\s*(?:local-command-caveat|local-command-stdout|command-name|command-args|command-message)\b[^>]*>/gi, '');
+}
+
+function pushTextBlock(blocks: SessionTextBlock[], text: string): void {
+  const cleaned = cleanLegacyControlText(text).trim();
+  if (!cleaned) return;
+  const previous = blocks[blocks.length - 1];
+  if (previous?.kind === 'text') {
+    previous.text = `${previous.text}\n${cleaned}`;
+  } else {
+    blocks.push({ kind: 'text', text: cleaned });
+  }
+}
+
+function normalizeFieldValue(value: string): string | undefined {
+  const cleaned = value
+    .replace(new RegExp(`<\\/?\\s*(?:${TASK_FIELD_PATTERN})\\b[^>]*>`, 'gi'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || undefined;
+}
+
+function extractTaskField(payload: string, aliases: string[]): string | undefined {
+  let selected: RegExpExecArray | null = null;
+  let selectedName = '';
+
+  for (const alias of aliases) {
+    const opener = new RegExp(`<\\s*(${alias})\\b[^>]*>`, 'i').exec(payload);
+    if (opener && (!selected || opener.index < selected.index)) {
+      selected = opener;
+      selectedName = opener[1];
+    }
+  }
+
+  if (!selected) return undefined;
+  const valueStart = selected.index + selected[0].length;
+  const close = new RegExp(`<\\/\\s*${selectedName}\\s*>`, 'i').exec(payload.slice(valueStart));
+  const nextField = new RegExp(`<\\s*(?:${TASK_FIELD_PATTERN})\\b[^>]*>`, 'i').exec(payload.slice(valueStart));
+  const closeIndex = close ? valueStart + close.index : payload.length;
+  const nextFieldIndex = nextField ? valueStart + nextField.index : payload.length;
+  return normalizeFieldValue(payload.slice(valueStart, Math.min(closeIndex, nextFieldIndex)));
+}
+
+function parseTaskNotification(payload: string, truncated: boolean): SessionTextBlockTaskNotification {
+  return {
+    kind: 'task-notification',
+    taskId: extractTaskField(payload, ['task-id', 'task_id']),
+    toolUseId: extractTaskField(payload, ['tool-use-id', 'tool_use_id']),
+    outputFile: extractTaskField(payload, ['output-file', 'output_file']),
+    status: extractTaskField(payload, ['status']),
+    summary: extractTaskField(payload, ['summary']),
+    note: extractTaskField(payload, ['note']),
+    truncated,
+  };
+}
+
+function appendBashControl(
+  blocks: SessionTextBlock[],
+  name: string,
+  payload: string,
+  truncated: boolean,
+): void {
+  const previous = blocks[blocks.length - 1];
+  const block: SessionTextBlockBashOutput = previous?.kind === 'bash-output'
+    ? previous
+    : {
+        kind: 'bash-output',
+        hasStdout: false,
+        hasStderr: false,
+        hasInput: false,
+        truncated: false,
+      };
+
+  if (previous !== block) blocks.push(block);
+  block.truncated ||= truncated;
+
+  if (name === 'bash-input') {
+    block.hasInput = true;
+  } else if (name === 'bash-stderr') {
+    block.hasStderr = true;
+    block.stderr = payload;
+  } else if (name === 'bash-exit-code') {
+    block.exitCode = payload.trim() || undefined;
+  } else {
+    block.hasStdout = true;
+    block.stdout = payload;
+  }
+}
+
+export function parseSessionText(text?: string | null): SessionTextBlock[] {
+  if (!text) return [];
+
+  const blocks: SessionTextBlock[] = [];
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const opener = findNextControlOpener(text, cursor);
+    if (!opener) {
+      pushTextBlock(blocks, text.slice(cursor));
+      break;
+    }
+
+    pushTextBlock(blocks, text.slice(cursor, opener.index));
+
+    const closePattern = new RegExp(`<\\/\\s*${opener.name}\\s*>`, 'gi');
+    closePattern.lastIndex = opener.end;
+    const close = closePattern.exec(text);
+    const nextOpener = close ? null : findNextControlOpener(text, opener.end);
+    const payloadEnd = close ? close.index : nextOpener?.index ?? text.length;
+    const blockEnd = close ? closePattern.lastIndex : payloadEnd;
+    const payload = text.slice(opener.end, payloadEnd);
+    const truncated = !close;
+
+    if (opener.name === 'task-notification') {
+      blocks.push(parseTaskNotification(payload, truncated));
+    } else {
+      appendBashControl(blocks, opener.name, payload, truncated);
+    }
+
+    cursor = Math.max(blockEnd, opener.end);
+  }
+
+  return blocks;
+}
+
+export function cleanSessionText(text?: string | null): string {
+  return parseSessionText(text)
+    .filter((block): block is SessionTextBlockText => block.kind === 'text')
+    .map((block) => block.text)
+    .join('\n\n')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 

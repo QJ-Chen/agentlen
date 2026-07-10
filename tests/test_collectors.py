@@ -324,6 +324,62 @@ def test_command_only_entry_applies_only_to_matching_next_assistant_turn(tmp_pat
     assert trace["llm_calls"][1]["child_records"][0]["command"] is None
 
 
+def test_process_line_stores_latest_away_summary_as_recap_text(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"system","subtype":"away_summary","timestamp":"2026-07-08T00:00:00Z","content":"Goal is improving AgentLens session previews. Next, verify the session list shows recap text.","sessionId":"session-1"}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"user","timestamp":"2026-07-08T00:00:01Z","message":{"role":"user","content":"continue"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","timestamp":"2026-07-08T00:00:02Z","message":{"id":"msg_turn_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":12,"output_tokens":3}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+
+    assert trace["metadata"]["recap_text"] == "Goal is improving AgentLens session previews. Next, verify the session list shows recap text."
+
+
+def test_latest_away_summary_wins_when_multiple_system_recaps_exist(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"system","subtype":"away_summary","timestamp":"2026-07-08T00:00:00Z","content":"Old recap","sessionId":"session-1"}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"system","subtype":"away_summary","timestamp":"2026-07-08T00:00:01Z","content":"New recap","sessionId":"session-1"}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"user","timestamp":"2026-07-08T00:00:02Z","message":{"role":"user","content":"continue"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"a1","timestamp":"2026-07-08T00:00:03Z","message":{"id":"msg_turn_1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":12,"output_tokens":3}}}',
+    )
+
+    trace = state["aggregator"].get_traces()[0]
+
+    assert trace["metadata"]["recap_text"] == "New recap"
+
+
 def test_same_message_id_after_user_message_creates_new_parent_turn(tmp_path: Path):
     project_dir = tmp_path / "-Users-example-repo"
     project_dir.mkdir()

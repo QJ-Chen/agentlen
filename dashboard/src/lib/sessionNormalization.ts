@@ -377,6 +377,7 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
     cost: record.cost_usd || 0,
     projectPath: record.project_path || '',
     projectGroup: typeof record.metadata?.project_group === 'string' ? (record.metadata.project_group || record.project_path || '') : (record.project_path || ''),
+    recapText: typeof record.metadata?.recap_text === 'string' ? record.metadata.recap_text.trim() : '',
     sessionFilePath: record.session_file_path || '',
     prompt: record.prompt || '',
     response: record.response || '',

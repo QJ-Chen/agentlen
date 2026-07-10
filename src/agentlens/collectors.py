@@ -527,6 +527,7 @@ class SessionAggregator:
                 "vision_references": [],
                 "pending_user_command": None,
                 "command_only_records": [],
+                "latest_away_summary": None,
                 "current_assistant_turn": None,
                 "last_role": None,
             }
@@ -819,6 +820,7 @@ class SessionAggregator:
                 "task_summary": summarize_task_tools(session_id, merged_tool_calls),
                 "vision_references": session.get("vision_references", []),
                 "command_only_records": list(session.get("command_only_records") or []),
+                "recap_text": session.get("latest_away_summary") or "",
             },
         }
 
@@ -1258,6 +1260,13 @@ class ClaudeCodeCollector(LogCollector):
             return
 
         msg_type = data.get("type")
+        if msg_type == "system":
+            if data.get("subtype") == "away_summary":
+                content = data.get("content")
+                if isinstance(content, str) and content.strip():
+                    session = state["aggregator"]._ensure_session(state["session_id"])
+                    session["latest_away_summary"] = content.strip()
+            return
         if msg_type not in ["user", "assistant", "attachment"]:
             return
 

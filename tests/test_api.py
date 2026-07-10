@@ -41,7 +41,24 @@ class RangeCaptureStorage:
 
     def list_sessions(self, **kwargs):
         self.sessions_calls.append(kwargs)
-        return {"sessions": [], "count": 0, "total": 0}
+        return {
+            "sessions": [
+                {
+                    "session_id": "session-1",
+                    "project_path": "/demo/project",
+                    "agent_name": "claude-code",
+                    "status": "completed",
+                    "start_time": "2026-07-08T00:00:00Z",
+                    "last_updated": "2026-07-08T00:01:00Z",
+                    "metadata": {
+                        "llm_call_count": 2,
+                        "recap_text": "Goal is improving AgentLens session previews.",
+                    },
+                }
+            ],
+            "count": 1,
+            "total": 1,
+        }
 
     def get_session(self, session_id: str):
         if session_id == self.session_detail["session_id"]:
@@ -434,6 +451,20 @@ class HierarchyApiTests(unittest.TestCase):
         self.assertEqual(payload["type"], "global-root")
         self.assertIn("children", payload)
         self.assertNotIn("detail", payload)
+
+    def test_hierarchy_root_uses_recap_text_as_session_label(self):
+        response = self.client.get("/api/v1/hierarchy")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()["root"]
+        projects_root = next(child for child in payload["children"] if child["type"] == "projects-root")
+        project_nodes = [child for child in projects_root["children"] if child["type"] == "project"]
+        self.assertEqual(len(project_nodes), 1)
+        sessions_bucket = next(child for child in project_nodes[0]["children"] if child["type"] == "project-sessions")
+        session_nodes = [child for child in sessions_bucket["children"] if child["type"] == "session"]
+        self.assertEqual(len(session_nodes), 1)
+        self.assertEqual(session_nodes[0]["label"], "Goal is improving AgentLens session previews.")
+        self.assertEqual(session_nodes[0]["sessionId"], "session-1")
 
     def test_hierarchy_children_returns_session_summaries(self):
         response = self.client.get(

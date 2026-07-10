@@ -128,6 +128,7 @@ export interface Trace {
   cost: number;
   projectPath?: string;
   projectGroup?: string;
+  recapText?: string;
   sessionFilePath?: string;
   prompt?: string;
   response?: string;

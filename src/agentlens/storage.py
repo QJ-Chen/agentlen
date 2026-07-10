@@ -485,6 +485,7 @@ class SQLiteStorage(Storage):
             "models": metadata.get("models"),
             "project_group": metadata.get("project_group"),
             "major_cwd": metadata.get("major_cwd"),
+            "recap_text": metadata.get("recap_text"),
             "subagent_count": len(subagent_logs) if isinstance(subagent_logs, list) else 0,
             "task_count": len(tasks) if isinstance(tasks, list) else 0,
             "vision_count": len(vision_references) if isinstance(vision_references, list) else 0,

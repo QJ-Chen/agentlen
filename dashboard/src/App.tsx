@@ -375,7 +375,6 @@ function App() {
     });
   }, [traces, searchQuery, statusFilter]);
   const hasActiveSessionFilters = searchQuery.length > 0 || statusFilter !== 'all';
-  const selectedTraceVisible = selectedTrace && filteredTraces.some((trace) => trace.id === selectedTrace.id);
 
   const rangedProjectCount = useMemo(() => new Set(traces.map((trace) => trace.projectPath || '(unknown)')).size, [traces]);
 
@@ -585,7 +584,7 @@ function App() {
           <section className="space-y-6 min-w-0">
             <NodeDetailPane
               node={selectedHierarchyNode}
-              selectedTrace={selectedTraceVisible && selectedTrace ? selectedTrace : null}
+              selectedTrace={selectedTrace}
               projectMetadata={projectMetadata}
               projectMetadataLoading={projectMetadataLoading}
               projectMetadataError={projectMetadataError}

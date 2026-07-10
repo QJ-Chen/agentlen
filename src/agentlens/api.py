@@ -353,10 +353,11 @@ def _build_session_shallow_node(session: Dict[str, Any], project_path: str) -> D
     llm_call_count = metadata.get("llm_call_count")
     if llm_call_count is None:
         llm_call_count = len(session.get("llm_calls") or [])
+    recap_text = str(metadata.get("recap_text") or "").strip()
     return {
         "id": f"session:{session_id}",
         "type": "session",
-        "label": session_id or "unknown-session",
+        "label": recap_text or session_id or "unknown-session",
         "subtitle": str(session.get("agent_name") or "claude-code"),
         "sessionId": session_id,
         "status": str(session.get("status") or "completed"),

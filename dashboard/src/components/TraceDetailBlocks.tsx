@@ -1,5 +1,6 @@
-import type { ComponentType } from 'react';
-import { Check, Copy, FileText } from 'lucide-react';
+import { useState, type ComponentType } from 'react';
+import { Check, ChevronDown, ChevronRight, Copy, FileText, TerminalSquare } from 'lucide-react';
+import type { SessionControlBlock } from '../lib/sessionUtils';
 
 export function MetricCard({
   icon: Icon,
@@ -122,6 +123,112 @@ export function EmptyState({
     <div className="rounded-3xl border border-dashed border-slate-200 bg-slate-50/80 py-10 text-center text-slate-500">
       <Icon className="mx-auto mb-3 h-12 w-12 opacity-50" />
       <p className="text-sm font-medium">{label}</p>
+    </div>
+  );
+}
+
+export function ControlPlanePromptBlock({
+  block,
+  copyId,
+  copiedId,
+  onCopy,
+}: {
+  block: SessionControlBlock;
+  copyId: string;
+  copiedId: string | null;
+  onCopy: (text: string, id: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (block.kind === 'task-notification') {
+    const copyText = [
+      block.status && `Status: ${block.status}`,
+      block.summary && `Summary: ${block.summary}`,
+      block.note && `Note: ${block.note}`,
+      block.taskId && `Task ID: ${block.taskId}`,
+      block.toolUseId && `Tool use ID: ${block.toolUseId}`,
+      block.outputFile && `Output file: ${block.outputFile}`,
+      block.truncated && 'Incomplete: yes',
+    ].filter(Boolean).join('\n');
+    const status = block.status || 'unknown';
+    const statusClass = /^(completed|done|success|succeeded)$/i.test(status)
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+      : /^(failed|error|cancelled)$/i.test(status)
+        ? 'border-red-200 bg-red-50 text-red-700'
+        : 'border-amber-200 bg-amber-50 text-amber-700';
+
+    return (
+      <div className="rounded-2xl border border-amber-200/80 bg-amber-50/55">
+        <div className="flex flex-wrap items-center gap-2 border-b border-amber-100/90 px-4 py-3">
+          <span className="text-xs font-semibold text-amber-800">任务通知</span>
+          {block.status && <span className={`rounded-full border px-2 py-0.5 text-[11px] ${statusClass}`}>{block.status}</span>}
+          {block.truncated && <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] text-orange-700">不完整</span>}
+          <button onClick={() => onCopy(copyText, copyId)} className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900">
+            {copiedId === copyId ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copiedId === copyId ? '已复制' : '复制'}
+          </button>
+        </div>
+        <div className="space-y-2 px-4 py-3">
+          <div className="text-sm font-medium text-slate-900">{block.summary || block.taskId || '任务状态已更新'}</div>
+          {block.note && <div className="text-xs leading-5 text-slate-600">{block.note}</div>}
+          {(block.taskId || block.toolUseId || block.outputFile) && (
+            <div className="space-y-1 text-[11px] text-slate-500">
+              {block.taskId && <div className="font-mono">task: {block.taskId}</div>}
+              {block.toolUseId && <div className="font-mono">tool: {block.toolUseId}</div>}
+              {block.outputFile && <div className="break-all font-mono">output: {block.outputFile}</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const hasOutput = !!block.stdout?.trim();
+  const hasError = !!block.stderr?.trim();
+  const copyText = [
+    block.hasStdout && `stdout:\n${block.stdout || ''}`,
+    block.hasStderr && `stderr:\n${block.stderr || ''}`,
+    block.exitCode && `exit code: ${block.exitCode}`,
+    block.truncated && 'incomplete: yes',
+  ].filter(Boolean).join('\n\n');
+  const title = block.hasStderr && !block.hasStdout ? 'Bash 错误' : 'Bash 输出';
+  const isLong = (block.stdout?.length || 0) + (block.stderr?.length || 0) > 500;
+
+  return (
+    <div className="rounded-2xl border border-violet-200/80 bg-violet-50/55">
+      <div className="flex flex-wrap items-center gap-2 border-b border-violet-100/90 px-4 py-3">
+        <TerminalSquare className="h-3.5 w-3.5 text-violet-700" />
+        <span className="text-xs font-semibold text-violet-800">{title}</span>
+        {block.exitCode && <span className="rounded-full border border-violet-200 bg-white px-2 py-0.5 font-mono text-[11px] text-violet-700">exit {block.exitCode}</span>}
+        {block.truncated && <span className="rounded-full border border-orange-200 bg-orange-50 px-2 py-0.5 text-[11px] text-orange-700">不完整</span>}
+        <div className="ml-auto flex items-center gap-2">
+          {isLong && (
+            <button onClick={() => setExpanded((current) => !current)} className="flex items-center gap-1 text-xs text-violet-700 hover:text-violet-900">
+              {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              {expanded ? '收起' : '展开'}
+            </button>
+          )}
+          <button onClick={() => onCopy(copyText, copyId)} className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-900">
+            {copiedId === copyId ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+            {copiedId === copyId ? '已复制' : '复制'}
+          </button>
+        </div>
+      </div>
+      <div className={`space-y-3 overflow-auto px-4 py-3 ${expanded ? 'max-h-none' : 'max-h-44'}`}>
+        {block.hasStdout && (
+          <div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-violet-600">stdout</div>
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-700">{hasOutput ? block.stdout : '无输出'}</pre>
+          </div>
+        )}
+        {block.hasStderr && (
+          <div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-red-600">stderr</div>
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-slate-700">{hasError ? block.stderr : '无错误输出'}</pre>
+          </div>
+        )}
+        {!block.hasStdout && !block.hasStderr && <div className="text-sm text-slate-500">无输出</div>}
+      </div>
     </div>
   );
 }

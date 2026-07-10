@@ -25,8 +25,9 @@ import {
   deriveRenderablePromptThreads,
   groupSubagentLaunches,
 } from '../lib/conversationModel';
-import { cleanSessionText, formatDuration, formatTimestamp, formatTokenPair, truncateText } from '../lib/sessionUtils';
+import { cleanSessionText, formatDuration, formatTimestamp, formatTokenPair, parseSessionText, truncateText } from '../lib/sessionUtils';
 import {
+  ControlPlanePromptBlock,
   EmptyState,
   InfoField,
   JsonOrTextBlock,
@@ -314,6 +315,16 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
           <MetricCard icon={DollarSign} color="text-emerald-600" value={`$${trace.cost.toFixed(4)}`} label="总成本" />
         </div>
 
+        {trace.recapText && (
+          <div className={surfaceClass}>
+            <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-500">
+              <FileText className="h-4 w-4 text-slate-400" />
+              Recap
+            </h3>
+            <p className="text-sm text-slate-700 whitespace-pre-wrap">{trace.recapText}</p>
+          </div>
+        )}
+
         <div className={surfaceClass}>
           <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
             <Box className="h-4 w-4 text-slate-400" />
@@ -356,19 +367,32 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   }) => {
     const threadKey = `${scopePrefix}-thread-${thread.id}`;
     const isThreadExpanded = expandedLLMs.has(threadKey);
-    const cleanedPrompt = cleanSessionText(thread.prompt || '');
+    const promptBlocks = parseSessionText(thread.prompt || '');
+    const textBlocks = promptBlocks.filter((block) => block.kind === 'text');
+    const cleanedPrompt = textBlocks.map((block) => block.text).join('\n\n').trim();
+    const controlBlocks = promptBlocks.filter((block) => block.kind !== 'text');
     const formatCommandLabel = (name: string) => (name.startsWith('/') ? name : `/${name}`);
     const commandLabel = thread.command?.name ? formatCommandLabel(thread.command.name) : '';
     const commandPreview = thread.command?.name
       ? `${commandLabel}${thread.command.args ? ` ${thread.command.args}` : ''}`
       : '';
-    const promptPreviewSource = cleanedPrompt || commandPreview;
+    const firstControl = controlBlocks[0];
+    const controlPreview = firstControl?.kind === 'task-notification'
+      ? firstControl.summary || [firstControl.status, firstControl.taskId].filter(Boolean).join(' · ') || '任务通知'
+      : firstControl?.kind === 'bash-output'
+        ? firstControl.hasStderr && !firstControl.hasStdout
+          ? 'Bash 错误'
+          : firstControl.stdout?.trim() || firstControl.stderr?.trim()
+            ? 'Bash 输出'
+            : 'Bash 输出（无输出）'
+        : '';
+    const promptPreviewSource = cleanedPrompt || controlPreview || commandPreview;
     const promptPreview = promptPreviewSource
       ? `${promptPreviewSource.replace(/\n/g, ' ').slice(0, 80)}${promptPreviewSource.length > 80 ? '...' : ''}`
       : '无提示词';
     const hasCommandOnlyRecords = !!thread.commandOnlyRecords && thread.commandOnlyRecords.length > 0;
     const showCommandBlock = isKindVisible('user') && detailLevel !== 'summary' && !!thread.command?.name && !hasCommandOnlyRecords;
-    const showPromptBlock = isKindVisible('user') && detailLevel !== 'summary' && cleanedPrompt.length > 0;
+    const showPromptBlocks = isKindVisible('user') && detailLevel !== 'summary' && promptBlocks.length > 0;
     const showCommandOnlyBlocks = isKindVisible('user') && detailLevel !== 'summary' && hasCommandOnlyRecords;
 
     const visibleTurns = thread.assistantTurns
@@ -385,7 +409,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       })
       .filter(({ visibleChildRecords }) => visibleChildRecords.length > 0);
 
-    if (!showCommandBlock && !showPromptBlock && !showCommandOnlyBlocks && visibleTurns.length === 0) {
+    if (!showCommandBlock && !showPromptBlocks && !showCommandOnlyBlocks && visibleTurns.length === 0) {
       return null;
     }
 
@@ -568,23 +592,37 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                   )}
                 </div>
               ))}
-              {showPromptBlock && (
-                <div className="rounded-2xl border border-slate-200/80 bg-slate-50/80">
-                  <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-3">
-                    <span className="text-xs font-semibold text-cyan-700 flex items-center gap-1">
-                      <MessageSquare className="w-3 h-3" /> 用户提示词
-                    </span>
-                    <button
-                      onClick={() => copyToClipboard(thread.prompt || '', `${threadKey}-prompt`)}
-                      className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
-                    >
-                      {copiedId === `${threadKey}-prompt` ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                      {copiedId === `${threadKey}-prompt` ? '已复制' : '复制'}
-                    </button>
-                  </div>
-                  <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">{cleanedPrompt}</div>
-                </div>
-              )}
+              {showPromptBlocks && promptBlocks.map((block, blockIdx) => {
+                const blockKey = `${threadKey}-prompt-${blockIdx}`;
+                if (block.kind === 'text') {
+                  return (
+                    <div key={blockKey} className="rounded-2xl border border-slate-200/80 bg-slate-50/80">
+                      <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-3">
+                        <span className="text-xs font-semibold text-cyan-700 flex items-center gap-1">
+                          <MessageSquare className="w-3 h-3" /> 用户提示词
+                        </span>
+                        <button
+                          onClick={() => copyToClipboard(block.text, blockKey)}
+                          className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
+                        >
+                          {copiedId === blockKey ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          {copiedId === blockKey ? '已复制' : '复制'}
+                        </button>
+                      </div>
+                      <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">{block.text}</div>
+                    </div>
+                  );
+                }
+                return (
+                  <ControlPlanePromptBlock
+                    key={blockKey}
+                    block={block}
+                    copyId={blockKey}
+                    copiedId={copiedId}
+                    onCopy={copyToClipboard}
+                  />
+                );
+              })}
             </div>
 
             <div className="space-y-3 p-4 bg-white ml-4 border-l-2 border-cyan-100/80 rounded-bl-2xl">
