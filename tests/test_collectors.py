@@ -118,7 +118,9 @@ def test_process_line_prefers_cwd_over_decoded_path(tmp_path: Path):
 
 
 def test_process_line_uses_decoded_path_when_cwd_missing(tmp_path: Path):
-    project_dir = tmp_path / "C:-Users-real-repo"
+    # Real Claude Code encoding of C:\Users\real\repo (colon-free so the
+    # directory name survives pathlib joins on Windows hosts too)
+    project_dir = tmp_path / "C--Users-real-repo"
     project_dir.mkdir()
     log_path = project_dir / "session-1.jsonl"
 

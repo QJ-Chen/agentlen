@@ -1227,6 +1227,9 @@ class ClaudeCodeCollector(LogCollector):
         return paths
 
     def _decode_path(self, encoded_name: str) -> str:
+        # Decode purely from the encoded name: a leading drive letter means a
+        # Windows path; otherwise the path is POSIX regardless of the host OS
+        # (logs may be synced from another machine).
         parts = [part for part in encoded_name.split("-") if part]
         if not parts:
             return ""
@@ -1236,8 +1239,6 @@ class ClaudeCodeCollector(LogCollector):
             drive = drive_match.group(1).upper()
             return str(PureWindowsPath(f"{drive}:/", *parts[1:]))
 
-        if os.name == "nt":
-            return str(PureWindowsPath("/", *parts))
         return "/" + "/".join(parts)
 
     def create_incremental_state(self, log_path: Path) -> Dict[str, Any]:
