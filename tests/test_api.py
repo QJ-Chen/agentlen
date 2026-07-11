@@ -483,6 +483,91 @@ class HierarchyApiTests(unittest.TestCase):
         ])
 
 
+class TraceSaveCaptureStorage:
+    def __init__(self):
+        self.saved_traces = []
+        self.saved_batches = []
+
+    def save_trace(self, trace):
+        self.saved_traces.append(trace)
+
+    def save_traces(self, traces):
+        self.saved_batches.append(traces)
+
+
+class TraceIngestApiTests(unittest.TestCase):
+    def setUp(self):
+        self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        self.realtime_patcher = patch.object(api, "RealtimeUpdater", StubRealtimeUpdater)
+        self.realtime_patcher.start()
+        self.storage = TraceSaveCaptureStorage()
+        api.storage = self.storage
+        api.realtime_updater = None
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+        self.realtime_patcher.stop()
+
+    def test_create_trace_accepts_json_body(self):
+        response = self.client.post(
+            "/api/v1/traces",
+            json={
+                "trace_id": "trace-1",
+                "agent_name": "claude-code",
+                "session_id": "session-1",
+                "start_time": "2026-07-11T00:00:00Z",
+                "tool_calls": [{"name": "Read", "input": {"file_path": "E:\\demo\\a.txt"}}],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok", "trace_id": "trace-1"})
+        self.assertEqual(len(self.storage.saved_traces), 1)
+        saved = self.storage.saved_traces[0]
+        self.assertEqual(saved["trace_id"], "trace-1")
+        self.assertEqual(saved["platform"], "claude-code")
+        self.assertEqual(saved["tool_calls"][0]["name"], "Read")
+
+    def test_create_trace_rejects_missing_required_fields(self):
+        response = self.client.post("/api/v1/traces", json={"trace_id": "trace-1"})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.storage.saved_traces, [])
+
+    def test_create_traces_batch_accepts_json_body(self):
+        response = self.client.post(
+            "/api/v1/traces/batch",
+            json={
+                "session_id": "session-1",
+                "traces": [
+                    {
+                        "trace_id": "trace-1",
+                        "agent_name": "claude-code",
+                        "session_id": "session-1",
+                        "start_time": "2026-07-11T00:00:00Z",
+                    },
+                    {
+                        "trace_id": "trace-2",
+                        "agent_name": "claude-code",
+                        "session_id": "session-1",
+                        "start_time": "2026-07-11T00:01:00Z",
+                    },
+                ],
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok", "count": 2})
+        self.assertEqual(len(self.storage.saved_batches), 1)
+        self.assertEqual(
+            [trace["trace_id"] for trace in self.storage.saved_batches[0]],
+            ["trace-1", "trace-2"],
+        )
+
+
 class AsyncIngestApiTests(unittest.TestCase):
     def setUp(self):
         self.original_storage = api.storage

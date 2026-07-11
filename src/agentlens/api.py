@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
@@ -29,7 +30,22 @@ from agentlens.storage import CLAUDE_CODE_PLATFORM, SQLiteStorage
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="AgentLens API", version="0.2.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Start background ingestion on boot and stop it on shutdown."""
+    global realtime_updater
+    realtime_updater = RealtimeUpdater(storage, interval=5.0)
+    realtime_updater.start()
+    logger.info("Scheduled background Claude Code ingestion warmup")
+    yield
+    if realtime_updater:
+        realtime_updater.stop()
+        realtime_updater = None
+        logger.info("Stopped Claude Code session log watching")
+
+
+app = FastAPI(title="AgentLens API", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -553,22 +569,37 @@ def _build_node_children(node_id: str) -> List[Dict[str, Any]]:
         },
     ]
 
-@app.on_event("startup")
-async def startup_event():
-    """Start the API immediately and warm ingestion in the background."""
-    global realtime_updater
-    realtime_updater = RealtimeUpdater(storage, interval=5.0)
-    realtime_updater.start()
-    logger.info("Scheduled background Claude Code ingestion warmup")
+class TraceIn(BaseModel):
+    trace_id: str
+    platform: Literal["claude-code"] = CLAUDE_CODE_PLATFORM
+    agent_name: str
+    session_id: str
+    start_time: str
+    end_time: Optional[str] = None
+    duration_ms: int = 0
+    model: str = ""
+    prompt: str = ""
+    response: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cost_usd: float = 0.0
+    tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    llm_calls: List[Dict[str, Any]] = Field(default_factory=list)
+    status: str = "success"
+    error_message: str = ""
+    project_path: Optional[str] = None
+    session_file_path: Optional[str] = None
+    role: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    global realtime_updater
-    if realtime_updater:
-        realtime_updater.stop()
-        realtime_updater = None
-        logger.info("Stopped Claude Code session log watching")
+class TraceBatchIn(BaseModel):
+    traces: List[TraceIn]
+    session_id: str
 
 
 @app.get("/")
