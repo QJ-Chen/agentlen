@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import warnings
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -852,9 +853,19 @@ class SQLiteStorage(Storage):
 
 
 class JSONLStorage(Storage):
-    """Simple JSONL storage implementation kept for compatibility."""
+    """Simple JSONL storage implementation kept for compatibility.
+
+    .. deprecated::
+        Nothing in the product uses this backend; ``SQLiteStorage`` is the
+        canonical store. This class will be removed in a future release.
+    """
 
     def __init__(self, file_path: str = "~/.agentlens/traces.jsonl"):
+        warnings.warn(
+            "JSONLStorage is deprecated and will be removed; use SQLiteStorage",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.file_path = Path(file_path).expanduser()
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
 
