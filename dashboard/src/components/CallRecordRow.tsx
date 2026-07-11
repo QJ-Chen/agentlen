@@ -1,8 +1,9 @@
 import React from 'react';
-import { ChevronDown, ChevronRight, FileText, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, Wrench } from 'lucide-react';
 import type { LLMCall, ToolCall } from '../types';
 import { getCallRenderState, type DetailLevel } from '../lib/callClassification';
 import { cleanSessionText, formatDuration, formatTokenPair } from '../lib/sessionUtils';
+import { ToolCallCard } from './ToolCallCard';
 import { JsonOrTextBlock, StructuredResponseBlock } from './TraceDetailBlocks';
 
 interface CallRecordRowProps {
@@ -31,7 +32,7 @@ const CallRecordRowInner: React.FC<CallRecordRowProps> = ({
   onCopy,
 }) => {
   const isCallExpanded = detailLevel !== 'summary' && isExpanded;
-  const { responseStyle, formattedToolResponse, toolResultAppendix } = getCallRenderState(call, toolScope, allLLMCalls);
+  const { relatedTools, responseStyle, formattedToolResponse } = getCallRenderState(call, toolScope, allLLMCalls);
 
   return (
     <div className={`rounded-2xl border-l-4 transition-all ${isCallExpanded ? 'bg-white border-violet-300 shadow-md shadow-violet-100/40 ring-1 ring-violet-100' : 'bg-slate-50/80 border-slate-200/80 border-l-slate-300'}`}>
@@ -84,24 +85,26 @@ const CallRecordRowInner: React.FC<CallRecordRowProps> = ({
               onCopy={onCopy}
             />
           )}
-          {formattedToolResponse && (
+          {formattedToolResponse && relatedTools.length > 0 && (
+            <div className="space-y-2">
+              {relatedTools.map((tool, toolIdx) => (
+                <ToolCallCard
+                  key={tool.id || `${callKey}-tool-${toolIdx}`}
+                  tool={tool}
+                  copyId={`llm-tool-${callKey}-${toolIdx}`}
+                  copiedId={copiedId}
+                  onCopy={onCopy}
+                />
+              ))}
+            </div>
+          )}
+          {formattedToolResponse && relatedTools.length === 0 && (
             <StructuredResponseBlock
               title="工具调用"
               color="violet"
               icon={Wrench}
               value={formattedToolResponse}
               copyId={`llm-tool-calls-${callKey}`}
-              copiedId={copiedId}
-              onCopy={onCopy}
-            />
-          )}
-          {toolResultAppendix && (
-            <StructuredResponseBlock
-              title="工具结果"
-              color="emerald"
-              icon={FileText}
-              value={toolResultAppendix}
-              copyId={`llm-tool-results-${callKey}`}
               copiedId={copiedId}
               onCopy={onCopy}
             />
