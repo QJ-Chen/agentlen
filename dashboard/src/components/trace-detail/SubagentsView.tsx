@@ -25,15 +25,15 @@ function statusLabel(status: Trace['status']): string {
 function statusBadgeTone(status: Trace['status']): string {
   switch (status) {
     case 'completed':
-      return 'bg-emerald-500/15 text-emerald-300';
+      return 'bg-emerald-100 text-emerald-700';
     case 'failed':
-      return 'bg-red-500/15 text-red-300';
+      return 'bg-red-100 text-red-700';
     case 'running':
-      return 'bg-amber-500/15 text-amber-300';
+      return 'bg-amber-100 text-amber-700';
     case 'cancelled':
-      return 'bg-slate-500/15 text-slate-300';
+      return 'bg-slate-200/70 text-slate-500';
     default:
-      return 'bg-slate-500/15 text-slate-300';
+      return 'bg-slate-200/70 text-slate-500';
   }
 }
 

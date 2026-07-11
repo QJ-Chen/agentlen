@@ -47,7 +47,7 @@ export function TaskStatusView({ trace }: { trace: Trace & { raw?: RawSessionRec
             <div key={task.taskId} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-2">
               <div className="flex items-center justify-between gap-3">
                 <span className="font-mono text-xs text-slate-600 truncate">{task.taskId}</span>
-                <span className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs text-blue-700">{task.status || 'unknown'}</span>
+                <span className="rounded-full border border-clay-100 bg-clay-50 px-2.5 py-1 text-xs text-clay-700">{task.status || 'unknown'}</span>
               </div>
               {task.subject && <div className="text-sm font-medium text-slate-900">{task.subject}</div>}
               {task.description && <div className="text-xs text-slate-500 whitespace-pre-wrap">{task.description}</div>}

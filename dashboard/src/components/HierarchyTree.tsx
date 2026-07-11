@@ -137,7 +137,7 @@ function NodeRow({
     <div>
       <div
         className={`flex items-center gap-2 rounded-xl px-2 py-1.5 text-sm transition-colors ${
-          isSelected ? 'bg-blue-50 text-blue-900' : 'hover:bg-slate-50'
+          isSelected ? 'bg-clay-50 text-clay-800 ring-1 ring-clay-100' : 'hover:bg-slate-50'
         }`}
         style={{ paddingLeft: depth * INDENT + 8 }}
       >

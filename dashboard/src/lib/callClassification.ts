@@ -54,7 +54,7 @@ export function classifyCallResponse(call: LLMCall, relatedTools: ToolCall[]): C
       label: '无响应',
       icon: Clock,
       accent: 'text-slate-400',
-      badge: 'bg-slate-500/15 text-slate-300',
+      badge: 'bg-slate-200/60 text-slate-500',
       preview: '无响应内容',
     };
   }
@@ -63,8 +63,8 @@ export function classifyCallResponse(call: LLMCall, relatedTools: ToolCall[]): C
       kind: 'thinking',
       label: '思考',
       icon: Sparkles,
-      accent: 'text-amber-300',
-      badge: 'bg-amber-500/15 text-amber-300',
+      accent: 'text-amber-700',
+      badge: 'bg-amber-100 text-amber-700',
       preview: response.replace(/^\[thinking\]\s*/, ''),
     };
   }
@@ -74,8 +74,8 @@ export function classifyCallResponse(call: LLMCall, relatedTools: ToolCall[]): C
       kind: 'tool',
       label: '工具调用',
       icon: Wrench,
-      accent: 'text-violet-300',
-      badge: 'bg-violet-500/15 text-violet-300',
+      accent: 'text-violet-700',
+      badge: 'bg-violet-100 text-violet-700',
       // "ToolName: basename" for file-operating tools (Read, Edit, Write, etc.)
       preview:
         relatedTools.length > 0
@@ -94,8 +94,8 @@ export function classifyCallResponse(call: LLMCall, relatedTools: ToolCall[]): C
     kind: 'text',
     label: '文本响应',
     icon: MessageSquare,
-    accent: 'text-cyan-300',
-    badge: 'bg-cyan-500/15 text-cyan-300',
+    accent: 'text-teal-700',
+    badge: 'bg-teal-100 text-teal-700',
     preview: response,
   };
 }

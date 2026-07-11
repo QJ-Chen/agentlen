@@ -51,29 +51,23 @@ function StatsCard({
   value,
   subtext,
   icon: Icon,
-  color,
   detail,
 }: {
   title: string;
   value: string;
   subtext: string;
   icon: ComponentType<{ className?: string }>;
-  color: string;
   detail?: string;
 }) {
   return (
-    <div className="rounded-3xl border border-slate-200/80 bg-white px-5 py-4 shadow-sm shadow-slate-200/70">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-[11px] uppercase tracking-[0.16em] text-slate-400">{title}</p>
-          <p className="mt-2 text-2xl font-semibold leading-none text-slate-950 md:text-[2rem]">{value}</p>
-          <p className="mt-2 text-sm text-slate-500">{subtext}</p>
-          {detail && <p className="mt-1 text-xs text-slate-400 line-clamp-2">{detail}</p>}
-        </div>
-        <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl ${color}`}>
-          <Icon className="h-5 w-5 text-white" />
-        </div>
+    <div className="rounded-2xl border border-ink-100 bg-white px-5 py-4 shadow-sm shadow-ink-100/60">
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-ink-700/60">
+        <Icon className="h-3.5 w-3.5 text-clay-600" />
+        {title}
       </div>
+      <p className="mt-2 font-mono text-2xl font-semibold leading-none tracking-tight text-ink-900 md:text-[1.75rem]">{value}</p>
+      <p className="mt-2 text-sm text-ink-700/80">{subtext}</p>
+      {detail && <p className="mt-1 text-xs text-ink-700/60 line-clamp-2">{detail}</p>}
     </div>
   );
 }
@@ -383,7 +377,7 @@ function App() {
         <div className="max-w-md rounded-3xl border border-red-200 bg-white p-8 text-center shadow-sm shadow-slate-200">
           <h1 className="text-2xl font-semibold text-red-600 mb-4">连接错误</h1>
           <p className="text-slate-600 mb-4">{error}</p>
-          <button onClick={() => void fetchData()} className="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-xl transition-colors shadow-sm">
+          <button onClick={() => void fetchData()} className="px-4 py-2 bg-clay-600 text-white hover:bg-clay-700 rounded-xl transition-colors shadow-sm">
             重试
           </button>
         </div>
@@ -392,22 +386,25 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200/80 bg-white/90 backdrop-blur">
+    <div className="min-h-screen text-ink-900">
+      <header className="border-b border-ink-100 bg-white/92 backdrop-blur">
         <div className="mx-auto max-w-7xl px-4 py-4">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-blue-50 text-blue-600 ring-1 ring-blue-100">
-                <LayoutDashboard className="h-6 w-6" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-ink-900 text-clay-200">
+                <LayoutDashboard className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <h1 className="text-2xl font-semibold text-slate-950">AgentLens</h1>
+                <h1 className="text-xl font-bold tracking-tight text-ink-900">
+                  Agent<span className="text-clay-600">Lens</span>
+                </h1>
+                <p className="font-mono text-[11px] text-ink-700/60">local session intelligence · ~/.claude</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-sm text-slate-500">
-              {stats && <span className="hidden xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
-              <button onClick={() => void fetchData()} className="rounded-xl border border-slate-200 bg-white p-2 text-slate-600 hover:border-slate-300 hover:bg-slate-50 transition-colors shadow-sm" disabled={loading}>
+            <div className="flex items-center gap-2 text-sm text-ink-700/70">
+              {stats && <span className="hidden font-mono text-xs xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
+              <button onClick={() => void fetchData()} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
                 <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
             </div>
@@ -416,7 +413,7 @@ function App() {
       </header>
 
       {stats && (
-        <section className="border-b border-slate-200/80 bg-transparent">
+        <section className="border-b border-ink-100 bg-transparent">
           <div className="mx-auto max-w-7xl px-4 py-4">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <StatsCard
@@ -424,28 +421,24 @@ function App() {
                 value={formatInteger(stats.total_sessions)}
                 subtext={`${rangedProjectCount} projects`}
                 icon={Activity}
-                color="bg-blue-500"
               />
               <StatsCard
                 title="Tokens"
                 value={formatTokens(stats.total_tokens)}
                 subtext={`${formatInteger(stats.total_llm_calls)} LLM calls`}
                 icon={BarChart3}
-                color="bg-violet-500"
               />
               <StatsCard
                 title="Cost"
                 value={`$${stats.total_cost.toFixed(2)}`}
                 subtext={`${formatInteger(stats.total_tool_calls)} tools`}
                 icon={LayoutDashboard}
-                color="bg-emerald-500"
               />
               <StatsCard
                 title="Avg duration"
                 value={formatCompactDuration(stats.avg_duration_ms)}
                 subtext={`${stats.active_days.length} active days`}
                 icon={Terminal}
-                color="bg-orange-500"
               />
             </div>
           </div>
@@ -453,11 +446,11 @@ function App() {
       )}
 
       <main className="mx-auto max-w-7xl px-4 py-5 space-y-5">
-        <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70">
+        <section className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm shadow-ink-100/60">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm shadow-blue-200">
-                <Activity className="h-4 w-4" />
+              <div className="inline-flex items-center gap-2 rounded-xl bg-ink-900 px-4 py-2 text-sm font-medium text-paper shadow-sm">
+                <Activity className="h-4 w-4 text-clay-200" />
                 Sessions Inbox
               </div>
             </div>
@@ -473,7 +466,7 @@ function App() {
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
                   max={endDate || undefined}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:bg-white focus:outline-none"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-clay-500 focus:bg-white focus:outline-none"
                   aria-label="Start date"
                 />
                 <span className="text-sm text-slate-400">→</span>
@@ -482,7 +475,7 @@ function App() {
                   value={endDate}
                   onChange={(e) => setEndDate(e.target.value)}
                   min={startDate || undefined}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:bg-white focus:outline-none"
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-clay-500 focus:bg-white focus:outline-none"
                   aria-label="End date"
                 />
                 {hasActiveDateRange && (
@@ -506,7 +499,7 @@ function App() {
                     placeholder="Search session, project, or prompt…"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none"
+                    className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-clay-500 focus:bg-white focus:outline-none"
                   />
                 </div>
 
@@ -546,12 +539,12 @@ function App() {
               <span className="text-slate-900">{formatInteger(traces.length)}</span> imported sessions
             </span>
             {hasActiveDateRange && (
-              <span className="rounded-full border border-violet-100 bg-violet-50 px-3 py-1 text-violet-700">
+              <span className="rounded-full border border-clay-100 bg-clay-50 px-3 py-1 text-clay-700">
                 Date range: {activeDateRangeLabel}
               </span>
             )}
             {hasActiveSessionFilters && (
-              <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700 border border-blue-100">Inbox filters active</span>
+              <span className="rounded-full bg-clay-50 px-3 py-1 text-clay-700 border border-clay-100">Inbox filters active</span>
             )}
           </div>
         </section>
@@ -560,7 +553,7 @@ function App() {
           className="grid grid-cols-1 gap-6 lg:[grid-template-columns:minmax(240px,var(--left-panel-width))_12px_minmax(0,1fr)] lg:items-start"
           style={{ '--left-panel-width': `${leftPanelWidth}px` } as React.CSSProperties}
         >
-          <section className="rounded-3xl border border-slate-200/80 bg-white p-4 shadow-sm shadow-slate-200/70 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+          <section className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm shadow-ink-100/60 lg:sticky lg:top-6 lg:self-start lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
             <HierarchyTree
               root={hierarchyRoot}
               expanded={expandedNodeIds}
@@ -577,7 +570,7 @@ function App() {
             aria-orientation="vertical"
             aria-label="Resize left panel"
           >
-            <div className="h-full min-h-[24rem] w-1 rounded-full bg-slate-300 shadow-sm transition-colors hover:bg-blue-400" />
+            <div className="h-full min-h-[24rem] w-1 rounded-full bg-slate-300 shadow-sm transition-colors hover:bg-clay-500" />
           </div>
 
           <section className="space-y-6 min-w-0">

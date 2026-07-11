@@ -131,12 +131,12 @@ export function PromptThreadGroup({
         registerJumpRef?.(thread.promptId || thread.id, node);
       }}
       className={`rounded-2xl border-l-4 transition-all ${
-        isThreadExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/40 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'
+        isThreadExpanded ? 'bg-white border-clay-500 shadow-md shadow-ink-100/50 ring-1 ring-clay-100' : 'bg-white/70 border-ink-100 border-l-ink-200'
       }`}
     >
       <button onClick={() => onToggle(threadKey)} className="w-full px-4 py-3.5 flex items-center gap-3 text-left">
-        <div className="w-8 h-8 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
-          <span className="text-xs text-cyan-400 font-mono">{index + 1}</span>
+        <div className="w-8 h-8 rounded-lg bg-ink-50 flex items-center justify-center ring-1 ring-ink-100">
+          <span className="text-xs text-ink-700 font-mono font-semibold">{String(index + 1).padStart(2, '0')}</span>
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-slate-900 truncate">{promptPreview}</div>
@@ -168,7 +168,7 @@ export function PromptThreadGroup({
       </button>
 
       {isThreadExpanded && (
-        <div className="border-t border-cyan-100/80 bg-white">
+        <div className="border-t border-ink-100 bg-white">
           <div className="space-y-3 p-4">
             {showCommandBlock && thread.command && thread.command.name && (
               <div className="rounded-2xl border border-sky-200/80 bg-sky-50/70">
@@ -236,7 +236,7 @@ export function PromptThreadGroup({
             })}
           </div>
 
-          <div className="space-y-3 p-4 bg-white ml-4 border-l-2 border-cyan-100/80 rounded-bl-2xl">
+          <div className="space-y-3 p-4 bg-white ml-4 border-l-2 border-ink-100 rounded-bl-2xl">
             {visibleTurns.map(({ turn, visibleChildRecords }, turnIdx) => {
               const turnKey = `${threadKey}-turn-${turn.messageId || turn.id || turnIdx}`;
               const isSingleChild = visibleChildRecords.length === 1;
@@ -249,19 +249,24 @@ export function PromptThreadGroup({
                 });
               }
 
-              // Multi-record turns render flat — no collapsible wrapper. A thin
-              // header chip + left rail marks which records belong to one response.
+              // Multi-record turns render flat — no collapsible wrapper. A tape
+              // counter chip + dashed recording rail marks which records belong
+              // to one response.
               return (
-                <div key={turnKey} className="rounded-2xl border-l-2 border-cyan-200/80 bg-cyan-50/20">
+                <div
+                  key={turnKey}
+                  className="rounded-r-xl bg-clay-50/30"
+                  style={{ borderLeft: '2px dashed var(--color-clay-200)' }}
+                >
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-1 text-[11px] text-slate-400">
-                    <span className="rounded-full border border-cyan-200/80 bg-white px-2 py-0.5 font-mono text-cyan-600">
-                      回复 {turnIdx + 1}
+                    <span className="rounded bg-ink-900 px-1.5 py-0.5 font-mono text-[10px] font-semibold tracking-[0.14em] text-clay-200">
+                      REC {String(turnIdx + 1).padStart(2, '0')}
                     </span>
                     <span>{visibleChildRecords.length} 条记录</span>
                     {turn.totalTokens > 0 && (
                       <>
                         <span>·</span>
-                        <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>
+                        <span className="font-mono">{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>
                       </>
                     )}
                     {detailLevel === 'verbose' && turn.messageId && (
@@ -274,7 +279,7 @@ export function PromptThreadGroup({
                         <button
                           type="button"
                           onClick={() => onToggleMany(childKeys, !allExpanded)}
-                          className="ml-auto rounded-lg border border-cyan-200 bg-white px-2 py-0.5 text-[11px] text-cyan-700 hover:border-cyan-300 hover:bg-cyan-50 shadow-sm"
+                          className="ml-auto rounded-lg border border-clay-200 bg-white px-2 py-0.5 text-[11px] text-clay-700 hover:border-clay-500 hover:bg-clay-50 shadow-sm"
                         >
                           {allExpanded ? '折叠详情' : '展开详情'}
                         </button>

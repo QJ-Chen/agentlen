@@ -28,7 +28,7 @@ export function OverviewView({
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <MetricCard icon={Clock} color="text-blue-600" value={formatDuration(trace.duration)} label="会话时长" />
+        <MetricCard icon={Clock} color="text-clay-600" value={formatDuration(trace.duration)} label="会话时长" />
         <MetricCard icon={MessageSquare} color="text-cyan-600" value={String(promptGroupCount)} label="提示词分组" />
         <MetricCard icon={Wrench} color="text-violet-600" value={String(toolCount)} label="工具调用" />
         <MetricCard icon={DollarSign} color="text-emerald-600" value={`$${trace.cost.toFixed(4)}`} label="总成本" />

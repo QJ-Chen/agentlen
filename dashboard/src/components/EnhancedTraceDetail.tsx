@@ -222,7 +222,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
               onClick={() => setDetailLevel(level)}
               className={`px-2.5 py-1 rounded-md text-xs transition-colors ${
                 detailLevel === level
-                  ? 'bg-blue-600 text-white shadow-sm shadow-blue-100'
+                  ? 'bg-ink-900 text-white shadow-sm'
                   : 'bg-white text-slate-600 border border-slate-200 hover:border-slate-300 hover:text-slate-900'
               }`}
             >
@@ -238,7 +238,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
               onClick={() => toggleVisibleKind(kind)}
               className={`px-2.5 py-1 rounded-full text-xs transition-colors ${
                 isKindVisible(kind)
-                  ? 'bg-cyan-50 text-cyan-700 border border-cyan-200'
+                  ? 'bg-clay-50 text-clay-700 border border-clay-200'
                   : 'bg-white text-slate-500 border border-slate-200 hover:border-slate-300 hover:text-slate-700'
               }`}
             >
@@ -265,7 +265,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`px-3 py-1.5 rounded-lg text-sm flex items-center gap-2 transition-colors ${
-                activeTab === tab.id ? 'bg-blue-600 text-white shadow-sm shadow-blue-100' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+                activeTab === tab.id ? 'bg-ink-900 text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
               }`}
             >
               <tab.icon className="w-4 h-4" />
