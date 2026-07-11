@@ -240,8 +240,6 @@ export function PromptThreadGroup({
             {visibleTurns.map(({ turn, visibleChildRecords }, turnIdx) => {
               const turnKey = `${threadKey}-turn-${turn.messageId || turn.id || turnIdx}`;
               const isSingleChild = visibleChildRecords.length === 1;
-              const isTurnExpanded = detailLevel !== 'summary' && (isSingleChild ? true : expandedLLMs.has(turnKey));
-
               if (isSingleChild) {
                 return renderChildRecord({
                   call: visibleChildRecords[0],
@@ -251,65 +249,48 @@ export function PromptThreadGroup({
                 });
               }
 
+              // Multi-record turns render flat — no collapsible wrapper. A thin
+              // header chip + left rail marks which records belong to one response.
               return (
-                <div key={turnKey} className={`rounded-2xl border-l-4 ${isTurnExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/35 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'}`}>
-                  <div className="w-full px-4 py-3.5 flex items-center gap-3">
-                    <button
-                      onClick={() => onToggle(turnKey)}
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                    >
-                      <div className="w-7 h-7 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
-                        <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm text-cyan-700 font-medium">Assistant turn</div>
-                        <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                          <span>{visibleChildRecords.length} child records</span>
-                          {turn.totalTokens > 0 && (
-                            <>
-                              <span>·</span>
-                              <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>
-                            </>
-                          )}
-                          {detailLevel === 'verbose' && turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
-                        </div>
-                      </div>
-                    </button>
-                    {detailLevel !== 'summary' && visibleChildRecords.length > 0 && (() => {
+                <div key={turnKey} className="rounded-2xl border-l-2 border-cyan-200/80 bg-cyan-50/20">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-1 text-[11px] text-slate-400">
+                    <span className="rounded-full border border-cyan-200/80 bg-white px-2 py-0.5 font-mono text-cyan-600">
+                      回复 {turnIdx + 1}
+                    </span>
+                    <span>{visibleChildRecords.length} 条记录</span>
+                    {turn.totalTokens > 0 && (
+                      <>
+                        <span>·</span>
+                        <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>
+                      </>
+                    )}
+                    {detailLevel === 'verbose' && turn.messageId && (
+                      <span className="font-mono">message.id: {turn.messageId}</span>
+                    )}
+                    {detailLevel !== 'summary' && (() => {
                       const childKeys = visibleChildRecords.map((_call, callIdx) => `${turnKey}-call-${callIdx}`);
                       const allExpanded = childKeys.every((key) => expandedLLMs.has(key));
                       return (
                         <button
                           type="button"
                           onClick={() => onToggleMany(childKeys, !allExpanded)}
-                          className="shrink-0 rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[11px] text-cyan-700 hover:border-cyan-300 hover:bg-cyan-50 shadow-sm"
+                          className="ml-auto rounded-lg border border-cyan-200 bg-white px-2 py-0.5 text-[11px] text-cyan-700 hover:border-cyan-300 hover:bg-cyan-50 shadow-sm"
                         >
                           {allExpanded ? '折叠详情' : '展开详情'}
                         </button>
                       );
                     })()}
-                    <button
-                      type="button"
-                      onClick={() => onToggle(turnKey)}
-                      aria-label={isTurnExpanded ? 'Collapse assistant turn' : 'Expand assistant turn'}
-                      className="shrink-0 rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-slate-300 hover:text-slate-900 shadow-sm"
-                    >
-                      {detailLevel !== 'summary' && (isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
-                    </button>
                   </div>
-
-                  {detailLevel !== 'summary' && isTurnExpanded && (
-                    <div className="ml-5 border-l-2 border-cyan-100/80 space-y-2 p-3 bg-cyan-50/35 rounded-bl-2xl">
-                      {visibleChildRecords.map((call, callIdx) =>
-                        renderChildRecord({
-                          call,
-                          callIdx,
-                          parentKey: turnKey,
-                          showTokenUsage: false,
-                        }),
-                      )}
-                    </div>
-                  )}
+                  <div className="space-y-2 px-2 pb-2">
+                    {visibleChildRecords.map((call, callIdx) =>
+                      renderChildRecord({
+                        call,
+                        callIdx,
+                        parentKey: turnKey,
+                        showTokenUsage: false,
+                      }),
+                    )}
+                  </div>
                 </div>
               );
             })}
