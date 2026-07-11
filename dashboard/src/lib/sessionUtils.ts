@@ -307,3 +307,8 @@ export function shortProjectPath(path?: string | null): string | null {
   if (segments.length <= 2) return path;
   return segments.slice(-2).join(separator);
 }
+
+export function fileBasename(path: string): string {
+  const segments = path.split(/[/\\]+/).filter(Boolean);
+  return segments[segments.length - 1] ?? path;
+}

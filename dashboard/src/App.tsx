@@ -14,6 +14,7 @@ import type { OverviewStats, HierarchyNode, ProjectMetadata } from './types';
 import { NodeDetailPane } from './components/NodeDetailPane';
 import { HierarchyTree } from './components/HierarchyTree';
 import type { HierarchyChildrenResponse, HierarchyResponse, ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
+import { API_URL } from './lib/api';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
   cleanSessionText,
@@ -24,8 +25,6 @@ import {
   toStartOfLocalDayISOString,
 } from './lib/sessionUtils';
 import './index.css';
-
-const API_URL = 'http://localhost:8080';
 
 function mergeNodeChildren(node: HierarchyNode, nodeId: string, children: HierarchyNode[]): HierarchyNode {
   if (node.id === nodeId) {

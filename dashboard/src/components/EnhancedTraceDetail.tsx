@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   Bot,
@@ -15,17 +15,19 @@ import {
   Hash,
   Layers,
   MessageSquare,
-  Sparkles,
   User,
   Wrench,
 } from 'lucide-react';
 import type { LLMCall, PromptThread, ToolCall, Trace } from '../types';
+import { API_URL } from '../lib/api';
+import { classifyCallResponse, classifyResponseKind } from '../lib/callClassification';
 import {
   assistantTurnsToPromptThreads,
   deriveRenderablePromptThreads,
   groupSubagentLaunches,
 } from '../lib/conversationModel';
 import { cleanSessionText, formatDuration, formatTimestamp, formatTokenPair, parseSessionText, truncateText } from '../lib/sessionUtils';
+import { CallRecordRow } from './CallRecordRow';
 import {
   ControlPlanePromptBlock,
   EmptyState,
@@ -100,17 +102,17 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       fractionalSecondDigits: 3,
     });
 
-  const copyToClipboard = async (text: string, id: string) => {
+  const copyToClipboard = useCallback(async (text: string, id: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedId(id);
     setTimeout(() => setCopiedId(null), 2000);
-  };
+  }, []);
 
   const openPath = async (target: 'project' | 'session_folder') => {
     setOpeningTarget(target);
     setOpenError(null);
     try {
-      const response = await fetch(`http://localhost:8080/api/v1/sessions/${trace.sessionId}/open?target=${target}`, {
+      const response = await fetch(`${API_URL}/api/v1/sessions/${trace.sessionId}/open?target=${target}`, {
         method: 'POST',
       });
       if (!response.ok) {
@@ -143,110 +145,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     [promptThreads, assistantTurns, allLLMCalls],
   );
 
-  const getRelatedToolCalls = (call: LLMCall, toolScope: ToolCall[] = trace.tools || []): ToolCall[] => {
-    if (!toolScope || !call.startTime) return [];
-    const byRecordId = toolScope.filter((tool) => tool.assistantRecordId && tool.assistantRecordId === call.id);
-    if (byRecordId.length > 0) {
-      return byRecordId;
-    }
-    const byMessageId = toolScope.filter((tool) => tool.assistantMessageId && tool.assistantMessageId === call.messageId);
-    if (byMessageId.length > 0) {
-      return byMessageId;
-    }
-    const callIndex = allLLMCalls.findIndex((candidate) => candidate.id === call.id);
-    const nextCall = allLLMCalls[callIndex + 1];
-
-    return toolScope.filter((tool) => {
-      if (!tool.startTime) return false;
-      const afterThisCall = tool.startTime >= call.startTime;
-      const beforeNextCall = !nextCall || tool.startTime < nextCall.startTime;
-      return afterThisCall && beforeNextCall;
-    });
-  };
-
-  const classifyCallResponse = (call: LLMCall, relatedTools: ToolCall[]) => {
-    const response = cleanSessionText(call.response || '');
-    if (!response) {
-      return {
-        kind: 'empty' as const,
-        label: '无响应',
-        icon: Clock,
-        accent: 'text-slate-400',
-        badge: 'bg-slate-500/15 text-slate-300',
-        preview: '无响应内容',
-      };
-    }
-    if (response.startsWith('[thinking]')) {
-      return {
-        kind: 'thinking' as const,
-        label: '思考',
-        icon: Sparkles,
-        accent: 'text-amber-300',
-        badge: 'bg-amber-500/15 text-amber-300',
-        preview: response.replace(/^\[thinking\]\s*/, ''),
-      };
-    }
-    const toolResponseMatch = response.match(/^\[([^\]]+)\]\s*/);
-    if (toolResponseMatch) {
-      return {
-        kind: 'tool' as const,
-        label: '工具调用',
-        icon: Wrench,
-        accent: 'text-violet-300',
-        badge: 'bg-violet-500/15 text-violet-300',
-        preview:
-          relatedTools.length > 0
-            ? relatedTools.map((tool) => tool.name).join(' · ')
-            : toolResponseMatch[1],
-      };
-    }
-    return {
-      kind: 'text' as const,
-      label: '文本响应',
-      icon: MessageSquare,
-      accent: 'text-cyan-300',
-      badge: 'bg-cyan-500/15 text-cyan-300',
-      preview: response,
-    };
-  };
-
-  const getCallRenderState = (call: LLMCall, toolScope: ToolCall[] = trace.tools || []) => {
-    const relatedTools = getRelatedToolCalls(call, toolScope);
-    const responseStyle = classifyCallResponse(call, relatedTools);
-    const formattedToolResponse =
-      responseStyle.kind === 'tool'
-        ? relatedTools.map((tool) => ({
-            name: tool.name,
-            input: tool.input,
-          }))
-        : null;
-    const toolResultAppendix =
-      formattedToolResponse && relatedTools.some((tool) => tool.output != null || tool.error)
-        ? relatedTools.map((tool) => ({
-            name: tool.name,
-            result: tool.output,
-            error: tool.error,
-          }))
-        : null;
-    // Basename of file_path inputs for any file-operating tool (Read, Edit, Write, etc.),
-    // shown collapsed in the row and again above the "工具调用" card
-    const toolFileLabel =
-      formattedToolResponse
-        ? relatedTools
-            .filter((t) => typeof t.input === 'object' && t.input && 'file_path' in t.input)
-            .map((t) => `${(t.input as { file_path: string }).file_path.split('/').pop()}`)
-            .join(' · ')
-        : undefined;
-
-    return {
-      relatedTools,
-      responseStyle,
-      formattedToolResponse,
-      toolResultAppendix,
-      toolFileLabel,
-    };
-  };
-
   const isKindVisible = (kind: ReplayMessageKind) => visibleKinds[kind];
 
   const toggleVisibleKind = (kind: ReplayMessageKind) => {
@@ -270,12 +168,14 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
 
   const shouldShowReplayFilters = activeTab === 'llm' || activeTab === 'subagents';
 
-  const toggleLLM = (key: string) => {
-    const newSet = new Set(expandedLLMs);
-    if (newSet.has(key)) newSet.delete(key);
-    else newSet.add(key);
-    setExpandedLLMs(newSet);
-  };
+  const toggleLLM = useCallback((key: string) => {
+    setExpandedLLMs((current) => {
+      const newSet = new Set(current);
+      if (newSet.has(key)) newSet.delete(key);
+      else newSet.add(key);
+      return newSet;
+    });
+  }, []);
 
   useEffect(() => {
     if (activeTab !== 'llm' || !pendingLaunchPromptId) {
@@ -410,10 +310,9 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
 
     const visibleTurns = thread.assistantTurns
       .map((turn) => {
-        const visibleChildRecords = turn.childRecords.filter((call) => {
-          const { responseStyle } = getCallRenderState(call, toolScope);
-          return isKindVisible(responseStyle.kind);
-        });
+        const visibleChildRecords = turn.childRecords.filter((call) =>
+          isKindVisible(classifyResponseKind(cleanSessionText(call.response || ''))),
+        );
 
         return {
           turn,
@@ -442,92 +341,20 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       showTokenUsage?: boolean;
     }) => {
       const callKey = `${parentKey}-call-${callIdx}`;
-      const isCallExpanded = detailLevel !== 'summary' && expandedLLMs.has(callKey);
-      const { responseStyle, formattedToolResponse, toolResultAppendix, toolFileLabel } = getCallRenderState(call, toolScope);
-
       return (
-        <div key={callKey} className={`rounded-2xl border-l-4 transition-all ${isCallExpanded ? 'bg-white border-violet-300 shadow-md shadow-violet-100/40 ring-1 ring-violet-100' : 'bg-slate-50/80 border-slate-200/80 border-l-slate-300'}`}>
-          <button onClick={() => toggleLLM(callKey)} className="w-full px-3 py-2 flex items-center gap-2 text-left">
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center ring-1 ring-white ${responseStyle.badge}`}>
-              <responseStyle.icon className={`w-3.5 h-3.5 ${responseStyle.accent}`} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${responseStyle.badge}`}>{responseStyle.label}</span>
-                <div className={`text-sm truncate ${responseStyle.accent}`}>
-                  {responseStyle.preview
-                    ? `${responseStyle.preview.replace(/\n/g, ' ').slice(0, 60)}${responseStyle.preview.length > 60 ? '...' : ''}`
-                    : '无响应内容'}
-                </div>
-              </div>
-              <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
-                {call.model && call.model !== 'unknown' && <span>{call.model}</span>}
-                {showTokenUsage && call.totalTokens > 0 && (
-                  <>
-                    {call.model && call.model !== 'unknown' && <span>·</span>}
-                    <span>{formatTokenPair(call.inputTokens, call.outputTokens)}</span>
-                  </>
-                )}
-                {call.duration > 0 && <span>·</span>}
-                {call.duration > 0 && <span>{formatDuration(call.duration)}</span>}
-                {toolFileLabel && detailLevel !== 'summary' && (
-                  <>
-                    <span>·</span>
-                    <span className="font-mono text-slate-600">{toolFileLabel}</span>
-                  </>
-                )}
-                {detailLevel === 'verbose' && call.sourceEventIds && call.sourceEventIds[0] && (
-                  <>
-                    <span>·</span>
-                    <span className="font-mono">event {call.sourceEventIds[0]}</span>
-                  </>
-                )}
-              </div>
-            </div>
-            {detailLevel !== 'summary' && (isCallExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
-          </button>
-
-          {detailLevel !== 'summary' && isCallExpanded && (
-            <div className="ml-6 border-l-2 border-violet-100 px-3 pb-3 pt-3 space-y-3 bg-violet-50/35 rounded-bl-2xl">
-              {call.response && !formattedToolResponse && (
-                <JsonOrTextBlock
-                  title={responseStyle.label}
-                  value={
-                    responseStyle.kind === 'thinking'
-                      ? cleanSessionText(call.response).replace(/^\[thinking\]\s*/, '')
-                      : cleanSessionText(call.response)
-                  }
-                  copyId={`llm-response-${callKey}`}
-                  copiedId={copiedId}
-                  onCopy={copyToClipboard}
-                />
-              )}
-              {formattedToolResponse && (
-                <StructuredResponseBlock
-                  title="工具调用"
-                  subtitle={toolFileLabel}
-                  color="violet"
-                  icon={Wrench}
-                  value={formattedToolResponse}
-                  copyId={`llm-tool-calls-${callKey}`}
-                  copiedId={copiedId}
-                  onCopy={copyToClipboard}
-                />
-              )}
-              {toolResultAppendix && (
-                <StructuredResponseBlock
-                  title="工具结果"
-                  color="emerald"
-                  icon={FileText}
-                  value={toolResultAppendix}
-                  copyId={`llm-tool-results-${callKey}`}
-                  copiedId={copiedId}
-                  onCopy={copyToClipboard}
-                />
-              )}
-            </div>
-          )}
-        </div>
+        <CallRecordRow
+          key={callKey}
+          call={call}
+          callKey={callKey}
+          toolScope={toolScope}
+          allLLMCalls={allLLMCalls}
+          detailLevel={detailLevel}
+          isExpanded={expandedLLMs.has(callKey)}
+          showTokenUsage={showTokenUsage}
+          copiedId={copiedId}
+          onToggle={toggleLLM}
+          onCopy={copyToClipboard}
+        />
       );
     };
 

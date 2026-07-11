@@ -268,7 +268,6 @@ export function JsonOrTextBlock({
 
 export function StructuredResponseBlock({
   title,
-  subtitle,
   color,
   icon: Icon,
   value,
@@ -277,7 +276,6 @@ export function StructuredResponseBlock({
   onCopy,
 }: {
   title: string;
-  subtitle?: string;
   color: 'violet' | 'emerald';
   icon: ComponentType<{ className?: string }>;
   value: unknown;
@@ -312,11 +310,6 @@ export function StructuredResponseBlock({
           {copiedId === copyId ? '已复制' : '复制'}
         </button>
       </div>
-      {subtitle && (
-        <div className="mb-2 rounded-xl border border-white/60 bg-white/80 px-3 py-2">
-          <span className="font-mono text-xs text-slate-600 break-all">{subtitle}</span>
-        </div>
-      )}
       <div className="overflow-hidden rounded-xl border border-white/60 bg-white/80">
         <pre className={`max-h-60 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs ${palette.text}`}>{JSON.stringify(value, null, 2)}</pre>
       </div>
