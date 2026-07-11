@@ -26,7 +26,14 @@ CLAUDE_IMAGE_CACHE_DIRS = [
 ]
 
 CLAUDE_CODE_PLATFORM = "claude-code"
-CLAUDE_CODE_PRICING = {"input_per_1m": 3.0, "output_per_1m": 15.0}
+# Cache rates follow the API's standard ratios: reads ~0.1x base input,
+# writes ~1.25x base input (5-minute TTL).
+CLAUDE_CODE_PRICING = {
+    "input_per_1m": 3.0,
+    "output_per_1m": 15.0,
+    "cache_read_per_1m": 0.3,
+    "cache_write_per_1m": 3.75,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -139,12 +146,21 @@ def merge_tool_calls(existing: List[Dict[str, Any]], new_calls: List[Dict[str, A
     return merged
 
 
-def calc_cost(platform: str, input_tokens: int, output_tokens: int) -> float:
+def calc_cost(
+    platform: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> float:
     if platform != CLAUDE_CODE_PLATFORM:
         raise ValueError(f"Unsupported platform: {platform}")
-    return (input_tokens / 1_000_000) * CLAUDE_CODE_PRICING["input_per_1m"] + (
-        output_tokens / 1_000_000
-    ) * CLAUDE_CODE_PRICING["output_per_1m"]
+    return (
+        (input_tokens / 1_000_000) * CLAUDE_CODE_PRICING["input_per_1m"]
+        + (output_tokens / 1_000_000) * CLAUDE_CODE_PRICING["output_per_1m"]
+        + (cache_read_tokens / 1_000_000) * CLAUDE_CODE_PRICING["cache_read_per_1m"]
+        + (cache_creation_tokens / 1_000_000) * CLAUDE_CODE_PRICING["cache_write_per_1m"]
+    )
 
 
 def parse_iso_timestamp(value: Any) -> Optional[datetime]:
@@ -565,6 +581,20 @@ class SessionAggregator:
             session["current_assistant_turn"] = None
             return
 
+        # Child records carry a single log timestamp, so each record's duration
+        # is derived from the gap to the next record (the last one gets the
+        # turn's end boundary, which equals its own start when unknown).
+        for idx, record in enumerate(child_records):
+            next_start = (
+                child_records[idx + 1].get("start_time")
+                if idx + 1 < len(child_records)
+                else turn.get("end_time")
+            )
+            derived = duration_ms_from_times(record.get("start_time"), next_start)
+            if derived > 0:
+                record["end_time"] = next_start
+                record["duration_ms"] = derived
+
         turn_data = {
             "id": turn.get("id"),
             "message_id": turn.get("message_id"),
@@ -574,6 +604,8 @@ class SessionAggregator:
             "end_time": turn.get("end_time") or turn.get("start_time"),
             "input_tokens": int(turn.get("input_tokens") or 0),
             "output_tokens": int(turn.get("output_tokens") or 0),
+            "cache_read_tokens": int(turn.get("cache_read_tokens") or 0),
+            "cache_creation_tokens": int(turn.get("cache_creation_tokens") or 0),
             "cost_usd": float(turn.get("cost_usd") or 0.0),
             "tool_call_count": self._assistant_turn_tool_call_count(session, turn),
             "source_event_ids": list(turn.get("source_event_ids") or []),
@@ -683,6 +715,8 @@ class SessionAggregator:
                 )
                 current_turn["input_tokens"] = int(message.get("input_tokens") or 0)
                 current_turn["output_tokens"] = int(message.get("output_tokens") or 0)
+                current_turn["cache_read_tokens"] = int(message.get("cache_read_tokens") or 0)
+                current_turn["cache_creation_tokens"] = int(message.get("cache_creation_tokens") or 0)
                 current_turn["cost_usd"] = float(message.get("cost_usd") or 0.0)
                 current_turn["model"] = message.get("model") or current_turn.get("model")
                 current_turn["end_time"] = message.get("start_time") or current_turn.get("end_time")
@@ -699,6 +733,8 @@ class SessionAggregator:
                     "end_time": message.get("start_time"),
                     "input_tokens": int(message.get("input_tokens") or 0),
                     "output_tokens": int(message.get("output_tokens") or 0),
+                    "cache_read_tokens": int(message.get("cache_read_tokens") or 0),
+                    "cache_creation_tokens": int(message.get("cache_creation_tokens") or 0),
                     "cost_usd": float(message.get("cost_usd") or 0.0),
                     "prompt": last_user_prompt[:500] if last_user_prompt else None,
                     "prompt_id": message.get("prompt_id") or message.get("promptId"),
@@ -722,7 +758,15 @@ class SessionAggregator:
                 "end_time": message.get("start_time"),
                 "input_tokens": int(message.get("input_tokens") or 0),
                 "output_tokens": int(message.get("output_tokens") or 0),
-                "cost_usd": float(message.get("cost_usd") or 0.0),
+                "cache_read_tokens": int(message.get("cache_read_tokens") or 0),
+                "cache_creation_tokens": int(message.get("cache_creation_tokens") or 0),
+                "cost_usd": calc_cost(
+                    CLAUDE_CODE_PLATFORM,
+                    int(message.get("input_tokens") or 0),
+                    int(message.get("output_tokens") or 0),
+                    int(message.get("cache_read_tokens") or 0),
+                    int(message.get("cache_creation_tokens") or 0),
+                ),
                 "prompt": last_user_prompt[:500] if last_user_prompt else None,
                 "response": response,
                 "prompt_id": message.get("prompt_id") or message.get("promptId") or "",
@@ -1476,6 +1520,8 @@ class ClaudeCodeCollector(LogCollector):
             "content_blocks": content_blocks,
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
+            "cache_read_tokens": usage.get("cache_read_input_tokens", 0),
+            "cache_creation_tokens": usage.get("cache_creation_input_tokens", 0),
             "cost_usd": 0,
             "tool_calls": tool_calls,
             "vision_references": [

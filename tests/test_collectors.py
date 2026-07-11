@@ -186,6 +186,40 @@ def test_consecutive_assistant_records_with_same_message_id_group_under_one_pare
     }
 
 
+def test_child_records_carry_cache_tokens_and_derived_durations(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    collector.process_line(
+        state,
+        '{"type":"user","timestamp":"2026-07-11T08:00:00Z","message":{"role":"user","content":"do a thing"}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"rec-1","timestamp":"2026-07-11T08:00:01.000Z","message":{"id":"msg_cache","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"working"}],"usage":{"input_tokens":100,"output_tokens":50,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000}}}',
+    )
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"rec-2","timestamp":"2026-07-11T08:00:03.500Z","message":{"id":"msg_cache","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":80,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000}}}',
+    )
+
+    turn = state["aggregator"].get_traces()[0]["llm_calls"][0]
+
+    assert turn["cache_read_tokens"] == 40000
+    assert turn["cache_creation_tokens"] == 2000
+    children = turn["child_records"]
+    assert children[0]["cache_read_tokens"] == 40000
+    assert children[0]["cache_creation_tokens"] == 2000
+    assert children[0]["cost_usd"] > 0
+    # first record's duration spans to the next record's timestamp
+    assert children[0]["duration_ms"] == 2500
+    assert children[0]["end_time"] == "2026-07-11T08:00:03.500Z"
+
+
 def test_process_line_preserves_structured_command_on_assistant_turn(tmp_path: Path):
     project_dir = tmp_path / "-Users-example-repo"
     project_dir.mkdir()

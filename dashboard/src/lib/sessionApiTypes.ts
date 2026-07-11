@@ -58,6 +58,8 @@ export interface RawLLMCall {
   duration_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   cost_usd?: number;
   prompt?: string;
   response?: string;

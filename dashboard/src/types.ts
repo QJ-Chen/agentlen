@@ -27,6 +27,8 @@ export interface LLMCall {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
   cost: number;
   status: 'success' | 'error' | 'streaming';
   prompt?: string;
