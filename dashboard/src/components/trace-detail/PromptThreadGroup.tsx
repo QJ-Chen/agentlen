@@ -17,6 +17,7 @@ export interface PromptThreadGroupProps {
   detailLevel: DetailLevel;
   expandedLLMs: Set<string>;
   copiedId: string | null;
+  sessionId?: string;
   isKindVisible: (kind: ReplayMessageKind) => boolean;
   onToggle: (key: string) => void;
   onToggleMany: (keys: string[], expand: boolean) => void;
@@ -33,6 +34,7 @@ export function PromptThreadGroup({
   detailLevel,
   expandedLLMs,
   copiedId,
+  sessionId,
   isKindVisible,
   onToggle,
   onToggleMany,
@@ -115,6 +117,7 @@ export function PromptThreadGroup({
         isExpanded={expandedLLMs.has(callKey)}
         showTokenUsage={showTokenUsage}
         copiedId={copiedId}
+        sessionId={sessionId}
         onToggle={onToggle}
         onCopy={onCopy}
       />

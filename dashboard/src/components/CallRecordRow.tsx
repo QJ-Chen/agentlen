@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Wrench, Zap } from 'lucide-react';
 import type { LLMCall, ToolCall } from '../types';
 import { getCallRenderState, type DetailLevel } from '../lib/callClassification';
 import { cleanSessionText, formatDuration, formatTokenPair, formatTokens } from '../lib/sessionUtils';
+import { SourceEventsBlock } from './SourceEventsBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { JsonOrTextBlock, StructuredResponseBlock } from './TraceDetailBlocks';
 
@@ -53,6 +54,7 @@ interface CallRecordRowProps {
   isExpanded: boolean;
   showTokenUsage: boolean;
   copiedId: string | null;
+  sessionId?: string;
   onToggle: (key: string) => void;
   onCopy: (text: string, id: string) => void;
 }
@@ -66,6 +68,7 @@ const CallRecordRowInner: React.FC<CallRecordRowProps> = ({
   isExpanded,
   showTokenUsage,
   copiedId,
+  sessionId,
   onToggle,
   onCopy,
 }) => {
@@ -163,6 +166,9 @@ const CallRecordRowInner: React.FC<CallRecordRowProps> = ({
               onCopy={onCopy}
             />
           )}
+          {sessionId && (call.sourceEventIds?.length ?? 0) > 0 && (
+            <SourceEventsBlock sessionId={sessionId} eventIds={call.sourceEventIds!} />
+          )}
         </div>
       )}
     </div>
@@ -180,6 +186,7 @@ export const CallRecordRow = React.memo(CallRecordRowInner, (prev, next) => {
     prev.detailLevel !== next.detailLevel ||
     prev.isExpanded !== next.isExpanded ||
     prev.showTokenUsage !== next.showTokenUsage ||
+    prev.sessionId !== next.sessionId ||
     prev.onToggle !== next.onToggle ||
     prev.onCopy !== next.onCopy
   ) {

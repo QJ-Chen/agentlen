@@ -691,6 +691,69 @@ def get_session(session_id: str):
     return session
 
 
+_MAX_EVENT_IDS = 50
+
+
+@app.get("/api/v1/sessions/{session_id}/events")
+def get_session_events(session_id: str, ids: str = Query(..., min_length=1)):
+    """Return raw JSONL log records for the given event UUIDs (provenance view)."""
+    session = storage.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session_file_path = session.get("session_file_path") or ""
+    if not session_file_path:
+        raise HTTPException(status_code=400, detail="Session has no source log file")
+
+    log_path = Path(session_file_path).expanduser()
+    if not log_path.exists():
+        raise HTTPException(status_code=404, detail=f"Session log not found: {log_path}")
+
+    wanted = {item.strip() for item in ids.split(",") if item.strip()}
+    if not wanted:
+        raise HTTPException(status_code=400, detail="No event ids provided")
+    if len(wanted) > _MAX_EVENT_IDS:
+        raise HTTPException(status_code=400, detail=f"At most {_MAX_EVENT_IDS} event ids per request")
+
+    # Main session log first, then subagent transcripts under <session>/subagents/.
+    candidate_logs = [log_path]
+    subagents_dir = log_path.parent / log_path.stem / "subagents"
+    if subagents_dir.exists():
+        candidate_logs.extend(sorted(subagents_dir.glob("agent-*.jsonl")))
+
+    events: Dict[str, Dict[str, Any]] = {}
+    for candidate in candidate_logs:
+        if len(events) == len(wanted):
+            break
+        try:
+            with open(candidate, "r", encoding="utf-8") as handle:
+                for line in handle:
+                    if len(events) == len(wanted):
+                        break
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    try:
+                        record = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        continue
+                    uuid = record.get("uuid")
+                    if uuid in wanted and uuid not in events:
+                        events[uuid] = {
+                            "uuid": uuid,
+                            "source_file": str(candidate),
+                            "record": record,
+                        }
+        except OSError:
+            continue
+
+    return {
+        "session_id": session_id,
+        "events": [events[uuid] for uuid in wanted if uuid in events],
+        "missing": sorted(wanted - set(events)),
+    }
+
+
 @app.get("/api/v1/projects/by-path")
 def get_project_metadata(project_path: str = Query(..., min_length=1)):
     metadata = _build_project_metadata(project_path)

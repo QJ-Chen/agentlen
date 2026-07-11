@@ -44,6 +44,7 @@ export function SubagentsView({
   detailLevel,
   expandedLLMs,
   copiedId,
+  sessionId,
   isKindVisible,
   onToggle,
   onToggleMany,
@@ -56,6 +57,7 @@ export function SubagentsView({
   detailLevel: DetailLevel;
   expandedLLMs: Set<string>;
   copiedId: string | null;
+  sessionId?: string;
   isKindVisible: (kind: ReplayMessageKind) => boolean;
   onToggle: (key: string) => void;
   onToggleMany: (keys: string[], expand: boolean) => void;
@@ -275,6 +277,7 @@ export function SubagentsView({
                                     detailLevel={detailLevel}
                                     expandedLLMs={expandedLLMs}
                                     copiedId={copiedId}
+                                    sessionId={sessionId}
                                     isKindVisible={isKindVisible}
                                     onToggle={onToggle}
                                     onToggleMany={onToggleMany}
@@ -295,6 +298,7 @@ export function SubagentsView({
                                     detailLevel={detailLevel}
                                     expandedLLMs={expandedLLMs}
                                     copiedId={copiedId}
+                                    sessionId={sessionId}
                                     isKindVisible={isKindVisible}
                                     onToggle={onToggle}
                                     onToggleMany={onToggleMany}

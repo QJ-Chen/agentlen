@@ -483,6 +483,85 @@ class HierarchyApiTests(unittest.TestCase):
         ])
 
 
+class SessionEventsApiTests(unittest.TestCase):
+    def setUp(self):
+        self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        self.realtime_patcher = patch.object(api, "RealtimeUpdater", StubRealtimeUpdater)
+        self.realtime_patcher.start()
+        api.realtime_updater = None
+        self.tmp_dir = Path(self._testMethodName)
+        self.tmp_dir.mkdir(exist_ok=True)
+        self.log_path = self.tmp_dir / "session-1.jsonl"
+        self.log_path.write_text(
+            '{"uuid":"evt-1","type":"user","message":{"role":"user","content":"hello"}}\n'
+            "not json at all\n"
+            '{"uuid":"evt-2","type":"assistant","message":{"role":"assistant","content":[]}}\n',
+            encoding="utf-8",
+        )
+        subagents_dir = self.tmp_dir / "session-1" / "subagents"
+        subagents_dir.mkdir(parents=True, exist_ok=True)
+        (subagents_dir / "agent-abc.jsonl").write_text(
+            '{"uuid":"evt-sub","type":"assistant","message":{"role":"assistant","content":[]}}\n',
+            encoding="utf-8",
+        )
+        api.storage = StubStorage(
+            {
+                "project_path": str(self.tmp_dir.resolve()),
+                "session_file_path": str(self.log_path.resolve()),
+            }
+        )
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+        self.realtime_patcher.stop()
+        for child in sorted(self.tmp_dir.rglob("*"), reverse=True):
+            if child.is_file():
+                child.unlink()
+            elif child.is_dir():
+                child.rmdir()
+        self.tmp_dir.rmdir()
+
+    def test_returns_raw_records_for_known_uuids(self):
+        response = self.client.get(
+            "/api/v1/sessions/session-1/events",
+            params={"ids": "evt-1,evt-2,evt-nope"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        returned = {event["uuid"]: event for event in payload["events"]}
+        self.assertEqual(set(returned), {"evt-1", "evt-2"})
+        self.assertEqual(returned["evt-1"]["record"]["message"]["content"], "hello")
+        self.assertEqual(payload["missing"], ["evt-nope"])
+
+    def test_falls_back_to_subagent_logs(self):
+        response = self.client.get(
+            "/api/v1/sessions/session-1/events",
+            params={"ids": "evt-sub"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(len(payload["events"]), 1)
+        self.assertIn("agent-abc.jsonl", payload["events"][0]["source_file"])
+        self.assertEqual(payload["missing"], [])
+
+    def test_rejects_unknown_session_and_oversized_requests(self):
+        response = self.client.get(
+            "/api/v1/sessions/missing/events", params={"ids": "evt-1"}
+        )
+        self.assertEqual(response.status_code, 404)
+
+        too_many = ",".join(f"evt-{idx}" for idx in range(51))
+        response = self.client.get(
+            "/api/v1/sessions/session-1/events", params={"ids": too_many}
+        )
+        self.assertEqual(response.status_code, 400)
+
+
 class TraceSaveCaptureStorage:
     def __init__(self):
         self.saved_traces = []
