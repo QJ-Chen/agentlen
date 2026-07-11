@@ -1,43 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  Activity,
-  Bot,
-  Box,
-  Check,
-  ChevronDown,
-  ChevronRight,
-  Clock,
-  Code,
-  Copy,
-  DollarSign,
-  ExternalLink,
-  FileText,
-  Hash,
-  Layers,
-  MessageSquare,
-  User,
-  Wrench,
-} from 'lucide-react';
-import type { LLMCall, PromptThread, ToolCall, Trace } from '../types';
+import { Activity, Bot, Code, FileText, Layers, MessageSquare } from 'lucide-react';
+import type { Trace } from '../types';
 import { API_URL } from '../lib/api';
-import { classifyCallResponse, classifyResponseKind } from '../lib/callClassification';
+import type { DetailLevel } from '../lib/callClassification';
+import { deriveRenderablePromptThreads, groupSubagentLaunches } from '../lib/conversationModel';
+import type { RawSessionRecord } from '../lib/sessionApiTypes';
+import { isThreadVisible } from '../lib/threadVisibility';
+import { EmptyState } from './TraceDetailBlocks';
+import { RawView, TaskStatusView, VisionView } from './trace-detail/AuxViews';
+import { OverviewView } from './trace-detail/OverviewView';
+import { PromptThreadGroup } from './trace-detail/PromptThreadGroup';
+import { SubagentsView } from './trace-detail/SubagentsView';
 import {
-  assistantTurnsToPromptThreads,
-  deriveRenderablePromptThreads,
-  groupSubagentLaunches,
-} from '../lib/conversationModel';
-import { cleanSessionText, formatDuration, formatTimestamp, formatTokenPair, parseSessionText, truncateText } from '../lib/sessionUtils';
-import { CallRecordRow } from './CallRecordRow';
-import {
-  ControlPlanePromptBlock,
-  EmptyState,
-  InfoField,
-  JsonOrTextBlock,
-  MetricCard,
-  PathField,
-  PreviewBlock,
-  StructuredResponseBlock,
-} from './TraceDetailBlocks';
+  DEFAULT_VISIBLE_KINDS,
+  REPLAY_KIND_LABELS,
+  type ReplayMessageKind,
+} from './trace-detail/shared';
 
 interface EnhancedTraceDetailProps {
   trace: Trace;
@@ -46,37 +24,13 @@ interface EnhancedTraceDetailProps {
 }
 
 export type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'vision' | 'raw';
-type DetailLevel = 'summary' | 'standard' | 'verbose';
-type ReplayMessageKind = 'user' | 'thinking' | 'tool' | 'text' | 'empty' | 'subagent';
-type TraceWithRaw = Trace & { raw?: Record<string, unknown> };
-
-const REPLAY_KIND_LABELS: Record<ReplayMessageKind, string> = {
-  user: '用户',
-  thinking: '思考',
-  tool: '工具',
-  text: '文本',
-  empty: '空响应',
-  subagent: 'Subagent',
-};
+type TraceWithRaw = Trace & { raw?: RawSessionRecord };
 
 const DETAIL_LEVEL_LABELS: Record<DetailLevel, string> = {
   summary: '摘要',
   standard: '标准',
   verbose: '详细',
 };
-
-const DEFAULT_VISIBLE_KINDS: Record<ReplayMessageKind, boolean> = {
-  user: true,
-  thinking: true,
-  tool: true,
-  text: true,
-  empty: true,
-  subagent: true,
-};
-
-const PLATFORM_CONFIG = {
-  'claude-code': { name: 'Claude Code', color: 'text-orange-700', bg: 'bg-orange-50 border border-orange-100' },
-} as const;
 
 export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   trace,
@@ -93,14 +47,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   const [openError, setOpenError] = useState<string | null>(null);
   const [pendingLaunchPromptId, setPendingLaunchPromptId] = useState<string | null>(null);
   const llmGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
-
-  const formatTime = (timestamp: number) =>
-    new Date(timestamp).toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      fractionalSecondDigits: 3,
-    });
 
   const copyToClipboard = useCallback(async (text: string, id: string) => {
     await navigator.clipboard.writeText(text);
@@ -145,7 +91,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     [promptThreads, assistantTurns, allLLMCalls],
   );
 
-  const isKindVisible = (kind: ReplayMessageKind) => visibleKinds[kind];
+  const isKindVisible = useCallback((kind: ReplayMessageKind) => visibleKinds[kind], [visibleKinds]);
 
   const toggleVisibleKind = (kind: ReplayMessageKind) => {
     setVisibleKinds((current) => ({
@@ -164,8 +110,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       ? (['user', 'thinking', 'tool', 'text', 'empty', 'subagent'] as ReplayMessageKind[])
       : (['user', 'thinking', 'tool', 'text', 'empty'] as ReplayMessageKind[]);
 
-  const surfaceClass = 'rounded-3xl border border-slate-200/80 bg-white shadow-sm shadow-slate-200/60';
-
   const shouldShowReplayFilters = activeTab === 'llm' || activeTab === 'subagents';
 
   const toggleLLM = useCallback((key: string) => {
@@ -175,6 +119,22 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       else newSet.add(key);
       return newSet;
     });
+  }, []);
+
+  const toggleManyLLMs = useCallback((keys: string[], expand: boolean) => {
+    setExpandedLLMs((current) => {
+      const next = new Set(current);
+      if (expand) {
+        keys.forEach((key) => next.add(key));
+      } else {
+        keys.forEach((key) => next.delete(key));
+      }
+      return next;
+    });
+  }, []);
+
+  const registerJumpRef = useCallback((id: string, node: HTMLDivElement | null) => {
+    llmGroupRefs.current[id] = node;
   }, []);
 
   useEffect(() => {
@@ -189,7 +149,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     setPendingLaunchPromptId(null);
   }, [activeTab, pendingLaunchPromptId, assistantTurnGroups]);
 
-  const jumpToLaunchPrompt = (promptId?: string) => {
+  const jumpToLaunchPrompt = useCallback((promptId?: string) => {
     if (!promptId) return;
     setExpandedLLMs((current) => {
       const next = new Set(current);
@@ -198,7 +158,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     });
     setPendingLaunchPromptId(promptId);
     setActiveTab('llm');
-  };
+  }, []);
 
   useEffect(() => {
     setActiveTab(initialTab);
@@ -213,744 +173,38 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     { id: 'raw', label: '原始', icon: Code },
   ] as const;
 
-  const renderOverview = () => {
-    const platformConfig = PLATFORM_CONFIG[trace.platform] ?? PLATFORM_CONFIG['claude-code'];
-
-    return (
-      <div className="space-y-6">
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <MetricCard icon={Clock} color="text-blue-600" value={formatDuration(trace.duration)} label="会话时长" />
-          <MetricCard icon={MessageSquare} color="text-cyan-600" value={String(assistantTurnGroups.length)} label="提示词分组" />
-          <MetricCard icon={Wrench} color="text-violet-600" value={String(allTools.length)} label="工具调用" />
-          <MetricCard icon={DollarSign} color="text-emerald-600" value={`$${trace.cost.toFixed(4)}`} label="总成本" />
-        </div>
-
-        {trace.recapText && (
-          <div className={surfaceClass}>
-            <h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-500">
-              <FileText className="h-4 w-4 text-slate-400" />
-              Recap
-            </h3>
-            <p className="text-sm text-slate-700 whitespace-pre-wrap">{trace.recapText}</p>
-          </div>
-        )}
-
-        <div className={surfaceClass}>
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <Box className="h-4 w-4 text-slate-400" />
-            Session 信息
-          </h3>
-          <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2 xl:grid-cols-3">
-            <InfoField label="Agent" value={trace.agentName} />
-            <div>
-              <span className="mb-1 block text-xs font-medium uppercase tracking-wide text-slate-400">平台</span>
-              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${platformConfig.bg} ${platformConfig.color}`}>
-                {platformConfig.name}
-              </span>
-            </div>
-            <InfoField label="开始时间" value={formatTime(trace.startTime)} />
-            <InfoField label="修改时间" value={formatTimestamp(trace.lastUpdatedAt || trace.lastRequestTime)} />
-            <InfoField label="最后活动" value={formatTime(trace.lastRequestTime)} />
-            <InfoField label="创建时间" value={formatTimestamp(trace.createdAt || trace.startTime)} />
-            <InfoField label="Session ID" value={trace.sessionId} mono />
-          </div>
-          {trace.projectPath && <PathField label="项目路径" value={trace.projectPath} actionLabel="Open project" actionIcon={ExternalLink} actionPending={openingTarget === 'project'} onAction={() => void openPath('project')} />}
-          {trace.sessionFilePath && <PathField label="Session 文件" value={trace.sessionFilePath} actionLabel="Open folder" actionIcon={ExternalLink} actionPending={openingTarget === 'session_folder'} onAction={() => void openPath('session_folder')} />}
-          {openError && <div className="mt-3 rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600">{openError}</div>}
-        </div>
-      </div>
-    );
-  };
-
-  const renderPromptThreadGroup = ({
-    thread,
-    index,
-    toolScope,
-    scopePrefix,
-    jumpable = false,
-  }: {
-    thread: PromptThread;
-    index: number;
-    toolScope: ToolCall[];
-    scopePrefix: string;
-    jumpable?: boolean;
-  }) => {
-    const threadKey = `${scopePrefix}-thread-${thread.id}`;
-    const isThreadExpanded = expandedLLMs.has(threadKey);
-    const promptBlocks = parseSessionText(thread.prompt || '');
-    const textBlocks = promptBlocks.filter((block) => block.kind === 'text');
-    const cleanedPrompt = textBlocks.map((block) => block.text).join('\n\n').trim();
-    const controlBlocks = promptBlocks.filter((block) => block.kind !== 'text');
-    const formatCommandLabel = (name: string) => (name.startsWith('/') ? name : `/${name}`);
-    const primaryCommand = thread.command?.name
-      ? { name: thread.command.name, args: thread.command.args || '' }
-      : thread.commandOnlyRecords?.[0];
-    const commandLabel = primaryCommand?.name ? formatCommandLabel(primaryCommand.name) : '';
-    const commandPreview = primaryCommand?.name
-      ? `${commandLabel}${primaryCommand.args ? ` ${primaryCommand.args}` : ''}`
-      : '';
-    const firstControl = controlBlocks[0];
-    const controlPreview = firstControl?.kind === 'task-notification'
-      ? firstControl.summary || [firstControl.status, firstControl.taskId].filter(Boolean).join(' · ') || '任务通知'
-      : firstControl?.kind === 'bash-output'
-        ? firstControl.hasStderr && !firstControl.hasStdout
-          ? 'Bash 错误'
-          : firstControl.stdout?.trim() || firstControl.stderr?.trim()
-            ? 'Bash 输出'
-            : 'Bash 输出（无输出）'
-        : '';
-    const promptPreviewSource = cleanedPrompt || controlPreview || commandPreview;
-    const promptPreview = promptPreviewSource
-      ? `${promptPreviewSource.replace(/\n/g, ' ').slice(0, 80)}${promptPreviewSource.length > 80 ? '...' : ''}`
-      : '无提示词';
-    const hasCommandOnlyRecords = !!thread.commandOnlyRecords && thread.commandOnlyRecords.length > 0;
-    const showCommandBlock = isKindVisible('user') && detailLevel !== 'summary' && !!thread.command?.name && !hasCommandOnlyRecords;
-    const showPromptBlocks = isKindVisible('user') && detailLevel !== 'summary' && promptBlocks.length > 0;
-    const showCommandOnlyBlocks = isKindVisible('user') && detailLevel !== 'summary' && hasCommandOnlyRecords;
-
-    const visibleTurns = thread.assistantTurns
-      .map((turn) => {
-        const visibleChildRecords = turn.childRecords.filter((call) =>
-          isKindVisible(classifyResponseKind(cleanSessionText(call.response || ''))),
-        );
-
-        return {
-          turn,
-          visibleChildRecords,
-        };
-      })
-      .filter(({ visibleChildRecords }) => visibleChildRecords.length > 0);
-
-    if (!showCommandBlock && !showPromptBlocks && !showCommandOnlyBlocks && visibleTurns.length === 0) {
-      return null;
-    }
-
-    const threadInputTokens = visibleTurns.reduce((sum, { turn }) => sum + turn.inputTokens, 0);
-    const threadOutputTokens = visibleTurns.reduce((sum, { turn }) => sum + turn.outputTokens, 0);
-    const assistantTurnCount = visibleTurns.length;
-
-    const renderChildRecord = ({
-      call,
-      callIdx,
-      parentKey,
-      showTokenUsage = true,
-    }: {
-      call: LLMCall;
-      callIdx: number;
-      parentKey: string;
-      showTokenUsage?: boolean;
-    }) => {
-      const callKey = `${parentKey}-call-${callIdx}`;
-      return (
-        <CallRecordRow
-          key={callKey}
-          call={call}
-          callKey={callKey}
-          toolScope={toolScope}
-          allLLMCalls={allLLMCalls}
-          detailLevel={detailLevel}
-          isExpanded={expandedLLMs.has(callKey)}
-          showTokenUsage={showTokenUsage}
-          copiedId={copiedId}
-          onToggle={toggleLLM}
-          onCopy={copyToClipboard}
-        />
-      );
-    };
-
-    return (
-      <div
-        key={threadKey}
-        ref={(node) => {
-          if (jumpable) {
-            llmGroupRefs.current[thread.promptId || thread.id] = node;
-          }
-        }}
-        className={`rounded-2xl border-l-4 transition-all ${
-          isThreadExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/40 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'
-        }`}
-      >
-        <button onClick={() => toggleLLM(threadKey)} className="w-full px-4 py-3.5 flex items-center gap-3 text-left">
-          <div className="w-8 h-8 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
-            <span className="text-xs text-cyan-400 font-mono">{index + 1}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-medium text-slate-900 truncate">{promptPreview}</div>
-            <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2">
-              <span>{assistantTurnCount} 个 assistant turn</span>
-              {hasCommandOnlyRecords && (
-                <>
-                  <span>·</span>
-                  <span>{thread.commandOnlyRecords!.length} 个 command</span>
-                </>
-              )}
-              {(threadInputTokens > 0 || threadOutputTokens > 0) && (
-                <>
-                  <span>·</span>
-                  <span>
-                    {formatTokenPair(threadInputTokens, threadOutputTokens)}
-                  </span>
-                </>
-              )}
-              {detailLevel === 'verbose' && thread.promptId && (
-                <>
-                  <span>·</span>
-                  <span className="font-mono">promptId: {thread.promptId}</span>
-                </>
-              )}
-            </div>
-          </div>
-          {isThreadExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />}
-        </button>
-
-        {isThreadExpanded && (
-          <div className="border-t border-cyan-100/80 bg-white">
-            <div className="space-y-3 p-4">
-              {showCommandBlock && thread.command && thread.command.name && (
-                <div className="rounded-2xl border border-sky-200/80 bg-sky-50/70">
-                  <div className="flex items-center gap-2 border-b border-sky-100/80 px-4 py-3">
-                    <span className="text-xs font-semibold text-sky-700 rounded-full border border-sky-200 bg-white px-2 py-0.5">Command</span>
-                    <span className="text-sm font-medium text-sky-900">{formatCommandLabel(thread.command.name)}</span>
-                    {thread.command.args && <span className="text-xs text-slate-600 font-mono break-all">{thread.command.args}</span>}
-                  </div>
-                  {thread.command.message && (
-                    <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">
-                      {thread.command.message}
-                    </div>
-                  )}
-                </div>
-              )}
-              {isKindVisible('user') && detailLevel !== 'summary' && thread.commandOnlyRecords?.map((record, commandIdx) => (
-                <div key={`${threadKey}-cmdonly-${commandIdx}`} className="rounded-2xl border border-sky-200/60 bg-sky-50/50">
-                  <div className="flex items-center gap-2 border-b border-sky-100/80 px-4 py-3">
-                    <span className="text-xs font-semibold text-sky-700 rounded-full border border-sky-200 bg-white px-2 py-0.5">Command</span>
-                    <span className="text-sm font-medium text-sky-900">{formatCommandLabel(record.name)}</span>
-                    {record.args && <span className="text-xs text-slate-600 font-mono break-all">{record.args}</span>}
-                    {record.timestamp && (
-                      <span className="ml-auto text-[11px] text-slate-500 font-mono">
-                        {new Date(record.timestamp).toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                  {record.message && (
-                    <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">
-                      {record.message}
-                    </div>
-                  )}
-                </div>
-              ))}
-              {showPromptBlocks && promptBlocks.map((block, blockIdx) => {
-                const blockKey = `${threadKey}-prompt-${blockIdx}`;
-                if (block.kind === 'text') {
-                  return (
-                    <div key={blockKey} className="rounded-2xl border border-slate-200/80 bg-slate-50/80">
-                      <div className="flex items-center justify-between border-b border-slate-200/80 px-4 py-3">
-                        <span className="text-xs font-semibold text-cyan-700 flex items-center gap-1">
-                          <MessageSquare className="w-3 h-3" /> 用户提示词
-                        </span>
-                        <button
-                          onClick={() => copyToClipboard(block.text, blockKey)}
-                          className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
-                        >
-                          {copiedId === blockKey ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                          {copiedId === blockKey ? '已复制' : '复制'}
-                        </button>
-                      </div>
-                      <div className="px-4 py-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed max-h-24 overflow-auto">{block.text}</div>
-                    </div>
-                  );
-                }
-                return (
-                  <ControlPlanePromptBlock
-                    key={blockKey}
-                    block={block}
-                    copyId={blockKey}
-                    copiedId={copiedId}
-                    onCopy={copyToClipboard}
-                  />
-                );
-              })}
-            </div>
-
-            <div className="space-y-3 p-4 bg-white ml-4 border-l-2 border-cyan-100/80 rounded-bl-2xl">
-              {visibleTurns.map(({ turn, visibleChildRecords }, turnIdx) => {
-                const turnKey = `${threadKey}-turn-${turn.messageId || turn.id || turnIdx}`;
-                const isSingleChild = visibleChildRecords.length === 1;
-                const isTurnExpanded = detailLevel !== 'summary' && (isSingleChild ? true : expandedLLMs.has(turnKey));
-
-                if (isSingleChild) {
-                  return renderChildRecord({
-                    call: visibleChildRecords[0],
-                    callIdx: 0,
-                    parentKey: turnKey,
-                    showTokenUsage: true,
-                  });
-                }
-
-                return (
-                  <div key={turnKey} className={`rounded-2xl border-l-4 ${isTurnExpanded ? 'bg-white border-cyan-300 shadow-md shadow-cyan-100/35 ring-1 ring-cyan-100' : 'bg-slate-50/80 border-slate-200/80 border-l-cyan-200'}`}>
-                    <div className="w-full px-4 py-3.5 flex items-center gap-3">
-                      <button
-                        onClick={() => toggleLLM(turnKey)}
-                        className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                      >
-                        <div className="w-7 h-7 rounded-full bg-cyan-50 flex items-center justify-center ring-1 ring-cyan-100">
-                          <span className="text-[11px] text-cyan-300 font-mono">{turnIdx + 1}</span>
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm text-cyan-700 font-medium">Assistant turn</div>
-                          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1">
-                            <span>{visibleChildRecords.length} child records</span>
-                            {turn.totalTokens > 0 && (
-                              <>
-                                <span>·</span>
-                                <span>{formatTokenPair(turn.inputTokens, turn.outputTokens)}</span>
-                              </>
-                            )}
-                            {detailLevel === 'verbose' && turn.messageId && <span className="font-mono">message.id: {turn.messageId}</span>}
-                          </div>
-                        </div>
-                      </button>
-                      {detailLevel !== 'summary' && visibleChildRecords.length > 0 && (() => {
-                        const childKeys = visibleChildRecords.map((_call, callIdx) => `${turnKey}-call-${callIdx}`);
-                        const allExpanded = childKeys.every((key) => expandedLLMs.has(key));
-                        return (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setExpandedLLMs((current) => {
-                                const next = new Set(current);
-                                if (allExpanded) {
-                                  childKeys.forEach((key) => next.delete(key));
-                                } else {
-                                  childKeys.forEach((key) => next.add(key));
-                                }
-                                return next;
-                              })
-                            }
-                            className="shrink-0 rounded-lg border border-cyan-200 bg-white px-2 py-1 text-[11px] text-cyan-700 hover:border-cyan-300 hover:bg-cyan-50 shadow-sm"
-                          >
-                            {allExpanded ? '折叠详情' : '展开详情'}
-                          </button>
-                        );
-                      })()}
-                      <button
-                        type="button"
-                        onClick={() => toggleLLM(turnKey)}
-                        aria-label={isTurnExpanded ? 'Collapse assistant turn' : 'Expand assistant turn'}
-                        className="shrink-0 rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-slate-300 hover:text-slate-900 shadow-sm"
-                      >
-                        {detailLevel !== 'summary' && (isTurnExpanded ? <ChevronDown className="w-4 h-4 text-gray-400" /> : <ChevronRight className="w-4 h-4 text-gray-400" />)}
-                      </button>
-                    </div>
-
-                    {detailLevel !== 'summary' && isTurnExpanded && (
-                      <div className="ml-5 border-l-2 border-cyan-100/80 space-y-2 p-3 bg-cyan-50/35 rounded-bl-2xl">
-                        {visibleChildRecords.map((call, callIdx) =>
-                          renderChildRecord({
-                            call,
-                            callIdx,
-                            parentKey: turnKey,
-                            showTokenUsage: false,
-                          }),
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
-
   const renderLLM = () => {
     if (allLLMCalls.length === 0) {
       return <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />;
     }
 
-    const renderedThreads = assistantTurnGroups
-      .map((thread, threadIdx) =>
-        renderPromptThreadGroup({
-          thread,
-          index: threadIdx,
-          toolScope: trace.tools || [],
-          scopePrefix: 'main-llm',
-          jumpable: true,
-        }),
-      )
-      .filter(Boolean);
-
-    if (renderedThreads.length === 0) {
+    if (!assistantTurnGroups.some((thread) => isThreadVisible(thread, isKindVisible, detailLevel))) {
       return <EmptyState icon={MessageSquare} label="当前筛选条件下无可见消息" />;
     }
 
-    return <div className="space-y-4">{renderedThreads}</div>;
-  };
-
-  const renderSubagents = () => {
-    if (subagentLogs.length === 0 || !isKindVisible('subagent')) {
-      return <EmptyState icon={Bot} label="当前筛选条件下无可见 Subagent 日志" />;
-    }
-
     return (
       <div className="space-y-4">
-        <div className="space-y-4">
-          {groupedSubagentLogs.map((group, groupIdx) => {
-            const groupKey = `subagent-batch-${group.batchId}`;
-            const isGroupExpanded = expandedLLMs.has(groupKey);
-            const totalInputTokens = group.subagents.reduce((sum, item) => sum + item.inputTokens, 0);
-            const totalOutputTokens = group.subagents.reduce((sum, item) => sum + item.outputTokens, 0);
-            const totalCost = group.subagents.reduce((sum, item) => sum + item.cost, 0);
-            const groupFailedCount = group.subagents.filter((item) => item.status === 'failed').length;
-            const groupRunningCount = group.subagents.filter((item) => item.status === 'running').length;
-            const launchTime = group.launchTimestamp || group.subagents[0]?.startTime || 0;
-
-            return (
-              <div
-                key={group.batchId}
-                className={`overflow-hidden rounded-xl border-l-4 transition-all ${
-                  isGroupExpanded ? 'border-cyan-300 bg-white shadow-md shadow-cyan-100/35 ring-1 ring-cyan-100' : 'border-slate-200/80 border-l-cyan-200 bg-slate-50/80 hover:border-slate-300 hover:bg-white'
-                }`}
-              >
-                <div className="w-full px-4 py-3.5">
-                  <div className="flex items-center gap-3">
-                    <button
-                      onClick={() => toggleLLM(groupKey)}
-                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
-                    >
-                      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-cyan-200 bg-cyan-50 text-[11px] font-mono text-cyan-700">
-                        {groupIdx + 1}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div className="truncate text-sm font-medium text-slate-900">
-                            {(() => {
-                              const launchPrompt = cleanSessionText(group.subagents[0]?.launchUserPrompt || '').replace(/\n/g, ' ').trim();
-                              if (launchPrompt) {
-                                return `${launchPrompt.slice(0, 96)}${launchPrompt.length > 96 ? '...' : ''}`;
-                              }
-                              if (group.subagents.length === 1) {
-                                return group.subagents[0]?.description || group.subagents[0]?.agentType || 'Subagent';
-                              }
-                              return `${group.subagents.length} subagents launched together`;
-                            })()}
-                          </div>
-                          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] text-slate-600">
-                            {group.subagents.length} subagents
-                          </span>
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                          <span>{formatTime(launchTime)}</span>
-                          {(totalInputTokens > 0 || totalOutputTokens > 0) && (
-                            <>
-                              <span>·</span>
-                              <span>{formatTokenPair(totalInputTokens, totalOutputTokens)}</span>
-                            </>
-                          )}
-                          <span>·</span>
-                          <span>${totalCost.toFixed(4)}</span>
-                          {groupRunningCount > 0 && (
-                            <>
-                              <span>·</span>
-                              <span className="text-amber-600">{groupRunningCount} running</span>
-                            </>
-                          )}
-                          {groupFailedCount > 0 && (
-                            <>
-                              <span>·</span>
-                              <span className="text-red-600">{groupFailedCount} failed</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                    {group.subagents[0]?.launchPromptId && (
-                      <button
-                        onClick={() => jumpToLaunchPrompt(group.subagents[0]?.launchPromptId)}
-                        className="shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-900 shadow-sm"
-                      >
-                        Go to prompt
-                      </button>
-                    )}
-                    <button
-                      onClick={() => toggleLLM(groupKey)}
-                      aria-label={isGroupExpanded ? 'Collapse subagent batch' : 'Expand subagent batch'}
-                      className="shrink-0 rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 hover:border-slate-300 hover:text-slate-900 shadow-sm"
-                    >
-                      {isGroupExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                </div>
-
-                {isGroupExpanded && (
-                  <div className="ml-4 border-l-2 border-cyan-100/80 px-3 py-3 space-y-3 bg-cyan-50/30 rounded-bl-xl">
-                    {group.subagents.map((subagent, subagentIdx) => {
-                      const subagentKey = `${groupKey}-subagent-${subagent.id}`;
-                      const isSubagentExpanded = expandedLLMs.has(subagentKey);
-                      const assistantTurns = subagent.assistantTurns || [];
-                      const promptThreads = subagent.promptThreads || [];
-                      const cleanedPrompt = cleanSessionText(subagent.prompt || '');
-                      const hasSubagentMeta = !!subagent.meta && Object.keys(subagent.meta).length > 0;
-                      const hasSubagentDetails =
-                        hasSubagentMeta ||
-                        !!(subagent.sessionFilePath && subagent.sessionFilePath.length > 0) ||
-                        !!(subagent.toolUseId && subagent.toolUseId.length > 0);
-                      const responseStyle = classifyCallResponse(
-                        subagent.llmCalls[subagent.llmCalls.length - 1] || {
-                          id: `${subagent.id}-fallback`,
-                          model: subagent.model || 'unknown',
-                          startTime: subagent.startTime,
-                          endTime: subagent.endTime || subagent.startTime,
-                          duration: subagent.duration,
-                          inputTokens: subagent.inputTokens,
-                          outputTokens: subagent.outputTokens,
-                          totalTokens: subagent.totalTokens,
-                          cost: subagent.cost,
-                          status: subagent.response ? 'success' : 'streaming',
-                          prompt: subagent.prompt || '',
-                          response: subagent.response || '',
-                        },
-                        subagent.toolCalls,
-                      );
-                      const statusTone = statusBadgeTone(subagent.status);
-
-                      return (
-                        <div key={subagent.id} className={`overflow-hidden rounded-xl border-l-4 transition-all ${isSubagentExpanded ? 'border-violet-300 bg-white shadow-md shadow-violet-100/35 ring-1 ring-violet-100' : 'border-slate-200/80 border-l-violet-200 bg-white/80 hover:border-slate-300 hover:bg-white'}`}>
-                          <button onClick={() => toggleLLM(subagentKey)} className="w-full px-3.5 py-3 text-left">
-                            <div className="flex items-center gap-3">
-                              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-violet-200 bg-violet-50 text-[10px] font-mono text-violet-700">
-                                {subagentIdx + 1}
-                              </div>
-                              <div className="min-w-0 flex-1">
-                                <div className="flex items-center gap-2 min-w-0">
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-sky-50 px-1.5 py-0.5 text-[10px] text-sky-700 border border-sky-200">
-                                    <Bot className="h-3 w-3" />
-                                    subagent
-                                  </span>
-                                  <div className="min-w-0 truncate text-sm font-medium text-slate-900">{subagent.description || subagent.agentType || subagent.agentId}</div>
-                                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${statusTone}`}>{statusLabel(subagent.status)}</span>
-                                </div>
-                                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500">
-                                  <span>{subagent.agentType || 'unknown'}</span>
-                                  <span>·</span>
-                                  <span>{subagent.model || 'unknown'}</span>
-                                  {subagent.totalTokens > 0 && (
-                                    <>
-                                      <span>·</span>
-                                      <span>{formatTokenPair(subagent.inputTokens, subagent.outputTokens)}</span>
-                                    </>
-                                  )}
-                                  <span>·</span>
-                                  <span>{formatDuration(subagent.duration)}</span>
-                                  <span>·</span>
-                                  <span>{subagent.toolCalls.length} tools</span>
-                                  <span>·</span>
-                                  <span>{subagent.llmCalls.length} LLM</span>
-                                  {hasSubagentDetails && (
-                                    <>
-                                      <span>·</span>
-                                      <span className="text-sky-700">details below</span>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                              <div className="shrink-0 rounded-full border border-slate-200 bg-white p-1.5 text-slate-500 shadow-sm">
-                                {isSubagentExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
-                              </div>
-                            </div>
-                          </button>
-
-                          {isSubagentExpanded && (
-                            <div className="ml-5 border-l-2 border-violet-100/80 px-3.5 pb-3 pt-3 space-y-4 bg-violet-50/25 rounded-bl-xl">
-                              {hasSubagentDetails && (
-                                <div className="rounded-2xl border border-sky-200 bg-sky-50/80 p-3 space-y-2">
-                                  <div className="flex items-center gap-2 text-xs font-semibold text-sky-700">
-                                    <Bot className="h-3.5 w-3.5" />
-                                    Subagent details
-                                  </div>
-                                  {subagent.sessionFilePath && <PathField label="Log 文件" value={subagent.sessionFilePath} />}
-                                  {subagent.toolUseId && (
-                                    <div className="text-[11px] text-slate-500 font-mono">toolUseId: {subagent.toolUseId}</div>
-                                  )}
-                                  {hasSubagentMeta && (
-                                    <StructuredResponseBlock
-                                      title="Subagent 元数据"
-                                      color="emerald"
-                                      icon={FileText}
-                                      value={subagent.meta || {}}
-                                      copyId={`subagent-meta-${subagent.id}`}
-                                      copiedId={copiedId}
-                                      onCopy={copyToClipboard}
-                                    />
-                                  )}
-                                </div>
-                              )}
-                              {cleanedPrompt && promptThreads.length === 0 && (
-                                <PreviewBlock icon={User} label="用户输入" content={truncateText(cleanedPrompt, 800)} />
-                              )}
-                              {promptThreads.length > 0 ? (
-                                <div className="space-y-3">
-                                  {promptThreads.map((thread, threadIdx) =>
-                                    renderPromptThreadGroup({
-                                      thread,
-                                      index: threadIdx,
-                                      toolScope: subagent.toolCalls,
-                                      scopePrefix: `subagent-${subagent.id}`,
-                                    }),
-                                  )}
-                                </div>
-                              ) : assistantTurns.length > 0 ? (
-                                <div className="space-y-3">
-                                  {assistantTurnsToPromptThreads(assistantTurns, `subagent-${subagent.id}`).map((thread, threadIdx) =>
-                                    renderPromptThreadGroup({
-                                      thread,
-                                      index: threadIdx,
-                                      toolScope: subagent.toolCalls,
-                                      scopePrefix: `subagent-${subagent.id}`,
-                                    }),
-                                  )}
-                                </div>
-                              ) : subagent.response ? (
-                                <JsonOrTextBlock
-                                  title={responseStyle.label}
-                                  value={cleanSessionText(subagent.response)}
-                                  copyId={`subagent-response-${subagent.id}`}
-                                  copiedId={copiedId}
-                                  onCopy={copyToClipboard}
-                                />
-                              ) : null}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+        {assistantTurnGroups.map((thread, threadIdx) => (
+          <PromptThreadGroup
+            key={`main-llm-thread-${thread.id}`}
+            thread={thread}
+            index={threadIdx}
+            toolScope={trace.tools || []}
+            scopePrefix="main-llm"
+            allLLMCalls={allLLMCalls}
+            detailLevel={detailLevel}
+            expandedLLMs={expandedLLMs}
+            copiedId={copiedId}
+            isKindVisible={isKindVisible}
+            onToggle={toggleLLM}
+            onToggleMany={toggleManyLLMs}
+            onCopy={copyToClipboard}
+            registerJumpRef={registerJumpRef}
+          />
+        ))}
       </div>
     );
   };
-
-  const renderTaskStatus = () => {
-    const taskSummary = typedTrace.metadata?.task_summary as
-      | {
-          created?: number;
-          updated?: number;
-          listed?: number;
-          got?: number;
-          latest_statuses?: Array<{ taskId: string; status: string }>;
-          latest?: { taskId?: string; status?: string; subject?: string; description?: string } | null;
-          tasks?: Array<{
-            taskId: string;
-            status?: string;
-            subject?: string;
-            description?: string;
-            created_prompt_idx?: number;
-            latest_status_prompt_idx?: number;
-          }>;
-        }
-      | undefined;
-
-    const tasks = taskSummary?.tasks || [];
-    const hasTaskData = tasks.length > 0;
-
-    if (!hasTaskData || !taskSummary) {
-      return <EmptyState icon={Layers} label="无任务状态摘要" />;
-    }
-
-    return (
-      <div className="space-y-4">
-        <div className={surfaceClass}>
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <Layers className="h-4 w-4 text-slate-400" />
-            任务状态
-          </h3>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4 text-sm">
-            <MetricCard icon={Check} color="text-emerald-600" value={String(taskSummary.created || 0)} label="创建" />
-            <MetricCard icon={MessageSquare} color="text-cyan-600" value={String(taskSummary.updated || 0)} label="更新" />
-            <MetricCard icon={Hash} color="text-violet-600" value={String(taskSummary.listed || 0)} label="列表" />
-            <MetricCard icon={Code} color="text-orange-600" value={String(taskSummary.got || 0)} label="获取" />
-          </div>
-          <div className="mt-4 space-y-2">
-            {tasks.map((task) => (
-              <div key={task.taskId} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 space-y-2">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="font-mono text-xs text-slate-600 truncate">{task.taskId}</span>
-                  <span className="rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs text-blue-700">{task.status || 'unknown'}</span>
-                </div>
-                {task.subject && <div className="text-sm font-medium text-slate-900">{task.subject}</div>}
-                {task.description && <div className="text-xs text-slate-500 whitespace-pre-wrap">{task.description}</div>}
-                {task.created_prompt_idx != null && (
-                  <div className="text-[11px] text-slate-400">created at user prompt #{task.created_prompt_idx}</div>
-                )}
-                {task.latest_status_prompt_idx != null && task.latest_status_prompt_idx !== task.created_prompt_idx && (
-                  <div className="text-[11px] text-slate-400">latest status updated at user prompt #{task.latest_status_prompt_idx}</div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const renderVision = () => {
-    const references = trace.visionReferences || [];
-    if (references.length === 0) {
-      return <EmptyState icon={FileText} label="No vision context found." />;
-    }
-
-    return (
-      <div className="space-y-4">
-        <div className={surfaceClass}>
-          <h3 className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-500">
-            <FileText className="h-4 w-4 text-slate-400" />
-            Vision context
-          </h3>
-          <div className="space-y-3">
-            {references.map((reference, index) => (
-              <div key={`${reference.path}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-3">
-                <div className="text-sm font-medium text-slate-900 break-all">{reference.path}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
-                  {reference.origin && <span>{reference.origin}</span>}
-                  {reference.mime_type && (
-                    <>
-                      <span>·</span>
-                      <span>{reference.mime_type}</span>
-                    </>
-                  )}
-                  {reference.absolute_path && reference.absolute_path !== reference.path && (
-                    <>
-                      <span>·</span>
-                      <span className="break-all font-mono">{reference.absolute_path}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const rawJson = JSON.stringify(typedTrace.raw || trace, null, 2);
-
-  const renderRaw = () => (
-    <JsonOrTextBlock
-      title="原始 Session 记录"
-      value={rawJson}
-      copyId="raw-trace"
-      copiedId={copiedId}
-      onCopy={copyToClipboard}
-    />
-  );
 
   const renderReplayFilters = () => {
     if (!shouldShowReplayFilters) {
@@ -1023,46 +277,38 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       {renderReplayFilters()}
 
       <div className="p-5 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
-        {activeTab === 'overview' && renderOverview()}
+        {activeTab === 'overview' && (
+          <OverviewView
+            trace={trace}
+            promptGroupCount={assistantTurnGroups.length}
+            toolCount={allTools.length}
+            openingTarget={openingTarget}
+            openError={openError}
+            onOpenPath={(target) => void openPath(target)}
+          />
+        )}
         {activeTab === 'llm' && renderLLM()}
-        {activeTab === 'subagents' && renderSubagents()}
-        {activeTab === 'taskStatus' && renderTaskStatus()}
-        {activeTab === 'vision' && renderVision()}
-        {activeTab === 'raw' && renderRaw()}
+        {activeTab === 'subagents' && (
+          <SubagentsView
+            subagentLogs={subagentLogs}
+            groupedSubagentLogs={groupedSubagentLogs}
+            allLLMCalls={allLLMCalls}
+            detailLevel={detailLevel}
+            expandedLLMs={expandedLLMs}
+            copiedId={copiedId}
+            isKindVisible={isKindVisible}
+            onToggle={toggleLLM}
+            onToggleMany={toggleManyLLMs}
+            onCopy={copyToClipboard}
+            onJumpToLaunchPrompt={jumpToLaunchPrompt}
+          />
+        )}
+        {activeTab === 'taskStatus' && <TaskStatusView trace={typedTrace} />}
+        {activeTab === 'vision' && <VisionView trace={trace} />}
+        {activeTab === 'raw' && <RawView trace={typedTrace} copiedId={copiedId} onCopy={copyToClipboard} />}
       </div>
     </div>
   );
 };
-
-function statusLabel(status: Trace['status']): string {
-  switch (status) {
-    case 'completed':
-      return '已完成';
-    case 'failed':
-      return '失败';
-    case 'running':
-      return '运行中';
-    case 'cancelled':
-      return '已取消';
-    default:
-      return status;
-  }
-}
-
-function statusBadgeTone(status: Trace['status']): string {
-  switch (status) {
-    case 'completed':
-      return 'bg-emerald-500/15 text-emerald-300';
-    case 'failed':
-      return 'bg-red-500/15 text-red-300';
-    case 'running':
-      return 'bg-amber-500/15 text-amber-300';
-    case 'cancelled':
-      return 'bg-slate-500/15 text-slate-300';
-    default:
-      return 'bg-slate-500/15 text-slate-300';
-  }
-}
-
 
 export default EnhancedTraceDetail;
