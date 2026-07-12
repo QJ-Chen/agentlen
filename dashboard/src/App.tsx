@@ -17,7 +17,6 @@ import type { HierarchyChildrenResponse, HierarchyResponse, ProjectMetadataRespo
 import { API_URL } from './lib/api';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
-  cleanSessionText,
   formatCompactDuration,
   formatInteger,
   formatTokens,
@@ -72,13 +71,32 @@ function StatsCard({
   );
 }
 
+const SESSIONS_PAGE_SIZE = 200;
+
+function localDateString(daysAgo: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - daysAgo);
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+const DATE_PRESETS: Array<{ label: string; days: number }> = [
+  { label: '今天', days: 0 },
+  { label: '近7天', days: 6 },
+  { label: '近30天', days: 29 },
+];
+
 function App() {
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
+  const [sessionsTotal, setSessionsTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [stats, setStats] = useState<OverviewStats | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -121,6 +139,20 @@ function App() {
     return hierarchyFetchInFlightRef.current;
   }, []);
 
+  const buildSessionParams = useCallback(
+    (offset: number) => {
+      const params = new URLSearchParams({ limit: String(SESSIONS_PAGE_SIZE), offset: String(offset) });
+      const startTime = toStartOfLocalDayISOString(startDate);
+      const endTime = toEndOfLocalDayISOString(endDate);
+      if (startTime) params.set('start_time', startTime);
+      if (endTime) params.set('end_time', endTime);
+      if (debouncedQuery) params.set('query', debouncedQuery);
+      if (statusFilter !== 'all') params.set('status', statusFilter);
+      return params;
+    },
+    [startDate, endDate, debouncedQuery, statusFilter],
+  );
+
   const fetchData = useCallback(async () => {
     if (fetchInFlightRef.current) {
       return fetchInFlightRef.current;
@@ -130,16 +162,16 @@ function App() {
       try {
         setLoading(true);
         setError(null);
-        const params = new URLSearchParams({ limit: '200' });
+        // Stats reflect the time window only; search/status scope just the list.
+        const statsParams = new URLSearchParams();
         const startTime = toStartOfLocalDayISOString(startDate);
         const endTime = toEndOfLocalDayISOString(endDate);
-        if (startTime) params.set('start_time', startTime);
-        if (endTime) params.set('end_time', endTime);
-        const queryString = params.toString();
+        if (startTime) statsParams.set('start_time', startTime);
+        if (endTime) statsParams.set('end_time', endTime);
 
         const [sessionsRes, statsRes] = await Promise.all([
-          fetch(`${API_URL}/api/v1/sessions?${queryString}`),
-          fetch(`${API_URL}/api/v1/stats/overview?${queryString}`),
+          fetch(`${API_URL}/api/v1/sessions?${buildSessionParams(0).toString()}`),
+          fetch(`${API_URL}/api/v1/stats/overview?${statsParams.toString()}`),
         ]);
 
         if (!sessionsRes.ok || !statsRes.ok) {
@@ -153,6 +185,7 @@ function App() {
         transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
 
         setTraces(transformed);
+        setSessionsTotal(sessionsData.total ?? transformed.length);
         setStats(statsData);
         setError(null);
 
@@ -172,7 +205,29 @@ function App() {
 
     fetchInFlightRef.current = request;
     return request;
-  }, [startDate, endDate]);
+  }, [startDate, endDate, buildSessionParams]);
+
+  const loadMoreSessions = useCallback(async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const response = await fetch(`${API_URL}/api/v1/sessions?${buildSessionParams(traces.length).toString()}`);
+      if (!response.ok) {
+        throw new Error('API request failed');
+      }
+      const payload = (await response.json()) as SessionsResponse;
+      const next = (payload.sessions || []).map(transformSession);
+      setSessionsTotal(payload.total ?? traces.length + next.length);
+      setTraces((current) => {
+        const seen = new Set(current.map((trace) => trace.id));
+        return [...current, ...next.filter((trace) => !seen.has(trace.id))];
+      });
+    } catch {
+      // keep the current page; the main error banner is for full-fetch failures
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [buildSessionParams, traces.length, loadingMore]);
 
   useEffect(() => {
     if (hasLoadedInitiallyRef.current) return;
@@ -181,13 +236,18 @@ function App() {
   }, [fetchData, fetchHierarchyRoot]);
 
   useEffect(() => {
+    const handle = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
+    return () => clearTimeout(handle);
+  }, [searchQuery]);
+
+  useEffect(() => {
     if (!dateRangeEffectReadyRef.current) {
       dateRangeEffectReadyRef.current = true;
       return;
     }
     if (!hasLoadedInitiallyRef.current) return;
     void fetchData();
-  }, [fetchData, startDate, endDate]);
+  }, [fetchData, startDate, endDate, debouncedQuery, statusFilter]);
 
   useEffect(() => {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
@@ -354,20 +414,8 @@ function App() {
     return () => controller.abort();
   }, [selectedProjectPath]);
 
-  const filteredTraces = useMemo(() => {
-    return traces.filter((trace) => {
-      const matchesSearch =
-        !searchQuery ||
-        trace.agentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        trace.sessionId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (trace.projectPath || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (trace.projectGroup || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-        cleanSessionText(trace.prompt || '').toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesStatus = statusFilter === 'all' || trace.status === statusFilter;
-      return matchesSearch && matchesStatus;
-    });
-  }, [traces, searchQuery, statusFilter]);
   const hasActiveSessionFilters = searchQuery.length > 0 || statusFilter !== 'all';
+  const hasMoreSessions = traces.length < sessionsTotal;
 
   const rangedProjectCount = useMemo(() => new Set(traces.map((trace) => trace.projectPath || '(unknown)')).size, [traces]);
 
@@ -459,8 +507,29 @@ function App() {
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
                   <Filter className="h-4 w-4" />
-                  <span className="text-slate-700">Started between</span>
+                  <span className="text-slate-700">Active between</span>
                 </div>
+                {DATE_PRESETS.map((preset) => {
+                  const presetStart = localDateString(preset.days);
+                  const presetEnd = localDateString(0);
+                  const isActive = startDate === presetStart && endDate === presetEnd;
+                  return (
+                    <button
+                      key={preset.label}
+                      onClick={() => {
+                        setStartDate(presetStart);
+                        setEndDate(presetEnd);
+                      }}
+                      className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
+                        isActive
+                          ? 'bg-ink-900 text-white'
+                          : 'border border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  );
+                })}
                 <input
                   type="date"
                   value={startDate}
@@ -535,9 +604,18 @@ function App() {
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500">
             <span>
-              Showing <span className="text-slate-900">{formatInteger(filteredTraces.length)}</span> of{' '}
-              <span className="text-slate-900">{formatInteger(traces.length)}</span> imported sessions
+              Showing <span className="font-mono text-slate-900">{formatInteger(traces.length)}</span> of{' '}
+              <span className="font-mono text-slate-900">{formatInteger(sessionsTotal)}</span> matching sessions
             </span>
+            {hasMoreSessions && (
+              <button
+                onClick={() => void loadMoreSessions()}
+                disabled={loadingMore}
+                className="rounded-xl border border-ink-100 bg-white px-3 py-1 text-ink-700 hover:border-ink-200 hover:bg-ink-50 disabled:opacity-50"
+              >
+                {loadingMore ? '加载中…' : `加载更多 (${formatInteger(sessionsTotal - traces.length)})`}
+              </button>
+            )}
             {hasActiveDateRange && (
               <span className="rounded-full border border-clay-100 bg-clay-50 px-3 py-1 text-clay-700">
                 Date range: {activeDateRangeLabel}

@@ -332,8 +332,10 @@ class SQLiteStorage(Storage):
         if session_id:
             query += " AND session_id = ?"
             params.append(session_id)
+        # Window semantics: a trace matches if its activity span overlaps the
+        # window, so an overnight session still shows up on the day it ended.
         if start_time:
-            query += " AND start_time >= ?"
+            query += " AND COALESCE(end_time, start_time) >= ?"
             params.append(self._coerce_iso_datetime(start_time))
         if end_time:
             query += " AND start_time <= ?"
@@ -622,8 +624,9 @@ class SQLiteStorage(Storage):
             "project_path, metadata FROM traces WHERE platform = ?"
         )
         params: List[Any] = [CLAUDE_CODE_PLATFORM]
+        # Same overlap semantics as get_traces
         if start_time:
-            query += " AND start_time >= ?"
+            query += " AND COALESCE(end_time, start_time) >= ?"
             params.append(self._coerce_iso_datetime(start_time))
         if end_time:
             query += " AND start_time <= ?"

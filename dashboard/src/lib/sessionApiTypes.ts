@@ -123,6 +123,8 @@ export interface RawSessionRecord {
 
 export interface SessionsResponse {
   sessions: RawSessionRecord[];
+  count?: number;
+  total?: number;
 }
 
 export type ProjectMetadataResponse = ProjectMetadata;

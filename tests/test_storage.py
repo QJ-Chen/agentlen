@@ -79,3 +79,53 @@ def test_overview_stats_uses_metadata_counts():
         assert stats["total_tool_calls"] == 1
         assert stats["total_tokens"] == 150
         assert stats["top_tools"] == [{"name": "Bash", "count": 1}]
+
+
+def test_time_window_matches_sessions_active_in_window():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+
+        overnight = _sample_trace()
+        overnight["trace_id"] = "session_overnight"
+        overnight["session_id"] = "overnight"
+        overnight["start_time"] = "2026-07-10T22:00:00Z"
+        overnight["end_time"] = "2026-07-11T03:00:00Z"
+        storage.save_trace(overnight)
+
+        prior_day = _sample_trace()
+        prior_day["trace_id"] = "session_prior"
+        prior_day["session_id"] = "prior"
+        prior_day["start_time"] = "2026-07-10T08:00:00Z"
+        prior_day["end_time"] = "2026-07-10T09:00:00Z"
+        storage.save_trace(prior_day)
+
+        window = storage.get_traces(
+            start_time="2026-07-11T00:00:00Z",
+            end_time="2026-07-11T23:59:59Z",
+            limit=10,
+        )
+        ids = {trace["session_id"] for trace in window}
+
+        # The overnight session was active on the 11th even though it started
+        # on the 10th; the fully-prior session stays excluded.
+        assert ids == {"overnight"}
+
+
+def test_time_window_includes_open_ended_sessions_via_start_time():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+
+        running = _sample_trace()
+        running["trace_id"] = "session_running"
+        running["session_id"] = "running"
+        running["start_time"] = "2026-07-11T10:00:00Z"
+        running["end_time"] = None
+        storage.save_trace(running)
+
+        window = storage.get_traces(
+            start_time="2026-07-11T00:00:00Z",
+            end_time="2026-07-11T23:59:59Z",
+            limit=10,
+        )
+
+        assert [trace["session_id"] for trace in window] == ["running"]
