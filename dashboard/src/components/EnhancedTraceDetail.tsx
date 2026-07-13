@@ -293,7 +293,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
           <SubagentsView
             subagentLogs={subagentLogs}
             groupedSubagentLogs={groupedSubagentLogs}
-            allLLMCalls={allLLMCalls}
             detailLevel={detailLevel}
             expandedLLMs={expandedLLMs}
             copiedId={copiedId}

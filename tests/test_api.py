@@ -76,6 +76,7 @@ class RangeCaptureStorage:
         return {
             "period_hours": period_hours,
             "total_sessions": 0,
+            "total_projects": 0,
             "total_traces": 0,
             "total_llm_calls": 0,
             "total_tool_calls": 0,
@@ -372,6 +373,7 @@ class DateRangeApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["total_projects"], 0)
         self.assertEqual(
             self.storage.overview_calls,
             [

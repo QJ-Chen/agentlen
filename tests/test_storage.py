@@ -129,3 +129,100 @@ def test_time_window_includes_open_ended_sessions_via_start_time():
         )
 
         assert [trace["session_id"] for trace in window] == ["running"]
+
+
+def test_running_session_started_before_window_remains_active():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        running = _sample_trace()
+        running.update({
+            "trace_id": "session_long_running",
+            "session_id": "long-running",
+            "start_time": "2026-07-10T10:00:00Z",
+            "end_time": None,
+            "status": "running",
+        })
+        completed = _sample_trace()
+        completed.update({
+            "trace_id": "session_legacy_open",
+            "session_id": "legacy-open",
+            "start_time": "2026-07-10T11:00:00Z",
+            "end_time": None,
+            "status": "success",
+        })
+        storage.save_traces([running, completed])
+
+        window = storage.get_traces(
+            start_time="2026-07-11T00:00:00Z",
+            end_time="2026-07-11T23:59:59Z",
+            limit=None,
+        )
+
+        assert {trace["session_id"] for trace in window} == {"long-running"}
+
+
+def test_list_sessions_searches_all_trace_and_nested_content():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        first = _sample_trace()
+        first.update({
+            "trace_id": "search_first",
+            "session_id": "search-session",
+            "prompt": "first prompt",
+            "response": "first response",
+            "start_time": "2026-07-11T10:00:00Z",
+            "end_time": "2026-07-11T10:01:00Z",
+        })
+        second = _sample_trace()
+        second.update({
+            "trace_id": "search_second",
+            "session_id": "search-session",
+            "prompt": "middle-only-needle",
+            "response": "middle response",
+            "start_time": "2026-07-11T10:02:00Z",
+            "end_time": "2026-07-11T10:03:00Z",
+            "tool_calls": [{"name": "Read", "output": "tool-only-needle"}],
+            "llm_calls": [{"prompt": "nested-llm-needle", "response": "done"}],
+        })
+        third = _sample_trace()
+        third.update({
+            "trace_id": "search_third",
+            "session_id": "search-session",
+            "prompt": "last prompt",
+            "response": "last response",
+            "start_time": "2026-07-11T10:04:00Z",
+            "end_time": "2026-07-11T10:05:00Z",
+        })
+        storage.save_traces([first, second, third])
+
+        for needle in ("middle-only-needle", "tool-only-needle", "nested-llm-needle"):
+            payload = storage.list_sessions(query=needle, period_hours=100000, limit=10)
+            assert payload["total"] == 1
+            assert payload["sessions"][0]["session_id"] == "search-session"
+            assert "_search_text" not in payload["sessions"][0]
+
+
+def test_session_listing_and_stats_are_not_silently_capped():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        traces = []
+        for idx in range(5001):
+            trace = _sample_trace()
+            trace.update({
+                "trace_id": f"bulk-{idx}",
+                "session_id": f"bulk-{idx}",
+                "start_time": f"2026-07-11T{idx % 24:02d}:{idx % 60:02d}:00Z",
+                "end_time": f"2026-07-11T{idx % 24:02d}:{idx % 60:02d}:30Z",
+                "project_path": f"/project/{idx % 3}",
+                "prompt": "oldest-search-target" if idx == 0 else "other",
+            })
+            traces.append(trace)
+        storage.save_traces(traces)
+
+        payload = storage.list_sessions(query="oldest-search-target", period_hours=100000, limit=10)
+        stats = storage.get_overview_stats(period_hours=100000)
+
+        assert payload["total"] == 1
+        assert payload["sessions"][0]["session_id"] == "bulk-0"
+        assert stats["total_sessions"] == 5001
+        assert stats["total_projects"] == 3

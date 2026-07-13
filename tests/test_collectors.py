@@ -1,12 +1,28 @@
 from pathlib import Path
 
 from agentlens import collectors
-from agentlens.collectors import ClaudeCodeCollector, extract_vision_references
+from agentlens.collectors import ClaudeCodeCollector, calc_cost, extract_vision_references
 
 
 class DummyStorage:
     def save_traces(self, traces):
         self.traces = traces
+
+
+def test_calc_cost_uses_model_family_and_cache_rates():
+    million = 1_000_000
+    assert calc_cost("claude-code", million, million, model="claude-fable-5") == 60.0
+    assert calc_cost("claude-code", million, million, model="claude-opus-4-8") == 30.0
+    assert calc_cost("claude-code", million, million, model="anthropic.claude-sonnet-5") == 18.0
+    assert calc_cost("claude-code", million, million, model="claude-haiku-4-5-20251001") == 6.0
+    assert calc_cost(
+        "claude-code",
+        0,
+        0,
+        cache_read_tokens=million,
+        cache_creation_tokens=million,
+        model="claude-opus-4-8",
+    ) == 6.75
 
 
 def test_extract_vision_references_supports_pasted_images_and_top_level_attachments(tmp_path: Path):
@@ -207,10 +223,17 @@ def test_child_records_carry_cache_tokens_and_derived_durations(tmp_path: Path):
         '{"type":"assistant","uuid":"rec-2","timestamp":"2026-07-11T08:00:03.500Z","message":{"id":"msg_cache","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":100,"output_tokens":80,"cache_read_input_tokens":40000,"cache_creation_input_tokens":2000}}}',
     )
 
-    turn = state["aggregator"].get_traces()[0]["llm_calls"][0]
+    trace = state["aggregator"].get_traces()[0]
+    turn = trace["llm_calls"][0]
 
     assert turn["cache_read_tokens"] == 40000
     assert turn["cache_creation_tokens"] == 2000
+    assert turn["cost_usd"] == calc_cost(
+        "claude-code", 100, 80, 40000, 2000, "claude-opus-4-8"
+    )
+    assert trace["cache_read_tokens"] == 40000
+    assert trace["cache_creation_input_tokens"] == 2000
+    assert trace["cost_usd"] == round(turn["cost_usd"], 6)
     children = turn["child_records"]
     assert children[0]["cache_read_tokens"] == 40000
     assert children[0]["cache_creation_tokens"] == 2000

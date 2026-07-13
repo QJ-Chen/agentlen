@@ -141,6 +141,7 @@ export interface Trace {
 export interface OverviewStats {
   period_hours: number;
   total_sessions: number;
+  total_projects: number;
   total_traces: number;
   total_llm_calls: number;
   total_tool_calls: number;

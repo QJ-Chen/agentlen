@@ -109,7 +109,10 @@ function App() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [expandedNodeIds, setExpandedNodeIds] = useState<Set<string>>(new Set());
   const [leftPanelWidth, setLeftPanelWidth] = useState(320);
-  const fetchInFlightRef = useRef<Promise<void> | null>(null);
+  const fetchGenerationRef = useRef(0);
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const loadMoreGenerationRef = useRef(0);
+  const loadMoreAbortRef = useRef<AbortController | null>(null);
   const hierarchyFetchInFlightRef = useRef<Promise<void> | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
@@ -154,78 +157,100 @@ function App() {
   );
 
   const fetchData = useCallback(async () => {
-    if (fetchInFlightRef.current) {
-      return fetchInFlightRef.current;
-    }
+    const generation = ++fetchGenerationRef.current;
+    fetchAbortRef.current?.abort();
+    loadMoreAbortRef.current?.abort();
+    loadMoreGenerationRef.current += 1;
+    const controller = new AbortController();
+    fetchAbortRef.current = controller;
 
-    const request = (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        // Stats reflect the time window only; search/status scope just the list.
-        const statsParams = new URLSearchParams();
-        const startTime = toStartOfLocalDayISOString(startDate);
-        const endTime = toEndOfLocalDayISOString(endDate);
-        if (startTime) statsParams.set('start_time', startTime);
-        if (endTime) statsParams.set('end_time', endTime);
+    setLoading(true);
+    setLoadingMore(false);
+    setError(null);
 
-        const [sessionsRes, statsRes] = await Promise.all([
-          fetch(`${API_URL}/api/v1/sessions?${buildSessionParams(0).toString()}`),
-          fetch(`${API_URL}/api/v1/stats/overview?${statsParams.toString()}`),
-        ]);
+    // Snapshot both query strings so state changes cannot alter this request.
+    const sessionQuery = buildSessionParams(0).toString();
+    const statsParams = new URLSearchParams();
+    const startTime = toStartOfLocalDayISOString(startDate);
+    const endTime = toEndOfLocalDayISOString(endDate);
+    if (startTime) statsParams.set('start_time', startTime);
+    if (endTime) statsParams.set('end_time', endTime);
+    const statsQuery = statsParams.toString();
 
-        if (!sessionsRes.ok || !statsRes.ok) {
-          throw new Error('API request failed');
-        }
+    try {
+      const [sessionsRes, statsRes] = await Promise.all([
+        fetch(`${API_URL}/api/v1/sessions?${sessionQuery}`, { signal: controller.signal }),
+        fetch(`${API_URL}/api/v1/stats/overview?${statsQuery}`, { signal: controller.signal }),
+      ]);
 
-        const sessionsData = (await sessionsRes.json()) as SessionsResponse;
-        const statsData = (await statsRes.json()) as OverviewStats;
-
-        const transformed = (sessionsData.sessions || []).map(transformSession);
-        transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
-
-        setTraces(transformed);
-        setSessionsTotal(sessionsData.total ?? transformed.length);
-        setStats(statsData);
-        setError(null);
-
-        setSelectedTraceId((current) => {
-          const nextSelectedId = current && transformed.find((trace) => trace.id === current)?.id
-            ? current
-            : transformed[0]?.id || null;
-          return nextSelectedId;
-        });
-      } catch {
-        setError('无法连接到 AgentLens API 服务器');
-      } finally {
-        setLoading(false);
-        fetchInFlightRef.current = null;
+      if (!sessionsRes.ok || !statsRes.ok) {
+        throw new Error('API request failed');
       }
-    })();
 
-    fetchInFlightRef.current = request;
-    return request;
+      const sessionsData = (await sessionsRes.json()) as SessionsResponse;
+      const statsData = (await statsRes.json()) as OverviewStats;
+      if (generation !== fetchGenerationRef.current) return;
+
+      const transformed = (sessionsData.sessions || []).map(transformSession);
+      transformed.sort((a, b) => (b.lastRequestTime || b.startTime) - (a.lastRequestTime || a.startTime));
+      setTraces(transformed);
+      setSessionsTotal(sessionsData.total ?? transformed.length);
+      setStats(statsData);
+      setError(null);
+      setSelectedTraceId((current) => (
+        current && transformed.some((trace) => trace.id === current)
+          ? current
+          : transformed[0]?.id || null
+      ));
+    } catch (requestError) {
+      const isAbort = requestError instanceof Error && requestError.name === 'AbortError';
+      if (generation === fetchGenerationRef.current && !isAbort) {
+        setError('无法连接到 AgentLens API 服务器');
+      }
+    } finally {
+      if (generation === fetchGenerationRef.current) {
+        setLoading(false);
+        fetchAbortRef.current = null;
+      }
+    }
   }, [startDate, endDate, buildSessionParams]);
 
   const loadMoreSessions = useCallback(async () => {
     if (loadingMore) return;
+    const generation = ++loadMoreGenerationRef.current;
+    const refreshGeneration = fetchGenerationRef.current;
+    const filterKey = buildSessionParams(0).toString();
+    const offset = traces.length;
+    loadMoreAbortRef.current?.abort();
+    const controller = new AbortController();
+    loadMoreAbortRef.current = controller;
     setLoadingMore(true);
     try {
-      const response = await fetch(`${API_URL}/api/v1/sessions?${buildSessionParams(traces.length).toString()}`);
-      if (!response.ok) {
-        throw new Error('API request failed');
-      }
+      const response = await fetch(
+        `${API_URL}/api/v1/sessions?${buildSessionParams(offset).toString()}`,
+        { signal: controller.signal },
+      );
+      if (!response.ok) throw new Error('API request failed');
       const payload = (await response.json()) as SessionsResponse;
+      if (
+        generation !== loadMoreGenerationRef.current
+        || refreshGeneration !== fetchGenerationRef.current
+        || filterKey !== buildSessionParams(0).toString()
+      ) return;
+
       const next = (payload.sessions || []).map(transformSession);
-      setSessionsTotal(payload.total ?? traces.length + next.length);
+      setSessionsTotal(payload.total ?? offset + next.length);
       setTraces((current) => {
         const seen = new Set(current.map((trace) => trace.id));
         return [...current, ...next.filter((trace) => !seen.has(trace.id))];
       });
     } catch {
-      // keep the current page; the main error banner is for full-fetch failures
+      // Keep the current page; full-refresh failures use the main error banner.
     } finally {
-      setLoadingMore(false);
+      if (generation === loadMoreGenerationRef.current) {
+        setLoadingMore(false);
+        loadMoreAbortRef.current = null;
+      }
     }
   }, [buildSessionParams, traces.length, loadingMore]);
 
@@ -417,8 +442,6 @@ function App() {
   const hasActiveSessionFilters = searchQuery.length > 0 || statusFilter !== 'all';
   const hasMoreSessions = traces.length < sessionsTotal;
 
-  const rangedProjectCount = useMemo(() => new Set(traces.map((trace) => trace.projectPath || '(unknown)')).size, [traces]);
-
   if (error) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-950 flex items-center justify-center p-6">
@@ -467,7 +490,7 @@ function App() {
               <StatsCard
                 title="Sessions"
                 value={formatInteger(stats.total_sessions)}
-                subtext={`${rangedProjectCount} projects`}
+                subtext={`${stats.total_projects} projects`}
                 icon={Activity}
               />
               <StatsCard

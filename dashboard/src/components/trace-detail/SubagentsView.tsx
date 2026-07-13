@@ -1,5 +1,5 @@
 import { Bot, ChevronDown, ChevronRight, FileText, User } from 'lucide-react';
-import type { LLMCall, SubagentLog, Trace } from '../../types';
+import type { SubagentLog, Trace } from '../../types';
 import { classifyCallResponse, type DetailLevel } from '../../lib/callClassification';
 import { assistantTurnsToPromptThreads, type SubagentLaunchGroup } from '../../lib/conversationModel';
 import { cleanSessionText, formatDuration, formatTokenPair, truncateText } from '../../lib/sessionUtils';
@@ -40,7 +40,6 @@ function statusBadgeTone(status: Trace['status']): string {
 export function SubagentsView({
   subagentLogs,
   groupedSubagentLogs,
-  allLLMCalls,
   detailLevel,
   expandedLLMs,
   copiedId,
@@ -53,7 +52,6 @@ export function SubagentsView({
 }: {
   subagentLogs: SubagentLog[];
   groupedSubagentLogs: SubagentLaunchGroup[];
-  allLLMCalls: LLMCall[];
   detailLevel: DetailLevel;
   expandedLLMs: Set<string>;
   copiedId: string | null;
@@ -273,7 +271,7 @@ export function SubagentsView({
                                     index={threadIdx}
                                     toolScope={subagent.toolCalls}
                                     scopePrefix={`subagent-${subagent.id}`}
-                                    allLLMCalls={allLLMCalls}
+                                    allLLMCalls={subagent.llmCalls}
                                     detailLevel={detailLevel}
                                     expandedLLMs={expandedLLMs}
                                     copiedId={copiedId}
@@ -294,7 +292,7 @@ export function SubagentsView({
                                     index={threadIdx}
                                     toolScope={subagent.toolCalls}
                                     scopePrefix={`subagent-${subagent.id}`}
-                                    allLLMCalls={allLLMCalls}
+                                    allLLMCalls={subagent.llmCalls}
                                     detailLevel={detailLevel}
                                     expandedLLMs={expandedLLMs}
                                     copiedId={copiedId}

@@ -35,7 +35,7 @@ class Storage:
         session_id: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = 100,
     ) -> List[Dict[str, Any]]:
         raise NotImplementedError
 
@@ -321,7 +321,7 @@ class SQLiteStorage(Storage):
         session_id: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = 100,
     ) -> List[Dict[str, Any]]:
         query = "SELECT * FROM traces WHERE platform = ?"
         params: List[Any] = [CLAUDE_CODE_PLATFORM]
@@ -332,17 +332,20 @@ class SQLiteStorage(Storage):
         if session_id:
             query += " AND session_id = ?"
             params.append(session_id)
-        # Window semantics: a trace matches if its activity span overlaps the
-        # window, so an overnight session still shows up on the day it ended.
         if start_time:
-            query += " AND COALESCE(end_time, start_time) >= ?"
+            query += (
+                " AND (COALESCE(end_time, start_time) >= ?"
+                " OR (end_time IS NULL AND lower(coalesce(status, '')) IN ('running', 'pending')))"
+            )
             params.append(self._coerce_iso_datetime(start_time))
         if end_time:
             query += " AND start_time <= ?"
             params.append(self._coerce_iso_datetime(end_time))
 
-        query += " ORDER BY start_time DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY start_time DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
 
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -375,10 +378,24 @@ class SQLiteStorage(Storage):
             file_paths: List[str] = []
             metadata_items: List[Dict[str, Any]] = []
             error_messages: List[str] = []
+            search_parts: List[str] = []
 
             for item in items:
                 tool_calls.extend(item.get("tool_calls", []))
                 llm_calls.extend(item.get("llm_calls", []))
+                search_parts.append(
+                    json.dumps(
+                        {
+                            "prompt": item.get("prompt"),
+                            "response": item.get("response"),
+                            "tool_calls": item.get("tool_calls", []),
+                            "llm_calls": item.get("llm_calls", []),
+                            "metadata": item.get("metadata", {}),
+                        },
+                        ensure_ascii=False,
+                        default=str,
+                    ).lower()
+                )
                 if item.get("model"):
                     models.append(item["model"])
                 total_input += int(item.get("input_tokens") or 0)
@@ -468,6 +485,7 @@ class SQLiteStorage(Storage):
                     "metadata": metadata,
                     "created_at": last.get("created_at") or first.get("created_at"),
                     "last_updated": end_time or start_time,
+                    "_search_text": "\n".join(search_parts),
                 }
             )
 
@@ -572,7 +590,7 @@ class SQLiteStorage(Storage):
             platform=platform,
             start_time=effective_start_time,
             end_time=effective_end_time,
-            limit=max(limit + offset, 5000),
+            limit=None,
         )
         sessions = self._collapse_sessions(raw_traces)
 
@@ -595,10 +613,13 @@ class SQLiteStorage(Storage):
                 or needle in (s.get("project_path") or "").lower()
                 or needle in (s.get("prompt") or "").lower()
                 or needle in (s.get("response") or "").lower()
+                or needle in (s.get("_search_text") or "")
             ]
 
         total = len(sessions)
         page = sessions[offset : offset + limit]
+        for session in page:
+            session.pop("_search_text", None)
         if light:
             page = [self._to_light_session(session) for session in page]
         return {
@@ -608,15 +629,18 @@ class SQLiteStorage(Storage):
         }
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
-        traces = self.get_traces(session_id=session_id, limit=5000)
+        traces = self.get_traces(session_id=session_id, limit=None)
         sessions = self._collapse_sessions(traces)
-        return sessions[0] if sessions else None
+        if not sessions:
+            return None
+        sessions[0].pop("_search_text", None)
+        return sessions[0]
 
     def _get_light_trace_rows(
         self,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
-        limit: int = 50000,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         query = (
             "SELECT trace_id, session_id, platform, agent_name, start_time, end_time, "
@@ -624,15 +648,19 @@ class SQLiteStorage(Storage):
             "project_path, metadata FROM traces WHERE platform = ?"
         )
         params: List[Any] = [CLAUDE_CODE_PLATFORM]
-        # Same overlap semantics as get_traces
         if start_time:
-            query += " AND COALESCE(end_time, start_time) >= ?"
+            query += (
+                " AND (COALESCE(end_time, start_time) >= ?"
+                " OR (end_time IS NULL AND lower(coalesce(status, '')) IN ('running', 'pending')))"
+            )
             params.append(self._coerce_iso_datetime(start_time))
         if end_time:
             query += " AND start_time <= ?"
             params.append(self._coerce_iso_datetime(end_time))
-        query += " ORDER BY start_time DESC LIMIT ?"
-        params.append(limit)
+        query += " ORDER BY start_time DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(limit)
 
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -667,7 +695,7 @@ class SQLiteStorage(Storage):
         rows = self._get_light_trace_rows(
             start_time=effective_start_time,
             end_time=effective_end_time,
-            limit=50000,
+            limit=None,
         )
 
         grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -719,6 +747,14 @@ class SQLiteStorage(Storage):
                     "llm_call_count": llm_call_count,
                     "tool_call_count": tool_call_count,
                     "tool_name_counts": top_tools_counter,
+                    "project_path": next(
+                        (
+                            meta.get("major_cwd") or meta.get("project_group")
+                            for meta in reversed(metadata_items)
+                            if meta.get("major_cwd") or meta.get("project_group")
+                        ),
+                        last.get("project_path") or first.get("project_path") or "(unknown project)",
+                    ),
                 }
             )
 
@@ -766,6 +802,7 @@ class SQLiteStorage(Storage):
         return {
             "period_hours": period_hours,
             "total_sessions": len(sessions),
+            "total_projects": len({session["project_path"] for session in sessions}),
             "total_traces": len(rows),
             "total_llm_calls": total_llm_calls,
             "total_tool_calls": total_tool_calls,
@@ -794,7 +831,7 @@ class SQLiteStorage(Storage):
         traces = self.get_traces(
             start_time=effective_start_time,
             end_time=effective_end_time,
-            limit=50000,
+            limit=None,
         )
         sessions = self._collapse_sessions(traces)
 
@@ -900,7 +937,7 @@ class JSONLStorage(Storage):
         session_id: Optional[str] = None,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
-        limit: int = 100,
+        limit: Optional[int] = 100,
     ) -> List[Dict[str, Any]]:
         traces: List[Dict[str, Any]] = []
         if not self.file_path.exists():
@@ -912,7 +949,7 @@ class JSONLStorage(Storage):
             lines = f.readlines()
 
         for line in reversed(lines):
-            if len(traces) >= limit:
+            if limit is not None and len(traces) >= limit:
                 break
             try:
                 trace = json.loads(line.strip())

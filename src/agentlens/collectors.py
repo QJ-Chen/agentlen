@@ -26,14 +26,15 @@ CLAUDE_IMAGE_CACHE_DIRS = [
 ]
 
 CLAUDE_CODE_PLATFORM = "claude-code"
-# Cache rates follow the API's standard ratios: reads ~0.1x base input,
-# writes ~1.25x base input (5-minute TTL).
-CLAUDE_CODE_PRICING = {
-    "input_per_1m": 3.0,
-    "output_per_1m": 15.0,
-    "cache_read_per_1m": 0.3,
-    "cache_write_per_1m": 3.75,
+# Standard Claude API token prices per million tokens. Cache writes in Claude
+# Code logs do not carry TTL, so estimate them at the default five-minute rate.
+CLAUDE_MODEL_PRICING = {
+    "fable": {"input_per_1m": 10.0, "output_per_1m": 50.0},
+    "opus": {"input_per_1m": 5.0, "output_per_1m": 25.0},
+    "sonnet": {"input_per_1m": 3.0, "output_per_1m": 15.0},
+    "haiku": {"input_per_1m": 1.0, "output_per_1m": 5.0},
 }
+UNKNOWN_MODEL_PRICING = CLAUDE_MODEL_PRICING["sonnet"]
 
 logger = logging.getLogger(__name__)
 
@@ -146,20 +147,36 @@ def merge_tool_calls(existing: List[Dict[str, Any]], new_calls: List[Dict[str, A
     return merged
 
 
+def pricing_for_model(model: Any) -> Dict[str, float]:
+    normalized = str(model or "").lower()
+    if "fable" in normalized or "mythos" in normalized:
+        return CLAUDE_MODEL_PRICING["fable"]
+    if "opus" in normalized:
+        return CLAUDE_MODEL_PRICING["opus"]
+    if "haiku" in normalized:
+        return CLAUDE_MODEL_PRICING["haiku"]
+    if "sonnet" in normalized:
+        return CLAUDE_MODEL_PRICING["sonnet"]
+    return UNKNOWN_MODEL_PRICING
+
+
 def calc_cost(
     platform: str,
     input_tokens: int,
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_creation_tokens: int = 0,
+    model: str = "",
 ) -> float:
     if platform != CLAUDE_CODE_PLATFORM:
         raise ValueError(f"Unsupported platform: {platform}")
+    pricing = pricing_for_model(model)
+    input_rate = pricing["input_per_1m"]
     return (
-        (input_tokens / 1_000_000) * CLAUDE_CODE_PRICING["input_per_1m"]
-        + (output_tokens / 1_000_000) * CLAUDE_CODE_PRICING["output_per_1m"]
-        + (cache_read_tokens / 1_000_000) * CLAUDE_CODE_PRICING["cache_read_per_1m"]
-        + (cache_creation_tokens / 1_000_000) * CLAUDE_CODE_PRICING["cache_write_per_1m"]
+        (input_tokens / 1_000_000) * input_rate
+        + (output_tokens / 1_000_000) * pricing["output_per_1m"]
+        + (cache_read_tokens / 1_000_000) * input_rate * 0.1
+        + (cache_creation_tokens / 1_000_000) * input_rate * 1.25
     )
 
 
@@ -529,6 +546,8 @@ class SessionAggregator:
                 "end_time": None,
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
+                "total_cache_read_tokens": 0,
+                "total_cache_creation_tokens": 0,
                 "total_cost": 0.0,
                 "project_path": "",
                 "project_group": "",
@@ -598,6 +617,7 @@ class SessionAggregator:
         turn_data = {
             "id": turn.get("id"),
             "message_id": turn.get("message_id"),
+            "model": turn.get("model") or "unknown",
             "prompt": turn.get("prompt"),
             "prompt_id": turn.get("prompt_id") or "",
             "start_time": turn.get("start_time"),
@@ -606,7 +626,14 @@ class SessionAggregator:
             "output_tokens": int(turn.get("output_tokens") or 0),
             "cache_read_tokens": int(turn.get("cache_read_tokens") or 0),
             "cache_creation_tokens": int(turn.get("cache_creation_tokens") or 0),
-            "cost_usd": float(turn.get("cost_usd") or 0.0),
+            "cost_usd": calc_cost(
+                CLAUDE_CODE_PLATFORM,
+                int(turn.get("input_tokens") or 0),
+                int(turn.get("output_tokens") or 0),
+                int(turn.get("cache_read_tokens") or 0),
+                int(turn.get("cache_creation_tokens") or 0),
+                str(turn.get("model") or ""),
+            ),
             "tool_call_count": self._assistant_turn_tool_call_count(session, turn),
             "source_event_ids": list(turn.get("source_event_ids") or []),
             "record_ids": list(turn.get("record_ids") or []),
@@ -621,6 +648,8 @@ class SessionAggregator:
         session["assistant_turns"].append(turn_data)
         session["total_input_tokens"] += int(turn_data.get("input_tokens") or 0)
         session["total_output_tokens"] += int(turn_data.get("output_tokens") or 0)
+        session["total_cache_read_tokens"] += int(turn_data.get("cache_read_tokens") or 0)
+        session["total_cache_creation_tokens"] += int(turn_data.get("cache_creation_tokens") or 0)
         session["total_cost"] += float(turn_data.get("cost_usd") or 0.0)
         session["current_assistant_turn"] = None
         if len(session["assistant_turns"]) > 500:
@@ -766,6 +795,7 @@ class SessionAggregator:
                     int(message.get("output_tokens") or 0),
                     int(message.get("cache_read_tokens") or 0),
                     int(message.get("cache_creation_tokens") or 0),
+                    str(message.get("model") or ""),
                 ),
                 "prompt": last_user_prompt[:500] if last_user_prompt else None,
                 "response": response,
@@ -853,11 +883,10 @@ class SessionAggregator:
             "response": session.get("last_response"),
             "input_tokens": session["total_input_tokens"],
             "output_tokens": session["total_output_tokens"],
-            "cost_usd": calc_cost(
-                CLAUDE_CODE_PLATFORM,
-                session["total_input_tokens"],
-                session["total_output_tokens"],
-            ),
+            "cache_read_tokens": session["total_cache_read_tokens"],
+            "cache_creation_input_tokens": session["total_cache_creation_tokens"],
+            "cache_read_input_tokens": session["total_cache_read_tokens"],
+            "cost_usd": round(session["total_cost"], 6),
             "tool_calls": merged_tool_calls,
             "llm_calls": session["assistant_turns"],
             "status": "success",
