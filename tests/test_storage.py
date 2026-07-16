@@ -1,5 +1,6 @@
 import tempfile
 import json
+import sqlite3
 from pathlib import Path
 
 from agentlens.collectors import ClaudeCodeCollector
@@ -176,6 +177,31 @@ def test_activity_resave_replaces_graph_but_absent_graph_preserves_it():
         assert storage.has_activity("abc")
 
 
+def test_activity_resave_does_not_rewrite_unchanged_graph():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        trace["activity_graph"] = _activity_graph()
+        storage.save_trace(trace)
+
+        with sqlite3.connect(storage.db_path) as conn:
+            conn.executescript(
+                """
+                CREATE TEMP TABLE writes(kind TEXT);
+                CREATE TEMP TRIGGER node_update AFTER UPDATE ON activity_nodes
+                BEGIN INSERT INTO writes VALUES ('node-update'); END;
+                CREATE TEMP TRIGGER node_delete AFTER DELETE ON activity_nodes
+                BEGIN INSERT INTO writes VALUES ('node-delete'); END;
+                CREATE TEMP TRIGGER edge_update AFTER UPDATE ON activity_edges
+                BEGIN INSERT INTO writes VALUES ('edge-update'); END;
+                CREATE TEMP TRIGGER edge_delete AFTER DELETE ON activity_edges
+                BEGIN INSERT INTO writes VALUES ('edge-delete'); END;
+                """
+            )
+            storage._replace_activity_graph(conn, trace)
+            assert conn.execute("SELECT COUNT(*) FROM writes").fetchone()[0] == 0
+
+
 def test_session_detail_projects_compatibility_arrays_from_activity():
     with tempfile.TemporaryDirectory() as tmp_dir:
         project_dir = Path(tmp_dir) / "-Users-example-repo"
@@ -243,6 +269,13 @@ def test_session_detail_projects_compatibility_arrays_from_activity():
         trace = collector.finalize_state(state)[0]
         storage = _make_storage(tmp_dir)
         storage.save_trace(trace)
+        with sqlite3.connect(storage.db_path) as conn:
+            stored_tool_calls, stored_llm_calls = conn.execute(
+                "SELECT tool_calls, llm_calls FROM traces WHERE session_id = ?",
+                ("projection",),
+            ).fetchone()
+        assert stored_tool_calls == "[]"
+        assert stored_llm_calls == "[]"
         session = storage.get_session("projection")
 
         assert session is not None
@@ -293,6 +326,60 @@ def test_session_summary_omits_heavy_call_histories_and_marks_detail_level():
         assert session["metadata"]["subagent_logs"] == [
             {"agent_id": "child", "description": "Inspect code"}
         ]
+
+
+def test_canonical_session_projects_subagent_detail_from_activity():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        log_path = project_dir / "parent.jsonl"
+        log_path.write_text(
+            '{"type":"user","uuid":"parent-u","message":{"role":"user",'
+            '"content":"delegate"}}\n'
+            '{"type":"assistant","uuid":"parent-a","message":{"id":"parent-m",'
+            '"role":"assistant","model":"claude-opus-4-8","content":['
+            '{"type":"tool_use","id":"agent-tool","name":"Agent","input":{}}]}}\n',
+            encoding="utf-8",
+        )
+        subagent_dir = project_dir / "parent" / "subagents"
+        subagent_dir.mkdir(parents=True)
+        (subagent_dir / "agent-child.jsonl").write_text(
+            '{"type":"user","uuid":"child-u","message":{"role":"user",'
+            '"content":"inspect"}}\n'
+            '{"type":"assistant","uuid":"child-a","message":{"id":"child-m",'
+            '"role":"assistant","model":"claude-opus-4-8","content":['
+            '{"type":"tool_use","id":"read-tool","name":"Read",'
+            '"input":{"file_path":"README.md"}}],'
+            '"usage":{"input_tokens":5,"output_tokens":2}}}\n'
+            '{"type":"user","uuid":"child-r","message":{"role":"user","content":['
+            '{"type":"tool_result","tool_use_id":"read-tool","content":"contents"}]}}\n',
+            encoding="utf-8",
+        )
+        (subagent_dir / "agent-child.meta.json").write_text(
+            '{"agentType":"Explore","description":"Inspect code",'
+            '"toolUseId":"agent-tool","spawnDepth":1}',
+            encoding="utf-8",
+        )
+
+        collector = ClaudeCodeCollector(None)
+        trace = collector.parse_session_file(log_path)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+
+        with sqlite3.connect(storage.db_path) as conn:
+            stored_metadata = json.loads(
+                conn.execute(
+                    "SELECT metadata FROM traces WHERE session_id = ?", ("parent",)
+                ).fetchone()[0]
+            )
+        assert "llm_calls" not in stored_metadata["subagent_logs"][0]
+        assert "tool_calls" not in stored_metadata["subagent_logs"][0]
+
+        session = storage.get_session("parent")
+        subagent = session["metadata"]["subagent_logs"][0]
+        assert subagent["llm_calls"][0]["id"] == "child-m"
+        assert subagent["tool_calls"][0]["name"] == "Read"
+        assert subagent["tool_calls"][0]["output"] == "contents"
 
 
 def test_session_detail_excludes_namespaced_subagent_activity():

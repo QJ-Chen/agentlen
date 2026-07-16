@@ -13,9 +13,10 @@ import re
 import sqlite3
 import warnings
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 CLAUDE_CODE_PLATFORM = "claude-code"
 
@@ -155,6 +156,28 @@ class SQLiteStorage(Storage):
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    @contextmanager
+    def _connect(self, *, row_factory: bool = False) -> Iterator[sqlite3.Connection]:
+        """Open a short-lived configured connection and always close it."""
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        if row_factory:
+            conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA busy_timeout = 30000")
+            conn.execute("PRAGMA wal_autocheckpoint = 1000")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    def checkpoint(self, *, truncate: bool = False) -> tuple[int, int, int]:
+        """Checkpoint committed WAL pages after large ingestion transactions."""
+        mode = "TRUNCATE" if truncate else "PASSIVE"
+        with self._connect() as conn:
+            row = conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()
+        return tuple(int(value) for value in row)
+
     def _validate_platform(self, platform: Any) -> str:
         value = str(platform or CLAUDE_CODE_PLATFORM).strip().lower()
         if value != CLAUDE_CODE_PLATFORM:
@@ -162,7 +185,7 @@ class SQLiteStorage(Storage):
         return CLAUDE_CODE_PLATFORM
 
     def purge_non_claude_rows(self) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM traces WHERE lower(coalesce(platform, '')) != ?",
                 (CLAUDE_CODE_PLATFORM,),
@@ -170,7 +193,7 @@ class SQLiteStorage(Storage):
             return int(cursor.rowcount or 0)
 
     def count_non_claude_rows(self) -> int:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             cursor = conn.execute(
                 "SELECT COUNT(*) FROM traces WHERE lower(coalesce(platform, '')) != ?",
                 (CLAUDE_CODE_PLATFORM,),
@@ -179,7 +202,9 @@ class SQLiteStorage(Storage):
             return int(row[0] if row else 0)
 
     def _init_db(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA wal_autocheckpoint = 1000")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS traces (
@@ -290,44 +315,90 @@ class SQLiteStorage(Storage):
 
     def save_trace(self, trace: Dict[str, Any]):
         normalized = self._normalize_trace(trace)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO traces (
-                    trace_id, platform, agent_name, session_id,
-                    start_time, end_time, duration_ms, model,
-                    prompt, response, input_tokens, output_tokens,
-                    cache_read_tokens, cache_write_tokens,
-                    cache_creation_input_tokens, cache_read_input_tokens,
-                    cost_usd, tool_calls, llm_calls,
-                    status, error_message,
-                    project_path, session_file_path, role, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                self._trace_row_values(normalized),
-            )
+        stored = self._trace_for_storage(normalized)
+        with self._connect() as conn:
+            self._upsert_trace(conn, stored)
             self._replace_activity_graph(conn, normalized)
 
     def save_traces(self, traces: List[Dict[str, Any]]):
         normalized = [self._normalize_trace(trace) for trace in traces]
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             for trace in normalized:
-                conn.execute(
-                    """
-                    INSERT OR REPLACE INTO traces (
-                        trace_id, platform, agent_name, session_id,
-                        start_time, end_time, duration_ms, model,
-                        prompt, response, input_tokens, output_tokens,
-                        cache_read_tokens, cache_write_tokens,
-                        cache_creation_input_tokens, cache_read_input_tokens,
-                        cost_usd, tool_calls, llm_calls,
-                        status, error_message,
-                        project_path, session_file_path, role, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    self._trace_row_values(trace),
-                )
+                stored = self._trace_for_storage(trace)
+                self._upsert_trace(conn, stored)
                 self._replace_activity_graph(conn, trace)
+
+    def _upsert_trace(self, conn: sqlite3.Connection, trace: Dict[str, Any]) -> None:
+        columns = (
+            "trace_id", "platform", "agent_name", "session_id", "start_time",
+            "end_time", "duration_ms", "model", "prompt", "response",
+            "input_tokens", "output_tokens", "cache_read_tokens",
+            "cache_write_tokens", "cache_creation_input_tokens",
+            "cache_read_input_tokens", "cost_usd", "tool_calls", "llm_calls",
+            "status", "error_message", "project_path", "session_file_path",
+            "role", "metadata",
+        )
+        mutable = columns[1:]
+        assignments = ", ".join(f"{column} = excluded.{column}" for column in mutable)
+        changed = " OR ".join(
+            f"traces.{column} IS NOT excluded.{column}" for column in mutable
+        )
+        placeholders = ", ".join("?" for _ in columns)
+        conn.execute(
+            f"""
+            INSERT INTO traces ({', '.join(columns)}) VALUES ({placeholders})
+            ON CONFLICT(trace_id) DO UPDATE SET {assignments}
+            WHERE {changed}
+            """,
+            self._trace_row_values(trace),
+        )
+
+    @staticmethod
+    def _trace_for_storage(trace: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove compatibility detail duplicated by a complete activity graph."""
+        graph = trace.get("activity_graph")
+        if not isinstance(graph, dict):
+            return trace
+        nodes = graph.get("nodes")
+        if not isinstance(nodes, list) or not any(
+            isinstance(node, dict)
+            and str(node.get("id") or "").startswith("event:")
+            and isinstance(node.get("payload"), dict)
+            and node["payload"].get("role") in {"user", "assistant"}
+            and node["payload"].get("projection_version") == 1
+            for node in nodes
+        ):
+            return trace
+
+        stored = dict(trace)
+        stored["tool_calls"] = []
+        stored["llm_calls"] = []
+        metadata = dict(trace.get("metadata") or {})
+        subagent_logs = metadata.get("subagent_logs")
+        if isinstance(subagent_logs, list):
+            canonical_agent_ids = {
+                str(node.get("id") or "").removeprefix("subagent:")
+                for node in nodes
+                if isinstance(node, dict)
+                and node.get("kind") == "subagent"
+                and str(node.get("id") or "").startswith("subagent:")
+            }
+            metadata["subagent_logs"] = [
+                {
+                    key: value
+                    for key, value in item.items()
+                    if key not in (
+                        {"llm_calls", "tool_calls", "activity_graph"}
+                        if str(item.get("agent_id") or "") in canonical_agent_ids
+                        else {"activity_graph"}
+                    )
+                }
+                for item in subagent_logs
+                if isinstance(item, dict)
+            ]
+        metadata["detail_source"] = "activity-v1"
+        stored["metadata"] = metadata
+        return stored
 
     def _replace_activity_graph(
         self, conn: sqlite3.Connection, trace: Dict[str, Any]
@@ -342,8 +413,16 @@ class SQLiteStorage(Storage):
         if not isinstance(nodes, list) or not isinstance(edges, list):
             raise ValueError("activity_graph must contain node and edge lists")
 
-        conn.execute("DELETE FROM activity_edges WHERE session_id = ?", (session_id,))
-        conn.execute("DELETE FROM activity_nodes WHERE session_id = ?", (session_id,))
+        conn.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS incoming_activity_nodes "
+            "(node_id TEXT PRIMARY KEY) WITHOUT ROWID"
+        )
+        conn.execute(
+            "CREATE TEMP TABLE IF NOT EXISTS incoming_activity_edges "
+            "(edge_id TEXT PRIMARY KEY) WITHOUT ROWID"
+        )
+        conn.execute("DELETE FROM incoming_activity_nodes")
+        conn.execute("DELETE FROM incoming_activity_edges")
         for node in nodes:
             if not isinstance(node, dict):
                 raise ValueError("activity graph nodes must be objects")
@@ -354,6 +433,29 @@ class SQLiteStorage(Storage):
                     parent_uuid, prompt_id, message_id, tool_use_id,
                     source_tool_assistant_uuid, source_file, payload
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, node_id) DO UPDATE SET
+                    kind = excluded.kind,
+                    sequence = excluded.sequence,
+                    timestamp = excluded.timestamp,
+                    raw_uuid = excluded.raw_uuid,
+                    parent_uuid = excluded.parent_uuid,
+                    prompt_id = excluded.prompt_id,
+                    message_id = excluded.message_id,
+                    tool_use_id = excluded.tool_use_id,
+                    source_tool_assistant_uuid = excluded.source_tool_assistant_uuid,
+                    source_file = excluded.source_file,
+                    payload = excluded.payload
+                WHERE kind != excluded.kind
+                   OR sequence != excluded.sequence
+                   OR timestamp IS NOT excluded.timestamp
+                   OR raw_uuid IS NOT excluded.raw_uuid
+                   OR parent_uuid IS NOT excluded.parent_uuid
+                   OR prompt_id IS NOT excluded.prompt_id
+                   OR message_id IS NOT excluded.message_id
+                   OR tool_use_id IS NOT excluded.tool_use_id
+                   OR source_tool_assistant_uuid IS NOT excluded.source_tool_assistant_uuid
+                   OR source_file IS NOT excluded.source_file
+                   OR payload != excluded.payload
                 """,
                 (
                     session_id,
@@ -371,6 +473,10 @@ class SQLiteStorage(Storage):
                     json.dumps(node.get("payload", {}), ensure_ascii=False),
                 ),
             )
+            conn.execute(
+                "INSERT OR IGNORE INTO incoming_activity_nodes(node_id) VALUES (?)",
+                (node["id"],),
+            )
         for edge in edges:
             if not isinstance(edge, dict):
                 raise ValueError("activity graph edges must be objects")
@@ -384,6 +490,15 @@ class SQLiteStorage(Storage):
                 INSERT INTO activity_edges (
                     session_id, edge_id, source_node_id, target_node_id, kind, payload
                 ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, edge_id) DO UPDATE SET
+                    source_node_id = excluded.source_node_id,
+                    target_node_id = excluded.target_node_id,
+                    kind = excluded.kind,
+                    payload = excluded.payload
+                WHERE source_node_id != excluded.source_node_id
+                   OR target_node_id != excluded.target_node_id
+                   OR kind != excluded.kind
+                   OR payload != excluded.payload
                 """,
                 (
                     session_id,
@@ -394,6 +509,20 @@ class SQLiteStorage(Storage):
                     json.dumps(payload, ensure_ascii=False),
                 ),
             )
+            conn.execute(
+                "INSERT OR IGNORE INTO incoming_activity_edges(edge_id) VALUES (?)",
+                (edge["id"],),
+            )
+        conn.execute(
+            "DELETE FROM activity_edges WHERE session_id = ? AND edge_id NOT IN "
+            "(SELECT edge_id FROM incoming_activity_edges)",
+            (session_id,),
+        )
+        conn.execute(
+            "DELETE FROM activity_nodes WHERE session_id = ? AND node_id NOT IN "
+            "(SELECT node_id FROM incoming_activity_nodes)",
+            (session_id,),
+        )
 
     @staticmethod
     def _activity_node_from_row(row: sqlite3.Row) -> Dict[str, Any]:
@@ -413,7 +542,7 @@ class SQLiteStorage(Storage):
         return item
 
     def has_activity(self, session_id: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
+        with self._connect() as conn:
             row = conn.execute(
                 "SELECT 1 FROM activity_nodes WHERE session_id = ? LIMIT 1", (session_id,)
             ).fetchone()
@@ -438,8 +567,7 @@ class SQLiteStorage(Storage):
             params.extend([after_sequence, after_sequence, after_node_id or ""])
         query += " ORDER BY sequence, node_id LIMIT ?"
         params.append(limit + 1)
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._connect(row_factory=True) as conn:
             rows = conn.execute(query, params).fetchall()
         has_more = len(rows) > limit
         page_rows = rows[:limit]
@@ -451,8 +579,7 @@ class SQLiteStorage(Storage):
         return {"nodes": nodes, "next_cursor": next_cursor}
 
     def get_activity_node(self, session_id: str, node_id: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._connect(row_factory=True) as conn:
             row = conn.execute(
                 "SELECT * FROM activity_nodes WHERE session_id = ? AND node_id = ?",
                 (session_id, node_id),
@@ -496,8 +623,7 @@ class SQLiteStorage(Storage):
         if depth < 0 or node_limit < 1 or edge_limit < 1:
             raise ValueError("Activity neighborhood bounds must be positive")
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._connect(row_factory=True) as conn:
             center_row = conn.execute(
                 "SELECT * FROM activity_nodes WHERE session_id = ? AND node_id = ?",
                 (session_id, node_id),
@@ -601,18 +727,22 @@ class SQLiteStorage(Storage):
         }
 
     def get_activity_session_projection(
-        self, session_id: str, *, llm_limit: Optional[int] = 500
+        self,
+        session_id: str,
+        *,
+        llm_limit: Optional[int] = 500,
+        node_prefix: str = "",
     ) -> Optional[Dict[str, Any]]:
         """Rebuild the dashboard compatibility arrays from canonical activities."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        event_pattern = f"{node_prefix}event:%"
+        with self._connect(row_factory=True) as conn:
             event_rows = conn.execute(
                 """
                 SELECT * FROM activity_nodes
-                WHERE session_id = ? AND node_id LIKE 'event:%'
+                WHERE session_id = ? AND node_id LIKE ?
                 ORDER BY sequence, node_id
                 """,
-                (session_id,),
+                (session_id, event_pattern),
             ).fetchall()
             if not event_rows:
                 return None
@@ -624,10 +754,10 @@ class SQLiteStorage(Storage):
                   ON node.session_id = edge.session_id
                  AND node.node_id = edge.target_node_id
                 WHERE edge.session_id = ? AND edge.kind = 'contains'
-                  AND edge.source_node_id LIKE 'event:%'
+                  AND edge.source_node_id LIKE ?
                 ORDER BY edge.source_node_id, node.sequence, node.node_id
                 """,
-                (session_id,),
+                (session_id, event_pattern),
             ).fetchall()
 
         events = [self._activity_node_from_row(row) for row in event_rows]
@@ -897,6 +1027,34 @@ class SQLiteStorage(Storage):
             "tool_calls": [tool_calls_by_id[tool_id] for tool_id in tool_order],
         }
 
+    def _project_subagent_details(
+        self, session_id: str, subagent_logs: Any
+    ) -> List[Dict[str, Any]]:
+        """Attach canonical call histories to compact stored subagent summaries."""
+        if not isinstance(subagent_logs, list):
+            return []
+        projected = []
+        for summary in subagent_logs:
+            if not isinstance(summary, dict):
+                continue
+            item = dict(summary)
+            agent_id = str(item.get("agent_id") or "")
+            detail = None
+            if agent_id:
+                detail = self.get_activity_session_projection(
+                    session_id,
+                    llm_limit=None,
+                    node_prefix=f"subagent:{agent_id}:",
+                )
+            if detail is not None and (detail["llm_calls"] or detail["tool_calls"]):
+                item["llm_calls"] = detail["llm_calls"]
+                item["tool_calls"] = detail["tool_calls"]
+            else:
+                item.setdefault("llm_calls", [])
+                item.setdefault("tool_calls", [])
+            projected.append(item)
+        return projected
+
     def get_session_conversation(
         self, session_id: str, *, limit: int = 50, before: Optional[int] = None
     ) -> Optional[Dict[str, Any]]:
@@ -1118,8 +1276,7 @@ class SQLiteStorage(Storage):
             query += " LIMIT ?"
             params.append(limit)
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._connect(row_factory=True) as conn:
             cursor = conn.execute(query, params)
             rows = cursor.fetchall()
             return [self._row_to_dict(row) for row in rows]
@@ -1410,8 +1567,7 @@ class SQLiteStorage(Storage):
             params.append(self._coerce_iso_datetime(end_time))
         query += " ORDER BY start_time"
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._connect(row_factory=True) as conn:
             return [dict(row) for row in conn.execute(query, params).fetchall()]
 
     def _collapse_session_summaries(
@@ -1620,6 +1776,9 @@ class SQLiteStorage(Storage):
                 session["llm_calls"] = projection["llm_calls"]
                 session["tool_calls"] = projection["tool_calls"]
                 metadata = dict(session.get("metadata") or {})
+                metadata["subagent_logs"] = self._project_subagent_details(
+                    session_id, metadata.get("subagent_logs")
+                )
                 metadata["detail_source"] = "activity-v1"
                 metadata["llm_call_count"] = sum(
                     int(turn.get("child_record_count") or 0)
@@ -1680,8 +1839,7 @@ class SQLiteStorage(Storage):
             query += " LIMIT ?"
             params.append(limit)
 
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
+        with self._connect(row_factory=True) as conn:
             cursor = conn.execute(query, params)
             rows = cursor.fetchall()
 

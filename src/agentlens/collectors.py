@@ -1687,6 +1687,9 @@ class CollectorManager:
         all_traces.sort(key=lambda item: item.get("start_time", ""), reverse=True)
         if all_traces:
             self.storage.save_traces(all_traces)
+            checkpoint = getattr(self.storage, "checkpoint", None)
+            if callable(checkpoint):
+                checkpoint(truncate=True)
         return len(all_traces)
 
     def get_collector_status(self) -> List[Dict[str, Any]]:
