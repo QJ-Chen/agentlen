@@ -13,10 +13,45 @@ class StubStorage:
     def __init__(self, session):
         self._session = session
 
-    def get_session(self, session_id: str):
+    def get_session(self, session_id: str, detail: str = "full"):
         if session_id != "session-1":
             return None
         return self._session
+
+
+class ActivityStubStorage(StubStorage):
+    def __init__(self):
+        super().__init__({"session_id": "session-1"})
+        self.page_calls = []
+        self.neighborhood_calls = []
+
+    def get_activity_nodes(self, session_id, **kwargs):
+        self.page_calls.append({"session_id": session_id, **kwargs})
+        return {
+            "nodes": [{"id": "event:a", "sequence": 0, "kind": "user-message"}],
+            "next_cursor": "0:event:a",
+        }
+
+    def get_activity_node(self, session_id, node_id):
+        if node_id != "event:a":
+            return None
+        return {"node": {"id": node_id}, "inbound_edges": [], "outbound_edges": []}
+
+    def get_activity_neighborhood(self, session_id, node_id, **kwargs):
+        self.neighborhood_calls.append(
+            {"session_id": session_id, "node_id": node_id, **kwargs}
+        )
+        if node_id == "missing":
+            return None
+        return {
+            "center_node_id": node_id,
+            "depth": kwargs["depth"],
+            "depth_reached": kwargs["depth"],
+            "direction": kwargs["direction"],
+            "nodes": [{"id": node_id}],
+            "edges": [],
+            "truncated": False,
+        }
 
 
 class RangeCaptureStorage:
@@ -60,7 +95,7 @@ class RangeCaptureStorage:
             "total": 1,
         }
 
-    def get_session(self, session_id: str):
+    def get_session(self, session_id: str, detail: str = "full"):
         if session_id == self.session_detail["session_id"]:
             return self.session_detail
         return None
@@ -562,6 +597,117 @@ class SessionEventsApiTests(unittest.TestCase):
             "/api/v1/sessions/session-1/events", params={"ids": too_many}
         )
         self.assertEqual(response.status_code, 400)
+
+
+class SessionActivitiesApiTests(unittest.TestCase):
+    def setUp(self):
+        self.original_storage = api.storage
+        self.original_updater = api.realtime_updater
+        self.realtime_patcher = patch.object(api, "RealtimeUpdater", StubRealtimeUpdater)
+        self.realtime_patcher.start()
+        self.storage = ActivityStubStorage()
+        api.storage = self.storage
+        api.realtime_updater = None
+        self.client = TestClient(api.app)
+
+    def tearDown(self):
+        api.storage = self.original_storage
+        api.realtime_updater = self.original_updater
+        self.realtime_patcher.stop()
+
+    def test_returns_page_and_decodes_composite_cursor(self):
+        response = self.client.get(
+            "/api/v1/sessions/session-1/activities",
+            params={"cursor": "4:content:a:0", "kind": "tool-use", "limit": 25},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["next_cursor"], "0:event:a")
+        self.assertEqual(
+            self.storage.page_calls[0],
+            {
+                "session_id": "session-1",
+                "kind": "tool-use",
+                "after_sequence": 4,
+                "after_node_id": "content:a:0",
+                "limit": 25,
+            },
+        )
+
+    def test_returns_node_detail_and_not_found_responses(self):
+        response = self.client.get("/api/v1/sessions/session-1/activities/event:a")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["node"]["id"], "event:a")
+
+        self.assertEqual(
+            self.client.get("/api/v1/sessions/session-1/activities/missing").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/sessions/missing/activities").status_code,
+            404,
+        )
+
+    def test_rejects_invalid_cursor_and_limit(self):
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/sessions/session-1/activities", params={"cursor": "bad"}
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/sessions/session-1/activities", params={"limit": 501}
+            ).status_code,
+            422,
+        )
+
+    def test_returns_bounded_activity_neighborhood(self):
+        response = self.client.get(
+            "/api/v1/sessions/session-1/activities/event:a/neighborhood",
+            params={
+                "depth": 2,
+                "direction": "outbound",
+                "node_limit": 40,
+                "edge_limit": 80,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["center_node_id"], "event:a")
+        self.assertEqual(
+            self.storage.neighborhood_calls[0],
+            {
+                "session_id": "session-1",
+                "node_id": "event:a",
+                "depth": 2,
+                "direction": "outbound",
+                "node_limit": 40,
+                "edge_limit": 80,
+            },
+        )
+
+    def test_neighborhood_rejects_invalid_bounds_and_missing_activity(self):
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/sessions/session-1/activities/event:a/neighborhood",
+                params={"depth": 4},
+            ).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/sessions/session-1/activities/event:a/neighborhood",
+                params={"direction": "sideways"},
+            ).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/sessions/session-1/activities/missing/neighborhood"
+            ).status_code,
+            404,
+        )
 
 
 class TraceSaveCaptureStorage:

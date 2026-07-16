@@ -364,7 +364,9 @@ function App() {
         if (!sessionDetailsById[node.sessionId]) {
           void (async () => {
             try {
-              const response = await fetch(`${API_URL}/api/v1/sessions/${encodeURIComponent(node.sessionId || '')}`);
+              const response = await fetch(
+                `${API_URL}/api/v1/sessions/${encodeURIComponent(node.sessionId || '')}?detail=summary`,
+              );
               if (!response.ok) {
                 throw new Error('Failed to load session detail');
               }

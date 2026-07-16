@@ -560,3 +560,71 @@ def test_command_only_stays_standalone_after_unrelated_user_prompt(tmp_path: Pat
     assert command_only[0]["name"] == "/recap"
     assistant_turns = trace["llm_calls"]
     assert all(turn["command"] is None for turn in assistant_turns)
+
+
+def test_finalize_exposes_canonical_activity_graph(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+
+    lines = [
+        '{"type":"user","uuid":"u1","message":{"role":"user","content":"run"}}',
+        '{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}',
+        '{"type":"user","uuid":"r1","parentUuid":"a1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}',
+    ]
+    for line in lines:
+        collector.process_line(state, line)
+
+    graph = collector.finalize_state(state)[0]["activity_graph"]
+    raw_event_ids = {
+        node["raw_uuid"] for node in graph["nodes"] if node["id"].startswith("event:")
+    }
+    assert raw_event_ids == {"u1", "a1", "r1"}
+    assert any(edge["kind"] == "returns-result" for edge in graph["edges"])
+
+
+def test_finalize_merges_subagent_activity_under_agent_tool(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+    subagent_dir = project_dir / "session-1" / "subagents"
+    subagent_dir.mkdir(parents=True)
+    subagent_log = subagent_dir / "agent-child.jsonl"
+    subagent_log.write_text(
+        '{"type":"user","uuid":"child-u1","agentId":"child",'
+        '"isSidechain":true,"message":{"role":"user","content":"inspect"}}\n'
+        '{"type":"assistant","uuid":"child-a1","parentUuid":"child-u1",'
+        '"agentId":"child","isSidechain":true,'
+        '"message":{"role":"assistant","content":[]}}\n',
+        encoding="utf-8",
+    )
+    (subagent_dir / "agent-child.meta.json").write_text(
+        '{"agentType":"Explore","description":"Inspect code",'
+        '"toolUseId":"agent-tool","spawnDepth":1}',
+        encoding="utf-8",
+    )
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+    collector.process_line(
+        state,
+        '{"type":"assistant","uuid":"parent-a1",'
+        '"message":{"role":"assistant","content":['
+        '{"type":"tool_use","id":"agent-tool","name":"Agent","input":{}}]}}',
+    )
+
+    trace = collector.finalize_state(state)[0]
+    graph = trace["activity_graph"]
+    node_ids = {node["id"] for node in graph["nodes"]}
+
+    assert "subagent:child" in node_ids
+    assert "subagent:child:event:child-u1" in node_ids
+    assert any(
+        edge["source"] == "tool-use:agent-tool"
+        and edge["target"] == "subagent:child"
+        and edge["kind"] == "spawns"
+        for edge in graph["edges"]
+    )
+    assert trace["metadata"]["subagent_logs"][0]["spawn_depth"] == 1

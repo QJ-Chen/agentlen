@@ -684,11 +684,86 @@ def get_sessions(
 
 
 @app.get("/api/v1/sessions/{session_id}")
-def get_session(session_id: str):
-    session = storage.get_session(session_id)
+def get_session(
+    session_id: str,
+    detail: Literal["summary", "full"] = "full",
+):
+    session = storage.get_session(session_id, detail=detail)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+def _decode_activity_cursor(cursor: Optional[str]) -> tuple[Optional[int], Optional[str]]:
+    if not cursor:
+        return None, None
+    sequence_text, separator, node_id = cursor.partition(":")
+    if not separator or not node_id:
+        raise HTTPException(status_code=400, detail="Invalid activity cursor")
+    try:
+        sequence = int(sequence_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid activity cursor") from exc
+    if sequence < 0:
+        raise HTTPException(status_code=400, detail="Invalid activity cursor")
+    return sequence, node_id
+
+
+@app.get("/api/v1/sessions/{session_id}/activities")
+def get_session_activities(
+    session_id: str,
+    kind: Optional[str] = Query(default=None, min_length=1),
+    cursor: Optional[str] = Query(default=None, min_length=1),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Return a bounded, stable page of canonical session activities."""
+    if not storage.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    after_sequence, after_node_id = _decode_activity_cursor(cursor)
+    page = storage.get_activity_nodes(
+        session_id,
+        kind=kind,
+        after_sequence=after_sequence,
+        after_node_id=after_node_id,
+        limit=limit,
+    )
+    return {"session_id": session_id, **page}
+
+
+@app.get("/api/v1/sessions/{session_id}/activities/{node_id}")
+def get_session_activity(session_id: str, node_id: str):
+    """Return one canonical activity with its immediate relationships."""
+    if not storage.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    activity = storage.get_activity_node(session_id, node_id)
+    if not activity:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return {"session_id": session_id, **activity}
+
+
+@app.get("/api/v1/sessions/{session_id}/activities/{node_id}/neighborhood")
+def get_session_activity_neighborhood(
+    session_id: str,
+    node_id: str,
+    depth: int = Query(default=1, ge=0, le=3),
+    direction: Literal["inbound", "outbound", "both"] = "both",
+    node_limit: int = Query(default=100, ge=1, le=500),
+    edge_limit: int = Query(default=500, ge=1, le=1000),
+):
+    """Return a bounded subgraph centered on one canonical activity."""
+    if not storage.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    neighborhood = storage.get_activity_neighborhood(
+        session_id,
+        node_id,
+        depth=depth,
+        direction=direction,
+        node_limit=node_limit,
+        edge_limit=edge_limit,
+    )
+    if not neighborhood:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return {"session_id": session_id, **neighborhood}
 
 
 _MAX_EVENT_IDS = 50

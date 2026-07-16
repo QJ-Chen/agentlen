@@ -5,6 +5,7 @@ import { API_URL } from '../lib/api';
 import type { DetailLevel } from '../lib/callClassification';
 import { deriveRenderablePromptThreads, groupSubagentLaunches } from '../lib/conversationModel';
 import type { RawSessionRecord } from '../lib/sessionApiTypes';
+import { transformSession } from '../lib/sessionNormalization';
 import { isThreadVisible } from '../lib/threadVisibility';
 import { EmptyState } from './TraceDetailBlocks';
 import { RawView, TaskStatusView, VisionView } from './trace-detail/AuxViews';
@@ -37,8 +38,10 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   initialTab = 'overview',
   hideTabs = false,
 }) => {
-  const typedTrace = trace as TraceWithRaw;
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
+  const [fullTrace, setFullTrace] = useState<TraceWithRaw | null>(null);
+  const [fullDetailLoading, setFullDetailLoading] = useState(false);
+  const [fullDetailError, setFullDetailError] = useState<string | null>(null);
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('standard');
   const [visibleKinds, setVisibleKinds] = useState<Record<ReplayMessageKind, boolean>>(DEFAULT_VISIBLE_KINDS);
   const [expandedLLMs, setExpandedLLMs] = useState<Set<string>>(new Set(['group-0']));
@@ -72,11 +75,13 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     }
   };
 
-  const allTools = useMemo(() => trace.tools || [], [trace.tools]);
-  const allLLMCalls = useMemo(() => trace.llmCalls || [], [trace.llmCalls]);
-  const assistantTurns = useMemo(() => trace.assistantTurns || [], [trace.assistantTurns]);
-  const promptThreads = useMemo(() => trace.promptThreads || [], [trace.promptThreads]);
-  const subagentLogs = useMemo(() => trace.subagentLogs || [], [trace.subagentLogs]);
+  const effectiveTrace = fullTrace || (trace as TraceWithRaw);
+  const effectiveTypedTrace = effectiveTrace as TraceWithRaw;
+  const allTools = useMemo(() => effectiveTrace.tools || [], [effectiveTrace.tools]);
+  const allLLMCalls = useMemo(() => effectiveTrace.llmCalls || [], [effectiveTrace.llmCalls]);
+  const assistantTurns = useMemo(() => effectiveTrace.assistantTurns || [], [effectiveTrace.assistantTurns]);
+  const promptThreads = useMemo(() => effectiveTrace.promptThreads || [], [effectiveTrace.promptThreads]);
+  const subagentLogs = useMemo(() => effectiveTrace.subagentLogs || [], [effectiveTrace.subagentLogs]);
 
   const groupedSubagentLogs = useMemo(() => groupSubagentLaunches(subagentLogs), [subagentLogs]);
 
@@ -162,7 +167,38 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
 
   useEffect(() => {
     setActiveTab(initialTab);
+    setFullTrace(null);
+    setFullDetailError(null);
   }, [initialTab, trace.sessionId]);
+
+  useEffect(() => {
+    const needsFullDetail = activeTab === 'llm' || activeTab === 'subagents' || activeTab === 'raw';
+    const detailLevel = effectiveTrace.raw?.metadata?.detail_level;
+    if (!needsFullDetail || fullTrace || detailLevel === 'full') return;
+
+    const controller = new AbortController();
+    const loadFullDetail = async () => {
+      setFullDetailLoading(true);
+      setFullDetailError(null);
+      try {
+        const response = await fetch(
+          `${API_URL}/api/v1/sessions/${encodeURIComponent(trace.sessionId)}?detail=full`,
+          { signal: controller.signal },
+        );
+        if (!response.ok) throw new Error('Failed to load full session detail');
+        const payload = (await response.json()) as RawSessionRecord;
+        setFullTrace(transformSession(payload));
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setFullDetailError(error instanceof Error ? error.message : 'Failed to load full session detail');
+        }
+      } finally {
+        if (!controller.signal.aborted) setFullDetailLoading(false);
+      }
+    };
+    void loadFullDetail();
+    return () => controller.abort();
+  }, [activeTab, effectiveTrace.raw?.metadata?.detail_level, fullTrace, trace.sessionId]);
 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
@@ -189,7 +225,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             key={`main-llm-thread-${thread.id}`}
             thread={thread}
             index={threadIdx}
-            toolScope={trace.tools || []}
+            toolScope={effectiveTrace.tools || []}
             scopePrefix="main-llm"
             allLLMCalls={allLLMCalls}
             detailLevel={detailLevel}
@@ -280,7 +316,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       <div className="p-5 xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
         {activeTab === 'overview' && (
           <OverviewView
-            trace={trace}
+            trace={effectiveTrace}
             promptGroupCount={assistantTurnGroups.length}
             toolCount={allTools.length}
             openingTarget={openingTarget}
@@ -288,8 +324,20 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             onOpenPath={(target) => void openPath(target)}
           />
         )}
-        {activeTab === 'llm' && renderLLM()}
-        {activeTab === 'subagents' && (
+        {activeTab === 'llm' && fullDetailLoading && (
+          <div className="text-sm text-slate-500">Loading conversation history…</div>
+        )}
+        {activeTab === 'llm' && !fullDetailLoading && fullDetailError && (
+          <div className="text-sm text-red-600">{fullDetailError}</div>
+        )}
+        {activeTab === 'llm' && !fullDetailLoading && !fullDetailError && renderLLM()}
+        {activeTab === 'subagents' && fullDetailLoading && (
+          <div className="text-sm text-slate-500">Loading subagent history…</div>
+        )}
+        {activeTab === 'subagents' && !fullDetailLoading && fullDetailError && (
+          <div className="text-sm text-red-600">{fullDetailError}</div>
+        )}
+        {activeTab === 'subagents' && !fullDetailLoading && !fullDetailError && (
           <SubagentsView
             subagentLogs={subagentLogs}
             groupedSubagentLogs={groupedSubagentLogs}
@@ -304,9 +352,17 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             onJumpToLaunchPrompt={jumpToLaunchPrompt}
           />
         )}
-        {activeTab === 'taskStatus' && <TaskStatusView trace={typedTrace} />}
-        {activeTab === 'vision' && <VisionView trace={trace} />}
-        {activeTab === 'raw' && <RawView trace={typedTrace} copiedId={copiedId} onCopy={copyToClipboard} />}
+        {activeTab === 'taskStatus' && <TaskStatusView trace={effectiveTypedTrace} />}
+        {activeTab === 'vision' && <VisionView trace={effectiveTrace} />}
+        {activeTab === 'raw' && fullDetailLoading && (
+          <div className="text-sm text-slate-500">Loading raw detail…</div>
+        )}
+        {activeTab === 'raw' && !fullDetailLoading && fullDetailError && (
+          <div className="text-sm text-red-600">{fullDetailError}</div>
+        )}
+        {activeTab === 'raw' && !fullDetailLoading && !fullDetailError && (
+          <RawView trace={effectiveTypedTrace} copiedId={copiedId} onCopy={copyToClipboard} />
+        )}
       </div>
     </div>
   );

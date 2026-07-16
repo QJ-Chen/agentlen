@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
+from .activity import ActivityGraphBuilder, merge_subagent_graphs
+
 CLAUDE_TASKS_DIR = Path.home() / ".claude" / "tasks"
 CLAUDE_IMAGE_CACHE_DIRS = [
     Path.home() / ".claude" / "image-cache",
@@ -948,6 +950,10 @@ class LogCollector(ABC):
 
     def finalize_state(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
         traces = state["aggregator"].get_traces()
+        activity_builder = state.get("activity_builder")
+        if isinstance(activity_builder, ActivityGraphBuilder):
+            graph = activity_builder.build()
+            traces = [{**trace, "activity_graph": graph} for trace in traces]
         source_path = state.get("source_log_path")
         if not source_path:
             return traces
@@ -1208,7 +1214,9 @@ class ClaudeCodeCollector(LogCollector):
         log_path: Path,
         launch_lookup: Dict[str, Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
-        traces = self._parse_log_traces(log_path)
+        state = self.create_incremental_state(log_path)
+        self._consume_file(log_path, state)
+        traces = state["aggregator"].get_traces()
         if not traces:
             return None
 
@@ -1235,6 +1243,7 @@ class ClaudeCodeCollector(LogCollector):
             "agent_type": meta.get("agentType") or "unknown",
             "description": meta.get("description") or "",
             "tool_use_id": tool_use_id,
+            "spawn_depth": meta.get("spawnDepth"),
             "launch_batch_id": launch_meta.get("launch_batch_id") or tool_use_id,
             "launch_timestamp": launch_meta.get("launch_timestamp"),
             "launch_order": launch_meta.get("launch_order"),
@@ -1254,6 +1263,7 @@ class ClaudeCodeCollector(LogCollector):
             "tool_calls": trace.get("tool_calls") or [],
             "llm_calls": trace.get("llm_calls") or [],
             "meta": meta,
+            "activity_graph": state["activity_builder"].build(),
         }
 
     def _collect_subagent_summaries(self, parent_log_path: Path) -> List[Dict[str, Any]]:
@@ -1281,9 +1291,17 @@ class ClaudeCodeCollector(LogCollector):
         updated_traces = []
         for trace in traces:
             metadata = dict(trace.get("metadata") or {})
-            metadata["subagent_logs"] = subagent_logs
+            metadata["subagent_logs"] = [
+                {key: value for key, value in subagent.items() if key != "activity_graph"}
+                for subagent in subagent_logs
+            ]
             trace_with_subagents = dict(trace)
             trace_with_subagents["metadata"] = metadata
+            activity_graph = trace.get("activity_graph")
+            if isinstance(activity_graph, dict):
+                trace_with_subagents["activity_graph"] = merge_subagent_graphs(
+                    activity_graph, subagent_logs
+                )
             updated_traces.append(trace_with_subagents)
         return updated_traces
 
@@ -1336,6 +1354,7 @@ class ClaudeCodeCollector(LogCollector):
             "project_group": project_group,
             "pending_command": {},
             "aggregator": aggregator,
+            "activity_builder": ActivityGraphBuilder(session_id),
             "source_log_path": log_path,
         }
 
@@ -1344,6 +1363,10 @@ class ClaudeCodeCollector(LogCollector):
             data = json.loads(line.strip())
         except json.JSONDecodeError:
             return
+
+        activity_builder = state.get("activity_builder")
+        if isinstance(activity_builder, ActivityGraphBuilder):
+            activity_builder.add_record(data, str(state.get("source_log_path") or ""))
 
         msg_type = data.get("type")
         if msg_type == "system":

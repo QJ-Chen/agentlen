@@ -1,6 +1,8 @@
 import tempfile
+import json
 from pathlib import Path
 
+from agentlens.collectors import ClaudeCodeCollector
 from agentlens.storage import SQLiteStorage
 
 
@@ -37,6 +39,500 @@ def _sample_trace() -> dict:
     }
 
 
+def _activity_graph() -> dict:
+    return {
+        "version": 1,
+        "session_id": "abc",
+        "nodes": [
+            {"id": "event:a", "kind": "user-message", "sequence": 0, "payload": {}},
+            {
+                "id": "content:a:0",
+                "kind": "content-text",
+                "sequence": 0,
+                "payload": {"text": "a"},
+            },
+            {
+                "id": "event:b",
+                "kind": "assistant-message",
+                "sequence": 1,
+                "payload": {},
+            },
+            {
+                "id": "tool-use:t1",
+                "kind": "tool-use",
+                "sequence": 1,
+                "payload": {},
+            },
+        ],
+        "edges": [
+            {
+                "id": "contains:event:a:content:a:0",
+                "source": "event:a",
+                "target": "content:a:0",
+                "kind": "contains",
+            },
+            {
+                "id": "parent:event:a:event:b",
+                "source": "event:a",
+                "target": "event:b",
+                "kind": "parent",
+            },
+            {
+                "id": "invokes:event:b:tool-use:t1",
+                "source": "event:b",
+                "target": "tool-use:t1",
+                "kind": "invokes-tool",
+            },
+        ],
+    }
+
+
+def test_activity_persistence_pages_shared_sequences_without_skipping():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        trace["activity_graph"] = _activity_graph()
+        storage.save_trace(trace)
+
+        first = storage.get_activity_nodes("abc", limit=1)
+        sequence_text, node_id = first["next_cursor"].partition(":")[::2]
+        second = storage.get_activity_nodes(
+            "abc", after_sequence=int(sequence_text), after_node_id=node_id, limit=3
+        )
+
+        assert first["nodes"][0]["id"] == "content:a:0"
+        assert [node["id"] for node in second["nodes"]] == [
+            "event:a",
+            "event:b",
+            "tool-use:t1",
+        ]
+        detail = storage.get_activity_node("abc", "event:a")
+        assert detail is not None
+        assert detail["outbound_edges"][0]["target"] == "content:a:0"
+
+
+def test_activity_neighborhood_respects_depth_direction_and_limits():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        trace["activity_graph"] = _activity_graph()
+        storage.save_trace(trace)
+
+        outbound = storage.get_activity_neighborhood(
+            "abc", "event:a", depth=2, direction="outbound"
+        )
+        assert outbound is not None
+        assert {node["id"] for node in outbound["nodes"]} == {
+            "event:a",
+            "content:a:0",
+            "event:b",
+            "tool-use:t1",
+        }
+        assert outbound["depth_reached"] == 2
+        assert not outbound["truncated"]
+
+        inbound = storage.get_activity_neighborhood(
+            "abc", "tool-use:t1", depth=2, direction="inbound"
+        )
+        assert inbound is not None
+        assert {node["id"] for node in inbound["nodes"]} == {
+            "event:a",
+            "event:b",
+            "tool-use:t1",
+        }
+
+        limited = storage.get_activity_neighborhood(
+            "abc", "event:a", depth=2, direction="outbound", node_limit=2
+        )
+        assert limited is not None
+        assert len(limited["nodes"]) == 2
+        assert limited["truncated"]
+
+
+def test_activity_neighborhood_returns_none_for_missing_center():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(_sample_trace())
+
+        assert storage.get_activity_neighborhood("abc", "missing") is None
+
+
+def test_activity_resave_replaces_graph_but_absent_graph_preserves_it():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        trace["activity_graph"] = _activity_graph()
+        storage.save_trace(trace)
+
+        replacement = _activity_graph()
+        replacement["nodes"] = replacement["nodes"][:1]
+        replacement["edges"] = []
+        trace["activity_graph"] = replacement
+        storage.save_trace(trace)
+        assert [node["id"] for node in storage.get_activity_nodes("abc")["nodes"]] == ["event:a"]
+
+        trace.pop("activity_graph")
+        storage.save_trace(trace)
+        assert storage.has_activity("abc")
+
+
+def test_session_detail_projects_compatibility_arrays_from_activity():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        log_path = project_dir / "projection.jsonl"
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(log_path)
+        records = [
+            {
+                "type": "user",
+                "uuid": "u1",
+                "promptId": "p1",
+                "timestamp": "2026-07-15T01:00:00Z",
+                "message": {"role": "user", "content": "inspect this"},
+            },
+            {
+                "type": "assistant",
+                "uuid": "a1",
+                "promptId": "p1",
+                "timestamp": "2026-07-15T01:00:01Z",
+                "message": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "checking"}],
+                    "usage": {"input_tokens": 10, "output_tokens": 2},
+                },
+            },
+            {
+                "type": "assistant",
+                "uuid": "a2",
+                "promptId": "p1",
+                "timestamp": "2026-07-15T01:00:02Z",
+                "message": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "Read",
+                            "input": {"file_path": "README.md"},
+                        }
+                    ],
+                    "usage": {"input_tokens": 12, "output_tokens": 3},
+                },
+            },
+            {
+                "type": "user",
+                "uuid": "r1",
+                "timestamp": "2026-07-15T01:00:03Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "contents"}
+                    ],
+                },
+            },
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+
+        legacy = state["aggregator"].get_traces()[0]
+        trace = collector.finalize_state(state)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+        session = storage.get_session("projection")
+
+        assert session is not None
+        assert session["metadata"]["detail_source"] == "activity-v1"
+        assert len(session["llm_calls"]) == 1
+        projected_turn = session["llm_calls"][0]
+        legacy_turn = legacy["llm_calls"][0]
+        assert projected_turn["id"] == legacy_turn["id"] == "m1"
+        assert projected_turn["prompt"] == legacy_turn["prompt"] == "inspect this"
+        assert projected_turn["child_record_count"] == 2
+        assert projected_turn["input_tokens"] == legacy_turn["input_tokens"] == 12
+        assert projected_turn["child_records"][0]["response"] == "checking"
+        assert session["tool_calls"] == [
+            {
+                "tool_use_id": "t1",
+                "name": "Read",
+                "input": {"file_path": "README.md"},
+                "timestamp": "2026-07-15T01:00:02Z",
+                "assistant_turn_id": "m1",
+                "assistant_message_id": "m1",
+                "assistant_record_id": "a2",
+                "output": "contents",
+            }
+        ]
+
+
+def test_session_summary_omits_heavy_call_histories_and_marks_detail_level():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        trace["metadata"]["subagent_logs"] = [
+            {
+                "agent_id": "child",
+                "description": "Inspect code",
+                "llm_calls": [{"id": "child-turn"}],
+                "tool_calls": [{"tool_use_id": "child-tool"}],
+            }
+        ]
+        storage.save_trace(trace)
+
+        session = storage.get_session("abc", detail="summary")
+
+        assert session is not None
+        assert session["llm_calls"] == []
+        assert session["tool_calls"] == []
+        assert session["metadata"]["detail_level"] == "summary"
+        assert session["metadata"]["has_full_detail"] is True
+        assert session["metadata"]["subagent_logs"] == [
+            {"agent_id": "child", "description": "Inspect code"}
+        ]
+
+
+def test_session_detail_excludes_namespaced_subagent_activity():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        graph = _activity_graph()
+        graph["nodes"].append(
+            {
+                "id": "subagent:child:event:a1",
+                "kind": "assistant-message",
+                "sequence": 5,
+                "message_id": "child-message",
+                "payload": {"role": "assistant", "model": "claude-opus-4-8"},
+            }
+        )
+        trace["activity_graph"] = graph
+        storage.save_trace(trace)
+
+        session = storage.get_session("abc")
+
+        assert session is not None
+        assert all(turn.get("message_id") != "child-message" for turn in session["llm_calls"])
+
+
+def test_activity_projection_tool_result_does_not_split_assistant_turn():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        log_path = project_dir / "projection.jsonl"
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(log_path)
+        records = [
+            {
+                "type": "assistant",
+                "uuid": "a1",
+                "timestamp": "2026-07-15T01:00:01Z",
+                "message": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [
+                        {"type": "tool_use", "id": "t1", "name": "Read", "input": {}}
+                    ],
+                    "usage": {},
+                },
+            },
+            {
+                "type": "user",
+                "uuid": "r1",
+                "timestamp": "2026-07-15T01:00:02Z",
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}
+                    ],
+                },
+            },
+            {
+                "type": "assistant",
+                "uuid": "a2",
+                "timestamp": "2026-07-15T01:00:03Z",
+                "message": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "done"}],
+                    "usage": {},
+                },
+            },
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+
+        legacy = state["aggregator"].get_traces()[0]
+        trace = collector.finalize_state(state)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+        session = storage.get_session("projection")
+
+        assert session is not None
+        assert len(legacy["llm_calls"]) == len(session["llm_calls"]) == 1
+        assert session["llm_calls"][0]["child_record_count"] == 2
+        assert session["tool_calls"][0]["output"] == "ok"
+
+
+def test_activity_projection_ignored_event_keeps_turn_and_deduplicates_response():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "projection.jsonl")
+        for record in [
+            {
+                "type": "assistant",
+                "uuid": "a1",
+                "timestamp": "2026-07-15T01:00:01Z",
+                "message": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "same"}],
+                    "usage": {},
+                },
+            },
+            {
+                "type": "system",
+                "subtype": "progress",
+                "uuid": "s1",
+                "timestamp": "2026-07-15T01:00:02Z",
+            },
+            {
+                "type": "assistant",
+                "uuid": "a2",
+                "timestamp": "2026-07-15T01:00:03Z",
+                "message": {
+                    "id": "m1",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "same"}],
+                    "usage": {},
+                },
+            },
+        ]:
+            collector.process_line(state, json.dumps(record))
+
+        trace = collector.finalize_state(state)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+        session = storage.get_session("projection")
+
+        assert session is not None
+        assert len(session["llm_calls"]) == 1
+        assert session["llm_calls"][0]["child_record_count"] == 2
+        assert session["llm_calls"][0]["response"] == "same"
+
+
+def test_activity_projection_normal_prompt_clears_unrelated_pending_command():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "projection.jsonl")
+        records = [
+            {
+                "type": "user",
+                "uuid": "command",
+                "promptId": "command-prompt",
+                "message": {
+                    "role": "user",
+                    "content": (
+                        "<command-name>/compact</command-name>"
+                        "<command-message>compact</command-message>"
+                        "<command-args></command-args>"
+                    ),
+                },
+            },
+            {
+                "type": "user",
+                "uuid": "normal",
+                "promptId": "normal-prompt",
+                "message": {"role": "user", "content": "continue normally"},
+            },
+            {
+                "type": "assistant",
+                "uuid": "answer",
+                "promptId": "normal-prompt",
+                "message": {
+                    "id": "turn",
+                    "role": "assistant",
+                    "model": "claude-opus-4-8",
+                    "content": [{"type": "text", "text": "continued"}],
+                    "usage": {},
+                },
+            },
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+
+        trace = collector.finalize_state(state)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+        session = storage.get_session("projection")
+
+        assert session is not None
+        assert session["llm_calls"][0]["prompt"] == "continue normally"
+        assert session["llm_calls"][0]["command"] is None
+
+
+def test_activity_projection_matches_legacy_500_turn_retention_window():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "projection.jsonl")
+        for index in range(501):
+            collector.process_line(
+                state,
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "uuid": f"a-{index}",
+                        "message": {
+                            "id": f"m-{index}",
+                            "role": "assistant",
+                            "model": "claude-opus-4-8",
+                            "content": [{"type": "text", "text": str(index)}],
+                            "usage": {},
+                        },
+                    }
+                ),
+            )
+
+        trace = collector.finalize_state(state)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+        session = storage.get_session("projection")
+
+        assert session is not None
+        assert len(session["llm_calls"]) == 500
+        assert session["llm_calls"][0]["id"] == "m-1"
+        assert session["llm_calls"][-1]["id"] == "m-500"
+
+
+def test_session_detail_falls_back_when_activity_payload_is_malformed():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        graph = _activity_graph()
+        graph["nodes"][0]["payload"] = []
+        trace["activity_graph"] = graph
+        storage.save_trace(trace)
+
+        session = storage.get_session("abc")
+
+        assert session is not None
+        assert session["llm_calls"] == trace["llm_calls"]
+        assert "detail_source" not in session["metadata"]
+
+
 def test_list_sessions_light_omits_heavy_arrays():
     with tempfile.TemporaryDirectory() as tmp_dir:
         storage = _make_storage(tmp_dir)
@@ -53,6 +549,36 @@ def test_list_sessions_light_omits_heavy_arrays():
         assert session["metadata"]["task_count"] == 1
         assert session["metadata"]["vision_count"] == 1
         assert session["total_tokens"] == 150
+
+
+def test_list_sessions_light_does_not_use_full_trace_decoder():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(_sample_trace())
+
+        def fail_if_called(**_kwargs):
+            raise AssertionError("light session listing decoded full traces")
+
+        storage.get_traces = fail_if_called
+        payload = storage.list_sessions(limit=10, light=True)
+
+        assert payload["total"] == 1
+        assert payload["sessions"][0]["metadata"]["recap_text"] is None
+
+
+def test_list_sessions_light_preserves_deep_json_search():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        trace = _sample_trace()
+        trace["tool_calls"][0]["input"] = {"command": "unique-deep-search-value"}
+        storage.save_trace(trace)
+
+        payload = storage.list_sessions(
+            query="unique-deep-search-value", period_hours=100000, limit=10, light=True
+        )
+
+        assert payload["total"] == 1
+        assert payload["sessions"][0]["session_id"] == "abc"
 
 
 def test_list_sessions_full_still_has_arrays():
