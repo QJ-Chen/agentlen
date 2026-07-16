@@ -81,6 +81,9 @@ export function buildPromptThreadsFromAssistantTurns(
     const prompt = turn.prompt || '';
     const threadKey = promptId || `prompt-thread-${index}`;
 
+    // Skill attribution describes how an assistant turn was produced; it is
+    // not a new user prompt. Keep attributed continuations with the prompt
+    // thread that contains the Skill launch.
     if (
       !currentThread ||
       (promptId && currentThread.promptId !== promptId) ||

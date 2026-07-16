@@ -694,6 +694,22 @@ def get_session(
     return session
 
 
+@app.get("/api/v1/sessions/{session_id}/conversation")
+def get_session_conversation(
+    session_id: str,
+    cursor: Optional[str] = Query(default=None, pattern=r"^\d+$"),
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Return a bounded page of assistant turns and their tool calls."""
+    before = int(cursor) if cursor is not None else None
+    conversation = storage.get_session_conversation(
+        session_id, limit=limit, before=before
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session_id": session_id, **conversation}
+
+
 def _decode_activity_cursor(cursor: Optional[str]) -> tuple[Optional[int], Optional[str]]:
     if not cursor:
         return None, None

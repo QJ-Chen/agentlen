@@ -600,7 +600,9 @@ class SQLiteStorage(Storage):
             "truncated": truncated,
         }
 
-    def get_activity_session_projection(self, session_id: str) -> Optional[Dict[str, Any]]:
+    def get_activity_session_projection(
+        self, session_id: str, *, llm_limit: Optional[int] = 500
+    ) -> Optional[Dict[str, Any]]:
         """Rebuild the dashboard compatibility arrays from canonical activities."""
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -665,6 +667,7 @@ class SQLiteStorage(Storage):
         last_user_prompt: Optional[str] = None
         pending_command: Optional[Dict[str, Any]] = None
         current_turn: Optional[Dict[str, Any]] = None
+        skill_tool_ids_by_name: Dict[str, List[str]] = {}
 
         def finish_turn() -> None:
             nonlocal current_turn
@@ -709,14 +712,47 @@ class SQLiteStorage(Storage):
                 block.get("type") == "tool_result" and block.get("tool_use_id")
                 for block in content_blocks
             ) and not any(block.get("type") == "text" for block in content_blocks)
+            skill_control_record = False
+            skill_context = None
+            source_tool_use_id = payload.get("source_tool_use_id")
+            if role == "user" and payload.get("is_meta"):
+                raw_content = payload.get("content")
+                candidate = (
+                    raw_content.strip()
+                    if isinstance(raw_content, str)
+                    else "\n".join(
+                        str(block.get("text") or "")
+                        for block in content_blocks
+                        if block.get("type") == "text"
+                    ).strip()
+                )
+                source_tool = tool_calls_by_id.get(str(source_tool_use_id or ""))
+                if candidate and (
+                    candidate.startswith("Base directory for this skill:")
+                    or (source_tool_use_id and source_tool and source_tool.get("name") == "Skill")
+                ):
+                    skill_control_record = True
+                    if not candidate.lstrip().startswith("(Re-invocation of /"):
+                        skill_context = candidate
             is_command_only = role == "user" and parsed_command is not None and not string_prompt
             interrupts_turn = (
-                role == "user" and not is_tool_output_record and not is_command_only
+                role == "user"
+                and not is_tool_output_record
+                and not is_command_only
+                and not skill_control_record
             ) or payload.get("type") == "attachment"
 
             if interrupts_turn:
                 finish_turn()
             if role == "user":
+                if skill_control_record:
+                    if source_tool_use_id and skill_context is not None:
+                        tool_id = str(source_tool_use_id)
+                        item = tool_calls_by_id.setdefault(tool_id, {"tool_use_id": tool_id})
+                        if tool_id not in tool_order:
+                            tool_order.append(tool_id)
+                        item["skill_content"] = skill_context
+                    continue
                 prompt = string_prompt
                 if prompt is None and content_blocks:
                     prompt = "\n".join(
@@ -754,6 +790,12 @@ class SQLiteStorage(Storage):
             if role != "assistant" or not payload.get("model"):
                 continue
             message_id = event.get("message_id")
+            attribution_skill = payload.get("attribution_skill")
+            attribution_tool_use_id = None
+            if attribution_skill:
+                matching_tools = skill_tool_ids_by_name.get(str(attribution_skill), [])
+                if matching_tools:
+                    attribution_tool_use_id = matching_tools[-1]
             can_merge = current_turn is not None and message_id and current_turn.get("message_id") == message_id
             command_for_record = None
             if pending_command:
@@ -776,6 +818,8 @@ class SQLiteStorage(Storage):
                     "source_event_ids": [],
                     "record_ids": [],
                     "command": command_for_record,
+                    "attribution_skill": attribution_skill,
+                    "attribution_tool_use_id": attribution_tool_use_id,
                     "is_assistant_turn": True,
                     "_children": [],
                     "_blocks": [],
@@ -792,6 +836,9 @@ class SQLiteStorage(Storage):
             current_turn.update(token_fields)
             current_turn["cost_usd"] = _activity_cost(payload.get("model"), usage)
             current_turn["model"] = payload.get("model") or current_turn["model"]
+            if attribution_skill:
+                current_turn["attribution_skill"] = attribution_skill
+                current_turn["attribution_tool_use_id"] = attribution_tool_use_id
             current_turn["end_time"] = event.get("timestamp") or current_turn["end_time"]
             current_turn["source_event_ids"].append(source_id)
             current_turn["record_ids"].append(source_id)
@@ -813,6 +860,8 @@ class SQLiteStorage(Storage):
                 "response": _activity_response(content_blocks),
                 "prompt_id": event.get("prompt_id") or "",
                 "command": command_for_record,
+                "attribution_skill": attribution_skill,
+                "attribution_tool_use_id": attribution_tool_use_id,
                 "is_assistant_turn": False,
             }
             current_turn["_children"].append(child)
@@ -835,13 +884,63 @@ class SQLiteStorage(Storage):
                         "assistant_record_id": source_id,
                     }
                 )
+                if block.get("name") == "Skill":
+                    skill_name = (block.get("input") or {}).get("skill")
+                    if skill_name:
+                        skill_tool_ids_by_name.setdefault(str(skill_name), []).append(tool_id)
 
         finish_turn()
         return {
             # Match SessionAggregator's bounded compatibility history. The
             # complete record remains available through activity pagination.
-            "llm_calls": llm_calls[-500:],
+            "llm_calls": llm_calls[-llm_limit:] if llm_limit is not None else llm_calls,
             "tool_calls": [tool_calls_by_id[tool_id] for tool_id in tool_order],
+        }
+
+    def get_session_conversation(
+        self, session_id: str, *, limit: int = 50, before: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Return a newest-first window boundary with records in display order."""
+        try:
+            projection = self.get_activity_session_projection(session_id, llm_limit=None)
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            projection = None
+
+        if projection is None:
+            session = self.get_session(session_id, detail="full")
+            if session is None:
+                return None
+            llm_calls = list(session.get("llm_calls") or [])
+            tool_calls = list(session.get("tool_calls") or [])
+            source = "legacy"
+        else:
+            llm_calls = list(projection["llm_calls"])
+            tool_calls = list(projection["tool_calls"])
+            source = "activity-v1"
+
+        total_llm_calls = len(llm_calls)
+        end = total_llm_calls if before is None else min(before, total_llm_calls)
+        start = max(0, end - limit)
+        page_calls = llm_calls[start:end]
+        turn_ids = {
+            str(call.get("id"))
+            for call in page_calls
+            if isinstance(call, dict) and call.get("id")
+        }
+        page_tools = [
+            tool
+            for tool in tool_calls
+            if not tool.get("assistant_turn_id")
+            or str(tool.get("assistant_turn_id")) in turn_ids
+        ]
+        return {
+            "llm_calls": page_calls,
+            "tool_calls": page_tools,
+            "next_cursor": str(start) if start > 0 else None,
+            "has_more": start > 0,
+            "total_llm_calls": total_llm_calls,
+            "total_tool_calls": len(tool_calls),
+            "source": source,
         }
 
     def _trace_row_values(self, trace: Dict[str, Any]) -> tuple[Any, ...]:

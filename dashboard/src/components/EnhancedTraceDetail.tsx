@@ -4,8 +4,8 @@ import type { Trace } from '../types';
 import { API_URL } from '../lib/api';
 import type { DetailLevel } from '../lib/callClassification';
 import { deriveRenderablePromptThreads, groupSubagentLaunches } from '../lib/conversationModel';
-import type { RawSessionRecord } from '../lib/sessionApiTypes';
-import { transformSession } from '../lib/sessionNormalization';
+import type { ConversationPageResponse, RawSessionRecord } from '../lib/sessionApiTypes';
+import { toTimestamp, transformSession } from '../lib/sessionNormalization';
 import { isThreadVisible } from '../lib/threadVisibility';
 import { EmptyState } from './TraceDetailBlocks';
 import { RawView, TaskStatusView, VisionView } from './trace-detail/AuxViews';
@@ -27,6 +27,27 @@ interface EnhancedTraceDetailProps {
 export type TabType = 'overview' | 'llm' | 'subagents' | 'taskStatus' | 'vision' | 'raw';
 type TraceWithRaw = Trace & { raw?: RawSessionRecord };
 
+function metadataForConversationWindow(
+  metadata: Record<string, unknown> | undefined,
+  llmCalls: RawSessionRecord['llm_calls'],
+) {
+  const next: Record<string, unknown> = { ...(metadata || {}), detail_level: 'summary' };
+  const earliestTurn = Math.min(
+    ...(llmCalls || [])
+      .map((call) => toTimestamp(call.start_time || call.timestamp))
+      .filter((timestamp): timestamp is number => timestamp !== undefined),
+  );
+  const commands = metadata?.command_only_records;
+  next.command_only_records = Number.isFinite(earliestTurn) && Array.isArray(commands)
+    ? commands.filter((command) => {
+        if (!command || typeof command !== 'object') return false;
+        const timestamp = toTimestamp((command as { timestamp?: string | number }).timestamp);
+        return timestamp !== undefined && timestamp >= earliestTurn;
+      })
+    : [];
+  return next;
+}
+
 const DETAIL_LEVEL_LABELS: Record<DetailLevel, string> = {
   summary: '摘要',
   standard: '标准',
@@ -42,6 +63,11 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   const [fullTrace, setFullTrace] = useState<TraceWithRaw | null>(null);
   const [fullDetailLoading, setFullDetailLoading] = useState(false);
   const [fullDetailError, setFullDetailError] = useState<string | null>(null);
+  const [conversationCursor, setConversationCursor] = useState<string | null>(null);
+  const [conversationHasMore, setConversationHasMore] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(false);
+  const [conversationLoaded, setConversationLoaded] = useState(false);
+  const [fullSessionLoaded, setFullSessionLoaded] = useState(false);
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('standard');
   const [visibleKinds, setVisibleKinds] = useState<Record<ReplayMessageKind, boolean>>(DEFAULT_VISIBLE_KINDS);
   const [expandedLLMs, setExpandedLLMs] = useState<Set<string>>(new Set(['group-0']));
@@ -169,25 +195,51 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     setActiveTab(initialTab);
     setFullTrace(null);
     setFullDetailError(null);
+    setConversationCursor(null);
+    setConversationHasMore(false);
+    setConversationLoaded(false);
+    setFullSessionLoaded(false);
   }, [initialTab, trace.sessionId]);
 
   useEffect(() => {
-    const needsFullDetail = activeTab === 'llm' || activeTab === 'subagents' || activeTab === 'raw';
+    const needsConversation = activeTab === 'llm';
+    const needsFullDetail = activeTab === 'subagents' || activeTab === 'raw';
     const detailLevel = effectiveTrace.raw?.metadata?.detail_level;
-    if (!needsFullDetail || fullTrace || detailLevel === 'full') return;
+    if (
+      (!needsConversation && !needsFullDetail)
+      || (needsConversation && (conversationLoaded || fullSessionLoaded))
+      || (needsFullDetail && fullSessionLoaded)
+      || detailLevel === 'full'
+    ) return;
 
     const controller = new AbortController();
     const loadFullDetail = async () => {
       setFullDetailLoading(true);
       setFullDetailError(null);
       try {
-        const response = await fetch(
-          `${API_URL}/api/v1/sessions/${encodeURIComponent(trace.sessionId)}?detail=full`,
-          { signal: controller.signal },
-        );
+        const endpoint = needsConversation
+          ? `${API_URL}/api/v1/sessions/${encodeURIComponent(trace.sessionId)}/conversation?limit=50`
+          : `${API_URL}/api/v1/sessions/${encodeURIComponent(trace.sessionId)}?detail=full`;
+        const response = await fetch(endpoint, { signal: controller.signal });
         if (!response.ok) throw new Error('Failed to load full session detail');
-        const payload = (await response.json()) as RawSessionRecord;
-        setFullTrace(transformSession(payload));
+        const payload = (await response.json()) as RawSessionRecord | ConversationPageResponse;
+        if (needsConversation && 'next_cursor' in payload) {
+          const page = payload as ConversationPageResponse;
+          const base = ((trace as TraceWithRaw).raw || {}) as RawSessionRecord;
+          setConversationCursor(page.next_cursor);
+          setConversationHasMore(page.has_more);
+          setConversationLoaded(true);
+          setFullTrace(transformSession({
+            ...base,
+            session_id: trace.sessionId,
+            llm_calls: page.llm_calls,
+            tool_calls: page.tool_calls,
+            metadata: metadataForConversationWindow(base.metadata, page.llm_calls),
+          }));
+        } else {
+          setFullTrace(transformSession(payload as RawSessionRecord));
+          setFullSessionLoaded(true);
+        }
       } catch (error) {
         if (!controller.signal.aborted) {
           setFullDetailError(error instanceof Error ? error.message : 'Failed to load full session detail');
@@ -198,7 +250,35 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
     };
     void loadFullDetail();
     return () => controller.abort();
-  }, [activeTab, effectiveTrace.raw?.metadata?.detail_level, fullTrace, trace.sessionId]);
+  }, [activeTab, conversationLoaded, effectiveTrace.raw?.metadata?.detail_level, fullSessionLoaded, trace]);
+
+  const loadOlderConversation = useCallback(async () => {
+    if (!conversationCursor || conversationLoading) return;
+    setConversationLoading(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/sessions/${encodeURIComponent(trace.sessionId)}/conversation?limit=50&cursor=${conversationCursor}`,
+      );
+      if (!response.ok) throw new Error('Failed to load older conversation');
+      const page = (await response.json()) as ConversationPageResponse;
+      const current = fullTrace?.raw || {};
+      const llmCalls = [...page.llm_calls, ...(current.llm_calls || [])];
+      const baseMetadata = (trace as TraceWithRaw).raw?.metadata;
+      setConversationCursor(page.next_cursor);
+      setConversationHasMore(page.has_more);
+      setFullTrace(transformSession({
+        ...current,
+        session_id: trace.sessionId,
+        llm_calls: llmCalls,
+        tool_calls: [...page.tool_calls, ...(current.tool_calls || [])],
+        metadata: metadataForConversationWindow(baseMetadata, llmCalls),
+      }));
+    } catch (error) {
+      setFullDetailError(error instanceof Error ? error.message : 'Failed to load older conversation');
+    } finally {
+      setConversationLoading(false);
+    }
+  }, [conversationCursor, conversationLoading, fullTrace, trace]);
 
   const tabs = [
     { id: 'overview', label: '概览', icon: Activity },
@@ -330,7 +410,21 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
         {activeTab === 'llm' && !fullDetailLoading && fullDetailError && (
           <div className="text-sm text-red-600">{fullDetailError}</div>
         )}
-        {activeTab === 'llm' && !fullDetailLoading && !fullDetailError && renderLLM()}
+        {activeTab === 'llm' && !fullDetailLoading && !fullDetailError && (
+          <>
+            {conversationHasMore && (
+              <button
+                type="button"
+                onClick={() => void loadOlderConversation()}
+                disabled={conversationLoading}
+                className="mb-4 rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:border-slate-300 disabled:opacity-50"
+              >
+                {conversationLoading ? '加载中…' : '加载更早对话'}
+              </button>
+            )}
+            {renderLLM()}
+          </>
+        )}
         {activeTab === 'subagents' && fullDetailLoading && (
           <div className="text-sm text-slate-500">Loading subagent history…</div>
         )}

@@ -24,6 +24,21 @@ class ActivityStubStorage(StubStorage):
         super().__init__({"session_id": "session-1"})
         self.page_calls = []
         self.neighborhood_calls = []
+        self.conversation_calls = []
+
+    def get_session_conversation(self, session_id, **kwargs):
+        self.conversation_calls.append({"session_id": session_id, **kwargs})
+        if session_id != "session-1":
+            return None
+        return {
+            "llm_calls": [{"id": "turn-2"}],
+            "tool_calls": [],
+            "next_cursor": "1",
+            "has_more": True,
+            "total_llm_calls": 2,
+            "total_tool_calls": 0,
+            "source": "activity-v1",
+        }
 
     def get_activity_nodes(self, session_id, **kwargs):
         self.page_calls.append({"session_id": session_id, **kwargs})
@@ -632,6 +647,29 @@ class SessionActivitiesApiTests(unittest.TestCase):
                 "after_node_id": "content:a:0",
                 "limit": 25,
             },
+        )
+
+    def test_returns_bounded_conversation_page(self):
+        response = self.client.get(
+            "/api/v1/sessions/session-1/conversation",
+            params={"cursor": "2", "limit": 1},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["llm_calls"][0]["id"], "turn-2")
+        self.assertEqual(
+            self.storage.conversation_calls[0],
+            {"session_id": "session-1", "limit": 1, "before": 2},
+        )
+        self.assertEqual(
+            self.client.get(
+                "/api/v1/sessions/session-1/conversation", params={"cursor": "bad"}
+            ).status_code,
+            422,
+        )
+        self.assertEqual(
+            self.client.get("/api/v1/sessions/missing/conversation").status_code,
+            404,
         )
 
     def test_returns_node_detail_and_not_found_responses(self):

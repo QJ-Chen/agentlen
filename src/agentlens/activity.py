@@ -170,6 +170,9 @@ class ActivityGraphBuilder:
             "model": message.get("model"),
             "is_sidechain": record.get("isSidechain"),
             "is_meta": record.get("isMeta"),
+            "source_tool_use_id": record.get("sourceToolUseID"),
+            "attribution_skill": record.get("attributionSkill")
+            or message.get("attributionSkill"),
             "usage": message.get("usage"),
         }
         # List content is represented by inspectable child nodes. String

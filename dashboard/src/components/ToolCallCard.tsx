@@ -174,6 +174,23 @@ function WriteBody({ tool }: { tool: ToolCall }) {
   return <ExpandableLines text={content} className="border border-slate-200 bg-white text-slate-700" />;
 }
 
+function SkillBody({ tool }: { tool: ToolCall }) {
+  return (
+    <div className="space-y-2">
+      <DefaultBody tool={tool} />
+      {tool.skillContent && (
+        <div>
+          <div className="mb-1 text-[11px] font-semibold text-slate-400">Skill instructions</div>
+          <ExpandableLines
+            text={tool.skillContent}
+            className="border border-violet-200 bg-white text-slate-700"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DefaultBody({ tool }: { tool: ToolCall }) {
   if (!tool.input || Object.keys(tool.input).length === 0) return null;
   return (
@@ -225,6 +242,8 @@ export function ToolCallCard({
       <BashBody tool={tool} />
     ) : tool.name === 'Write' && inputField(tool, 'content') != null ? (
       <WriteBody tool={tool} />
+    ) : tool.name === 'Skill' ? (
+      <SkillBody tool={tool} />
     ) : (
       <DefaultBody tool={tool} />
     );

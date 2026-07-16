@@ -62,6 +62,7 @@ export function buildMergedTools(record: RawSessionRecord | RawSubagentLog, reco
         assistantTurnId: tool.assistant_turn_id,
         assistantMessageId: tool.assistant_message_id,
         assistantRecordId: tool.assistant_record_id,
+        skillContent: tool.skill_content,
       };
 
       base.name = tool.name || tool.tool_name || base.name;
@@ -69,6 +70,7 @@ export function buildMergedTools(record: RawSessionRecord | RawSubagentLog, reco
       base.assistantTurnId = tool.assistant_turn_id || base.assistantTurnId;
       base.assistantMessageId = tool.assistant_message_id || base.assistantMessageId;
       base.assistantRecordId = tool.assistant_record_id || base.assistantRecordId;
+      base.skillContent = tool.skill_content || base.skillContent;
       base.startTime = Math.min(base.startTime, startTime);
       base.endTime = Math.max(base.endTime, startTime + duration);
       base.duration = Math.max(base.duration, base.endTime - base.startTime, duration);
@@ -107,6 +109,7 @@ export function buildMergedTools(record: RawSessionRecord | RawSubagentLog, reco
       assistantTurnId: tool.assistant_turn_id,
       assistantMessageId: tool.assistant_message_id,
       assistantRecordId: tool.assistant_record_id,
+      skillContent: tool.skill_content,
     });
   });
 
@@ -151,6 +154,8 @@ function normalizeChildLLMCall(
     prompt: child.prompt || fallbackCall.prompt || '',
     response: child.response || '',
     promptId: child.prompt_id || fallbackCall.prompt_id || '',
+    attributionSkill: child.attribution_skill || fallbackCall.attribution_skill || '',
+    attributionToolUseId: child.attribution_tool_use_id || fallbackCall.attribution_tool_use_id || '',
     command: child.command
       ? {
           name: child.command.name || '',
@@ -205,6 +210,8 @@ export function buildLLMCalls(record: RawSessionRecord | RawSubagentLog, recordS
       prompt: call.prompt || '',
       response: call.response || '',
       promptId: call.prompt_id || '',
+      attributionSkill: call.attribution_skill || '',
+      attributionToolUseId: call.attribution_tool_use_id || '',
     } as const];
   });
 }
@@ -235,6 +242,8 @@ export function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, r
       messageId: call.message_id || '',
       prompt: call.prompt || '',
       promptId: call.prompt_id || '',
+      attributionSkill: call.attribution_skill || '',
+      attributionToolUseId: call.attribution_tool_use_id || '',
       startTime,
       endTime,
       inputTokens,

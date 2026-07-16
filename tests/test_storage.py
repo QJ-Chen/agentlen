@@ -379,6 +379,167 @@ def test_activity_projection_tool_result_does_not_split_assistant_turn():
         assert session["tool_calls"][0]["output"] == "ok"
 
 
+def test_activity_projection_attaches_skill_context_without_replacing_prompt():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "skill.jsonl")
+        records = [
+            {"type": "user", "uuid": "u1", "promptId": "p1", "timestamp": "2026-07-16T00:00:00Z",
+             "message": {"role": "user", "content": "Original request"}},
+            {"type": "assistant", "uuid": "a1", "promptId": "p1", "timestamp": "2026-07-16T00:00:01Z",
+             "message": {"id": "m1", "role": "assistant", "model": "claude-opus-4-8", "usage": {},
+                         "content": [{"type": "tool_use", "id": "skill-1", "name": "Skill",
+                                      "input": {"skill": "review"}}]}},
+            {"type": "user", "uuid": "r1", "promptId": "p1", "timestamp": "2026-07-16T00:00:02Z",
+             "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "skill-1",
+                                                          "content": "Launching skill: review"}]}},
+            {"type": "user", "uuid": "s1", "promptId": "p1", "isMeta": True,
+             "sourceToolUseID": "skill-1", "timestamp": "2026-07-16T00:00:03Z",
+             "message": {"role": "user", "content": [{"type": "text",
+                                                          "text": "Base directory for this skill: /skills/review\nRules"}]}},
+            {"type": "assistant", "uuid": "a2", "promptId": "p1", "timestamp": "2026-07-16T00:00:04Z",
+             "message": {"id": "m2", "role": "assistant", "model": "claude-opus-4-8", "usage": {},
+                         "content": [{"type": "text", "text": "done"}]}},
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+        trace = collector.finalize_state(state)[0]
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(trace)
+
+        projection = storage.get_activity_session_projection("skill", llm_limit=None)
+        assert projection is not None
+        assert {turn["prompt"] for turn in projection["llm_calls"]} == {"Original request"}
+        skill = next(tool for tool in projection["tool_calls"] if tool.get("name") == "Skill")
+        assert skill["output"] == "Launching skill: review"
+        assert skill["skill_content"].startswith("Base directory for this skill: /skills/review")
+
+
+def test_activity_projection_ignores_skill_reinvocation_marker_before_api_error():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "skill-error.jsonl")
+        records = [
+            {"type": "user", "uuid": "u1", "promptId": "p1",
+             "message": {"role": "user", "content": "Original request"}},
+            {"type": "assistant", "uuid": "a1", "promptId": "p1",
+             "message": {"id": "m1", "role": "assistant", "model": "claude-opus-4-8",
+                         "usage": {}, "content": [{"type": "tool_use", "id": "skill-1",
+                         "name": "Skill", "input": {"skill": "claude-api"}}]}},
+            {"type": "user", "uuid": "r1", "promptId": "p1",
+             "message": {"role": "user", "content": [{"type": "tool_result",
+                         "tool_use_id": "skill-1", "content": "Launching skill: claude-api"}]}},
+            {"type": "user", "uuid": "marker", "promptId": "p1", "isMeta": True,
+             "sourceToolUseID": "skill-1", "message": {"role": "user", "content": (
+                 "(Re-invocation of /claude-api — the skill instructions were previously loaded; "
+                 "the arguments or dynamic output below are new.)"
+             )}},
+            {"type": "user", "uuid": "instructions", "promptId": "p1", "isMeta": True,
+             "sourceToolUseID": "skill-1", "message": {"role": "user", "content": [{
+                 "type": "text", "text": "Base directory for this skill: /skills/claude-api\nRules"
+             }]}},
+            {"type": "assistant", "uuid": "error", "promptId": "p1",
+             "message": {"id": "m2", "role": "assistant", "model": "claude-opus-4-8",
+                         "usage": {}, "content": [{"type": "text",
+                         "text": "API Error: 500 invalid request"}]}},
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(collector.finalize_state(state)[0])
+
+        projection = storage.get_activity_session_projection("skill-error", llm_limit=None)
+        assert projection is not None
+        error = next(turn for turn in projection["llm_calls"] if turn["id"] == "m2")
+        assert error["prompt"] == "Original request"
+        skill = next(tool for tool in projection["tool_calls"] if tool.get("name") == "Skill")
+        assert skill["skill_content"].startswith("Base directory for this skill:")
+
+
+def test_activity_projection_links_attributed_work_to_skill_launch():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "attributed-skill.jsonl")
+        records = [
+            {"type": "assistant", "uuid": "launch", "timestamp": "2026-07-16T00:00:00Z",
+             "message": {"id": "launch-message", "role": "assistant", "model": "claude-opus-4-8",
+                         "usage": {}, "content": [{"type": "tool_use", "id": "skill-1",
+                         "name": "Skill", "input": {"skill": "code-review"}}]}},
+            {"type": "user", "uuid": "context", "isMeta": True,
+             "sourceToolUseID": "skill-1", "timestamp": "2026-07-16T00:00:01Z",
+             "message": {"role": "user", "content": [{"type": "text",
+                         "text": "`high effort`\nReview instructions"}]}},
+            {"type": "assistant", "uuid": "work", "timestamp": "2026-07-16T00:00:02Z",
+             "attributionSkill": "code-review",
+             "message": {"id": "work-message", "role": "assistant", "model": "claude-opus-4-8",
+                         "usage": {}, "content": [{"type": "text", "text": "done"}]}},
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(collector.finalize_state(state)[0])
+
+        projection = storage.get_activity_session_projection("attributed-skill", llm_limit=None)
+        assert projection is not None
+        skill = next(tool for tool in projection["tool_calls"] if tool.get("name") == "Skill")
+        assert skill["skill_content"].startswith("`high effort`")
+        turn = next(item for item in projection["llm_calls"] if item["id"] == "work-message")
+        assert turn["attribution_skill"] == "code-review"
+        assert turn["attribution_tool_use_id"] == "skill-1"
+        assert turn["child_records"][0]["attribution_skill"] == "code-review"
+        assert turn["child_records"][0]["attribution_tool_use_id"] == "skill-1"
+
+
+def test_activity_projection_keeps_slash_skill_context_out_of_prompt():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "slash-skill.jsonl")
+        records = [
+            {
+                "type": "user", "uuid": "command", "promptId": "p1",
+                "timestamp": "2026-07-16T00:00:00Z",
+                "message": {"role": "user", "content": (
+                    "<command-message>review</command-message>"
+                    "<command-name>/review</command-name>"
+                    "<command-args>src</command-args>"
+                )},
+            },
+            {
+                "type": "user", "uuid": "context", "promptId": "p1", "isMeta": True,
+                "timestamp": "2026-07-16T00:00:01Z",
+                "message": {"role": "user", "content": [{"type": "text", "text": (
+                    "Base directory for this skill: /skills/review\nRules"
+                )}]},
+            },
+            {
+                "type": "assistant", "uuid": "answer", "promptId": "p1",
+                "timestamp": "2026-07-16T00:00:02Z",
+                "message": {"id": "m1", "role": "assistant", "model": "claude-opus-4-8",
+                            "usage": {}, "content": [{"type": "text", "text": "done"}]},
+            },
+        ]
+        for record in records:
+            collector.process_line(state, json.dumps(record))
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(collector.finalize_state(state)[0])
+
+        projection = storage.get_activity_session_projection("slash-skill", llm_limit=None)
+        assert projection is not None
+        assert len(projection["llm_calls"]) == 1
+        assert projection["llm_calls"][0]["prompt"] is None
+        assert projection["llm_calls"][0]["command"] == {
+            "name": "/review", "args": "src", "message": "review"
+        }
+
+
 def test_activity_projection_ignored_event_keeps_turn_and_deduplicates_response():
     with tempfile.TemporaryDirectory() as tmp_dir:
         project_dir = Path(tmp_dir) / "-Users-example-repo"
@@ -515,6 +676,43 @@ def test_activity_projection_matches_legacy_500_turn_retention_window():
         assert len(session["llm_calls"]) == 500
         assert session["llm_calls"][0]["id"] == "m-1"
         assert session["llm_calls"][-1]["id"] == "m-500"
+
+
+def test_session_conversation_pages_backward_without_overlap():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        project_dir = Path(tmp_dir) / "-Users-example-repo"
+        project_dir.mkdir()
+        collector = ClaudeCodeCollector(None)
+        state = collector.create_incremental_state(project_dir / "projection.jsonl")
+        for index in range(5):
+            collector.process_line(
+                state,
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "uuid": f"a-{index}",
+                        "message": {
+                            "id": f"m-{index}",
+                            "role": "assistant",
+                            "model": "claude-opus-4-8",
+                            "content": [{"type": "text", "text": str(index)}],
+                            "usage": {},
+                        },
+                    }
+                ),
+            )
+
+        storage = _make_storage(tmp_dir)
+        storage.save_trace(collector.finalize_state(state)[0])
+        newest = storage.get_session_conversation("projection", limit=2)
+        older = storage.get_session_conversation(
+            "projection", limit=2, before=int(newest["next_cursor"])
+        )
+
+        assert [call["id"] for call in newest["llm_calls"]] == ["m-3", "m-4"]
+        assert [call["id"] for call in older["llm_calls"]] == ["m-1", "m-2"]
+        assert older["next_cursor"] == "1"
+        assert newest["total_llm_calls"] == 5
 
 
 def test_session_detail_falls_back_when_activity_payload_is_malformed():

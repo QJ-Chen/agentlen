@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from agentlens import collectors
@@ -522,6 +523,181 @@ def test_loop_command_threads_attach_through_meta_expansion(tmp_path: Path):
     assert loop_turn["command"]["args"] == "1m This is just a test, do nothing"
     assert loop_turn["command"]["message"] == "loop"
     assert {"CronCreate"} <= {tool["name"] for tool in trace["tool_calls"]}
+
+
+def test_skill_tool_context_is_not_treated_as_a_user_prompt(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(project_dir / "session-1.jsonl")
+    records = [
+        {
+            "type": "user", "uuid": "u1", "promptId": "p1",
+            "timestamp": "2026-07-16T00:00:00Z",
+            "message": {"role": "user", "content": "Use the relevant skill"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "promptId": "p1",
+            "timestamp": "2026-07-16T00:00:01Z",
+            "message": {"id": "m1", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "tool_use", "id": "skill-1", "name": "Skill",
+                                     "input": {"skill": "review"}}], "usage": {}},
+        },
+        {
+            "type": "user", "uuid": "r1", "promptId": "p1",
+            "timestamp": "2026-07-16T00:00:02Z",
+            "message": {"role": "user", "content": [{"type": "tool_result",
+                        "tool_use_id": "skill-1", "content": "Launching skill: review"}]},
+        },
+        {
+            "type": "user", "uuid": "s1", "promptId": "p1", "isMeta": True,
+            "sourceToolUseID": "skill-1", "timestamp": "2026-07-16T00:00:03Z",
+            "message": {"role": "user", "content": [{"type": "text",
+                        "text": "Base directory for this skill: /skills/review\n\nReview carefully."}]},
+        },
+        {
+            "type": "assistant", "uuid": "a2", "promptId": "p1",
+            "timestamp": "2026-07-16T00:00:04Z",
+            "message": {"id": "m2", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "text", "text": "Reviewed"}], "usage": {}},
+        },
+    ]
+    for record in records:
+        collector.process_line(state, json.dumps(record))
+
+    trace = state["aggregator"].get_traces()[0]
+    assert {turn["prompt"] for turn in trace["llm_calls"]} == {"Use the relevant skill"}
+    skill = next(tool for tool in trace["tool_calls"] if tool.get("name") == "Skill")
+    assert skill["output"] == "Launching skill: review"
+    assert skill["skill_content"].startswith("Base directory for this skill: /skills/review")
+
+
+def test_skill_reinvocation_marker_does_not_split_following_api_error(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(project_dir / "session-1.jsonl")
+    records = [
+        {
+            "type": "user", "uuid": "u1", "promptId": "p1",
+            "message": {"role": "user", "content": "Original request"},
+        },
+        {
+            "type": "assistant", "uuid": "a1", "promptId": "p1",
+            "message": {"id": "m1", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "tool_use", "id": "skill-1", "name": "Skill",
+                                     "input": {"skill": "claude-api"}}], "usage": {}},
+        },
+        {
+            "type": "user", "uuid": "r1", "promptId": "p1",
+            "message": {"role": "user", "content": [{"type": "tool_result",
+                        "tool_use_id": "skill-1", "content": "Launching skill: claude-api"}]},
+        },
+        {
+            "type": "user", "uuid": "marker", "promptId": "p1", "isMeta": True,
+            "sourceToolUseID": "skill-1", "message": {"role": "user", "content": (
+                "(Re-invocation of /claude-api — the skill instructions were previously loaded; "
+                "the arguments or dynamic output below are new.)"
+            )},
+        },
+        {
+            "type": "user", "uuid": "instructions", "promptId": "p1", "isMeta": True,
+            "sourceToolUseID": "skill-1", "message": {"role": "user", "content": [{
+                "type": "text", "text": "Base directory for this skill: /skills/claude-api\nRules"
+            }]},
+        },
+        {
+            "type": "assistant", "uuid": "error", "promptId": "p1",
+            "message": {"id": "m2", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "text", "text": "API Error: 500 invalid request"}],
+                        "usage": {}},
+        },
+    ]
+    for record in records:
+        collector.process_line(state, json.dumps(record))
+
+    trace = state["aggregator"].get_traces()[0]
+    error = next(turn for turn in trace["llm_calls"] if turn["id"] == "m2")
+    assert error["prompt"] == "Original request"
+    skill = next(tool for tool in trace["tool_calls"] if tool.get("name") == "Skill")
+    assert skill["skill_content"].startswith("Base directory for this skill:")
+
+
+def test_skill_tool_context_and_attribution_use_structural_relationships(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(project_dir / "session-1.jsonl")
+    records = [
+        {
+            "type": "assistant", "uuid": "launch", "timestamp": "2026-07-16T00:00:00Z",
+            "message": {"id": "launch-message", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "tool_use", "id": "skill-1", "name": "Skill",
+                                     "input": {"skill": "code-review"}}], "usage": {}},
+        },
+        {
+            "type": "user", "uuid": "context", "isMeta": True,
+            "sourceToolUseID": "skill-1", "timestamp": "2026-07-16T00:00:01Z",
+            "message": {"role": "user", "content": [{"type": "text",
+                        "text": "`high effort → review carefully`\n\nDetailed review rules."}]},
+        },
+        {
+            "type": "assistant", "uuid": "work", "timestamp": "2026-07-16T00:00:02Z",
+            "attributionSkill": "code-review",
+            "message": {"id": "work-message", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "text", "text": "Reviewed"}], "usage": {}},
+        },
+    ]
+    for record in records:
+        collector.process_line(state, json.dumps(record))
+
+    trace = state["aggregator"].get_traces()[0]
+    skill = next(tool for tool in trace["tool_calls"] if tool.get("name") == "Skill")
+    assert skill["skill_content"].startswith("`high effort")
+    attributed_turn = next(turn for turn in trace["llm_calls"] if turn["id"] == "work-message")
+    assert attributed_turn["attribution_skill"] == "code-review"
+    assert attributed_turn["child_records"][0]["attribution_skill"] == "code-review"
+
+
+def test_slash_skill_context_keeps_command_without_becoming_prompt(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(project_dir / "session-1.jsonl")
+    records = [
+        {
+            "type": "user", "uuid": "command", "promptId": "p1",
+            "timestamp": "2026-07-16T00:00:00Z",
+            "message": {"role": "user", "content": (
+                "<command-message>review</command-message>"
+                "<command-name>/review</command-name>"
+                "<command-args>src</command-args>"
+            )},
+        },
+        {
+            "type": "user", "uuid": "context", "promptId": "p1", "isMeta": True,
+            "timestamp": "2026-07-16T00:00:01Z",
+            "message": {"role": "user", "content": [{"type": "text", "text": (
+                "Base directory for this skill: /skills/review\n\nReview carefully."
+            )}]},
+        },
+        {
+            "type": "assistant", "uuid": "answer", "promptId": "p1",
+            "timestamp": "2026-07-16T00:00:02Z",
+            "message": {"id": "m1", "role": "assistant", "model": "claude-opus-4-8",
+                        "content": [{"type": "text", "text": "Reviewed"}], "usage": {}},
+        },
+    ]
+    for record in records:
+        collector.process_line(state, json.dumps(record))
+
+    trace = state["aggregator"].get_traces()[0]
+    assert len(trace["llm_calls"]) == 1
+    assert trace["llm_calls"][0]["prompt"] is None
+    assert trace["llm_calls"][0]["command"] == {
+        "name": "/review", "args": "src", "message": "review"
+    }
+    assert trace["metadata"]["command_only_records"] == []
 
 
 def test_command_only_stays_standalone_after_unrelated_user_prompt(tmp_path: Path):

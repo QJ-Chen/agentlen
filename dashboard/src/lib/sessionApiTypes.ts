@@ -16,6 +16,7 @@ export interface RawToolCall {
   assistant_turn_id?: string;
   assistant_message_id?: string;
   assistant_record_id?: string;
+  skill_content?: string;
 }
 
 export interface RawContentBlock {
@@ -65,6 +66,8 @@ export interface RawLLMCall {
   response?: string;
   prompt_id?: string;
   command?: RawCommandInvocation;
+  attribution_skill?: string;
+  attribution_tool_use_id?: string;
   content_blocks?: RawContentBlock[];
 }
 
@@ -125,6 +128,17 @@ export interface SessionsResponse {
   sessions: RawSessionRecord[];
   count?: number;
   total?: number;
+}
+
+export interface ConversationPageResponse {
+  session_id: string;
+  llm_calls: RawLLMCall[];
+  tool_calls: RawToolCall[];
+  next_cursor: string | null;
+  has_more: boolean;
+  total_llm_calls: number;
+  total_tool_calls: number;
+  source: 'activity-v1' | 'legacy';
 }
 
 export type ProjectMetadataResponse = ProjectMetadata;

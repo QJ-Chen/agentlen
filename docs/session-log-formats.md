@@ -192,7 +192,13 @@ AgentLens 当前只围绕 Claude Code 日志做标准化提取，重点关注：
 
 ---
 
-## 4. 结论
+## 4. 相关文档
+
+- [Raw Claude Code session log IDs and structure](./raw-session-log-ids-and-structure.md) — identifier families, raw record envelopes, and graph-relevant relationships.
+
+---
+
+## 5. 结论
 
 对 AgentLens 当前支持的运行时而言，Claude Code 日志已经提供了足够丰富的 session 证据，可以支撑：
 - session replay

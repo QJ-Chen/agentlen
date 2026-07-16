@@ -13,6 +13,7 @@ export interface ToolCall {
   assistantTurnId?: string;
   assistantMessageId?: string;
   assistantRecordId?: string;
+  skillContent?: string;
 }
 
 export interface LLMCall {
@@ -34,6 +35,8 @@ export interface LLMCall {
   prompt?: string;
   response?: string;
   promptId?: string;
+  attributionSkill?: string;
+  attributionToolUseId?: string;
 }
 
 export interface CommandInvocation {
@@ -57,6 +60,8 @@ export interface AssistantTurn {
   prompt?: string;
   promptId?: string;
   command?: CommandInvocation;
+  attributionSkill?: string;
+  attributionToolUseId?: string;
   startTime: number;
   endTime: number;
   inputTokens: number;
@@ -74,6 +79,8 @@ export interface PromptThread {
   promptId?: string;
   command?: CommandInvocation;
   commandOnlyRecords?: CommandOnlyRecord[];
+  attributionSkill?: string;
+  attributionToolUseId?: string;
   assistantTurns: AssistantTurn[];
 }
 

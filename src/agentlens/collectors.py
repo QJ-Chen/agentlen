@@ -126,6 +126,35 @@ def build_assistant_response(content: Any) -> Optional[str]:
     return None
 
 
+def skill_context_text(data: Dict[str, Any], content: Any) -> Optional[str]:
+    """Return system-injected skill instructions, which are not a user prompt."""
+    if not data.get("isMeta"):
+        return None
+    if isinstance(content, str):
+        text = content.strip()
+    elif isinstance(content, list):
+        text = "\n".join(
+            str(item.get("text") or "")
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text"
+        ).strip()
+    else:
+        return None
+    if not text:
+        return None
+    # Tool-launched skills are identified structurally by sourceToolUseID;
+    # slash-command expansions lack that relationship and retain the legacy
+    # base-directory marker as their discriminator.
+    if data.get("sourceToolUseID") or text.startswith("Base directory for this skill:"):
+        return text
+    return None
+
+
+def is_skill_reinvocation_marker(content: str) -> bool:
+    """Return whether content describes a repeat Skill load rather than instructions."""
+    return content.lstrip().startswith("(Re-invocation of /")
+
+
 def merge_tool_calls(existing: List[Dict[str, Any]], new_calls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     merged = [dict(call) for call in existing if isinstance(call, dict)]
     seen = {}
@@ -574,6 +603,19 @@ class SessionAggregator:
         session = self._ensure_session(session_id)
         session["tool_outputs"].update(tool_outputs)
 
+    def add_tool_context(
+        self, session_id: str, tool_use_id: str, content: Optional[str]
+    ) -> bool:
+        session = self._ensure_session(session_id)
+        for tool_call in reversed(session.get("tool_calls", [])):
+            if tool_call.get("tool_use_id") == tool_use_id:
+                if tool_call.get("name") != "Skill":
+                    return False
+                if content is not None:
+                    tool_call["skill_content"] = content
+                return True
+        return False
+
     def _assistant_turn_tool_call_count(self, session: Dict[str, Any], turn: Dict[str, Any]) -> int:
         message_id = turn.get("message_id")
         turn_record_ids = set(turn.get("record_ids") or [])
@@ -643,6 +685,7 @@ class SessionAggregator:
             "child_record_count": len(child_records),
             "response": build_assistant_response(turn.get("content_blocks", [])),
             "command": dict(turn.get("command")) if isinstance(turn.get("command"), dict) else None,
+            "attribution_skill": turn.get("attribution_skill"),
             "is_assistant_turn": True,
         }
         if isinstance(turn_data.get("response"), str):
@@ -753,6 +796,8 @@ class SessionAggregator:
                 current_turn["end_time"] = message.get("start_time") or current_turn.get("end_time")
                 if message.get("prompt_id"):
                     current_turn["prompt_id"] = message.get("prompt_id")
+                if message.get("attribution_skill"):
+                    current_turn["attribution_skill"] = message.get("attribution_skill")
             else:
                 current_turn = {
                     "id": message.get("message_id") or message.get("trace_id"),
@@ -770,6 +815,7 @@ class SessionAggregator:
                     "prompt": last_user_prompt[:500] if last_user_prompt else None,
                     "prompt_id": message.get("prompt_id") or message.get("promptId"),
                     "command": dict(command_for_turn) if isinstance(command_for_turn, dict) else None,
+                    "attribution_skill": message.get("attribution_skill"),
                     "content_blocks": merge_content_blocks([], message.get("content_blocks", [])),
                     "records": [],
                 }
@@ -803,6 +849,7 @@ class SessionAggregator:
                 "response": response,
                 "prompt_id": message.get("prompt_id") or message.get("promptId") or "",
                 "command": dict(command_for_turn) if isinstance(command_for_turn, dict) else None,
+                "attribution_skill": message.get("attribution_skill"),
                 "is_assistant_turn": False,
             }
             current_turn.setdefault("records", []).append(child_record)
@@ -1454,6 +1501,25 @@ class ClaudeCodeCollector(LogCollector):
             return
 
         if role == "user" and content:
+            injected_skill_content = skill_context_text(data, content)
+            if injected_skill_content:
+                source_tool_use_id = data.get("sourceToolUseID")
+                if source_tool_use_id:
+                    tool_context = (
+                        None
+                        if is_skill_reinvocation_marker(injected_skill_content)
+                        else injected_skill_content
+                    )
+                    attached = state["aggregator"].add_tool_context(
+                        state["session_id"], str(source_tool_use_id), tool_context
+                    )
+                    if not attached:
+                        injected_skill_content = None
+                # Slash-command skills have no sourceToolUseID. Their preceding
+                # command remains pending and is associated with the next
+                # assistant turn; the injected instructions are not a prompt.
+                if injected_skill_content:
+                    return
             if isinstance(content, str):
                 cmd_match = re.search(r"<command-name>(.*?)</command-name>", content)
                 args_match = re.search(
@@ -1569,6 +1635,8 @@ class ClaudeCodeCollector(LogCollector):
             "response": response,
             "command": dict(parsed_command) if parsed_command else None,
             "is_meta_expansion": is_meta_expansion,
+            "attribution_skill": data.get("attributionSkill")
+            or message.get("attributionSkill"),
             "content_blocks": content_blocks,
             "input_tokens": usage.get("input_tokens", 0),
             "output_tokens": usage.get("output_tokens", 0),
