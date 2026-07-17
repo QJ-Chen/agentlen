@@ -1,4 +1,4 @@
-export type Platform = 'claude-code';
+export type Platform = 'claude-code' | 'codex';
 
 export interface ToolCall {
   id: string;

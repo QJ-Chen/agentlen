@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 CLAUDE_CODE_PLATFORM = "claude-code"
+CODEX_PLATFORM = "codex"
+SUPPORTED_PLATFORMS = (CLAUDE_CODE_PLATFORM, CODEX_PLATFORM)
 
 
 def _activity_response(content_blocks: List[Dict[str, Any]]) -> Optional[str]:
@@ -180,23 +182,33 @@ class SQLiteStorage(Storage):
 
     def _validate_platform(self, platform: Any) -> str:
         value = str(platform or CLAUDE_CODE_PLATFORM).strip().lower()
-        if value != CLAUDE_CODE_PLATFORM:
+        if value not in SUPPORTED_PLATFORMS:
             raise ValueError(f"Unsupported platform: {platform}")
-        return CLAUDE_CODE_PLATFORM
+        return value
 
     def purge_non_claude_rows(self) -> int:
+        """Compatibility alias: remove rows from unsupported platforms."""
+        return self.purge_unsupported_rows()
+
+    def purge_unsupported_rows(self) -> int:
+        placeholders = ", ".join("?" for _ in SUPPORTED_PLATFORMS)
         with self._connect() as conn:
             cursor = conn.execute(
-                "DELETE FROM traces WHERE lower(coalesce(platform, '')) != ?",
-                (CLAUDE_CODE_PLATFORM,),
+                f"DELETE FROM traces WHERE lower(coalesce(platform, '')) NOT IN ({placeholders})",
+                SUPPORTED_PLATFORMS,
             )
             return int(cursor.rowcount or 0)
 
     def count_non_claude_rows(self) -> int:
+        """Compatibility alias: count rows from unsupported platforms."""
+        return self.count_unsupported_rows()
+
+    def count_unsupported_rows(self) -> int:
+        placeholders = ", ".join("?" for _ in SUPPORTED_PLATFORMS)
         with self._connect() as conn:
             cursor = conn.execute(
-                "SELECT COUNT(*) FROM traces WHERE lower(coalesce(platform, '')) != ?",
-                (CLAUDE_CODE_PLATFORM,),
+                f"SELECT COUNT(*) FROM traces WHERE lower(coalesce(platform, '')) NOT IN ({placeholders})",
+                SUPPORTED_PLATFORMS,
             )
             row = cursor.fetchone()
             return int(row[0] if row else 0)
@@ -1252,8 +1264,8 @@ class SQLiteStorage(Storage):
         end_time: Optional[str] = None,
         limit: Optional[int] = 100,
     ) -> List[Dict[str, Any]]:
-        query = "SELECT * FROM traces WHERE platform = ?"
-        params: List[Any] = [CLAUDE_CODE_PLATFORM]
+        query = "SELECT * FROM traces WHERE 1 = 1"
+        params: List[Any] = []
 
         if platform:
             query += " AND platform = ?"
@@ -1551,8 +1563,8 @@ class SQLiteStorage(Storage):
                 "coalesce(llm_calls, '') || char(10) || coalesce(metadata, '')) AS _search_text"
             )
 
-        query = f"SELECT {', '.join(columns)} FROM traces WHERE platform = ?"
-        params: List[Any] = [CLAUDE_CODE_PLATFORM]
+        query = f"SELECT {', '.join(columns)} FROM traces WHERE 1 = 1"
+        params: List[Any] = []
         if platform:
             query += " AND platform = ?"
             params.append(self._validate_platform(platform))
@@ -1822,9 +1834,9 @@ class SQLiteStorage(Storage):
         query = (
             "SELECT trace_id, session_id, platform, agent_name, start_time, end_time, "
             "duration_ms, model, input_tokens, output_tokens, cost_usd, status, "
-            "project_path, metadata FROM traces WHERE platform = ?"
+            "project_path, metadata FROM traces WHERE 1 = 1"
         )
-        params: List[Any] = [CLAUDE_CODE_PLATFORM]
+        params: List[Any] = []
         if start_time:
             query += (
                 " AND (COALESCE(end_time, start_time) >= ?"
@@ -2087,9 +2099,9 @@ class JSONLStorage(Storage):
 
     def _validate_platform(self, platform: Any) -> str:
         value = str(platform or CLAUDE_CODE_PLATFORM).strip().lower()
-        if value != CLAUDE_CODE_PLATFORM:
+        if value not in SUPPORTED_PLATFORMS:
             raise ValueError(f"Unsupported platform: {platform}")
-        return CLAUDE_CODE_PLATFORM
+        return value
 
     def save_trace(self, trace: Dict[str, Any]):
         trace_to_save = dict(trace)

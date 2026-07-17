@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, List, Optional
 
-from .activity import ActivityGraphBuilder, merge_subagent_graphs
+from .activity import ActivityGraphBuilder, CodexActivityGraphBuilder, merge_subagent_graphs
 
 CLAUDE_TASKS_DIR = Path.home() / ".claude" / "tasks"
 CLAUDE_IMAGE_CACHE_DIRS = [
@@ -28,6 +28,7 @@ CLAUDE_IMAGE_CACHE_DIRS = [
 ]
 
 CLAUDE_CODE_PLATFORM = "claude-code"
+CODEX_PLATFORM = "codex"
 # Standard Claude API token prices per million tokens. Cache writes in Claude
 # Code logs do not carry TTL, so estimate them at the default five-minute rate.
 CLAUDE_MODEL_PRICING = {
@@ -1662,12 +1663,330 @@ class ClaudeCodeCollector(LogCollector):
         state["aggregator"].add_message(state["session_id"], msg_data)
 
 
+class CodexCollector(LogCollector):
+    """Collect Codex rollout JSONL without translating it into Claude envelopes."""
+
+    def get_name(self) -> str:
+        return CODEX_PLATFORM
+
+    def get_log_paths(self) -> List[Path]:
+        base_path = Path.home() / ".codex" / "sessions"
+        return sorted(base_path.glob("*/*/*/*.jsonl")) if base_path.exists() else []
+
+    def create_incremental_state(self, log_path: Path) -> Dict[str, Any]:
+        fallback_id = log_path.stem.rsplit("-", 5)[-1]
+        return {
+            "session_id": fallback_id,
+            "source_log_path": log_path,
+            "activity_builder": CodexActivityGraphBuilder(fallback_id),
+            "metadata": {},
+            "current_turn_id": None,
+            "active_assistant_phase_id": None,
+            "active_assistant_phase_turn_id": None,
+            "assistant_phase_counts": Counter(),
+            "current_model": "unknown",
+            "start_time": None,
+            "end_time": None,
+            "first_prompt": None,
+            "last_response": None,
+            "project_path": "",
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_input_tokens": 0,
+            "tool_names": Counter(),
+            "message_count": 0,
+            "latest_recap": "",
+            "reasoning_turns": set(),
+            "fallback_reasoning_nodes": {},
+            "status": "success",
+        }
+
+    @staticmethod
+    def _turn_id(payload: Dict[str, Any], state: Dict[str, Any]) -> Optional[str]:
+        metadata = payload.get("internal_chat_message_metadata_passthrough")
+        if isinstance(metadata, dict) and metadata.get("turn_id"):
+            return str(metadata["turn_id"])
+        if payload.get("turn_id"):
+            return str(payload["turn_id"])
+        return state.get("current_turn_id")
+
+    @staticmethod
+    def _assistant_phase_id(state: Dict[str, Any], turn_id: Optional[str]) -> str:
+        """Return the active synthetic model-response phase for a prompt thread."""
+        phase_turn_id = str(turn_id or "unknown")
+        if (
+            state.get("active_assistant_phase_id")
+            and state.get("active_assistant_phase_turn_id") == phase_turn_id
+        ):
+            return str(state["active_assistant_phase_id"])
+        state["assistant_phase_counts"][phase_turn_id] += 1
+        phase_id = f"codex-phase:{phase_turn_id}:{state['assistant_phase_counts'][phase_turn_id]}"
+        state["active_assistant_phase_id"] = phase_id
+        state["active_assistant_phase_turn_id"] = phase_turn_id
+        return phase_id
+
+    @staticmethod
+    def _close_assistant_phase(state: Dict[str, Any]) -> None:
+        state["active_assistant_phase_id"] = None
+        state["active_assistant_phase_turn_id"] = None
+
+    @staticmethod
+    def _message_blocks(content: Any) -> List[Dict[str, Any]]:
+        if isinstance(content, str):
+            return [{"type": "text", "text": content}]
+        if not isinstance(content, list):
+            return []
+        blocks = []
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            block_type = item.get("type")
+            if block_type in {"input_text", "output_text", "text"}:
+                blocks.append({"type": "text", "text": item.get("text") or ""})
+            elif block_type in {"input_image", "image"}:
+                blocks.append(dict(item))
+        return blocks
+
+    def process_line(self, state: Dict[str, Any], line: str) -> None:
+        try:
+            record = json.loads(line.strip())
+        except (json.JSONDecodeError, AttributeError):
+            return
+        if not isinstance(record, dict):
+            return
+        timestamp = record.get("timestamp")
+        if timestamp:
+            state["start_time"] = state["start_time"] or timestamp
+            state["end_time"] = timestamp
+        envelope_type = record.get("type")
+        payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+
+        if envelope_type == "session_meta":
+            session_id = str(payload.get("session_id") or payload.get("id") or state["session_id"])
+            if session_id != state["session_id"] and not state["activity_builder"].nodes:
+                state["session_id"] = session_id
+                state["activity_builder"] = CodexActivityGraphBuilder(session_id)
+            state["project_path"] = str(payload.get("cwd") or state["project_path"])
+            state["metadata"].update(
+                {
+                    key: payload.get(key)
+                    for key in (
+                        "originator", "cli_version", "source", "thread_source",
+                        "model_provider", "forked_from_id", "parent_thread_id",
+                        "agent_nickname", "agent_path", "git",
+                    )
+                    if payload.get(key) not in (None, "")
+                }
+            )
+            return
+
+        if envelope_type == "turn_context":
+            next_turn_id = payload.get("turn_id") or state["current_turn_id"]
+            if next_turn_id != state["current_turn_id"]:
+                self._close_assistant_phase(state)
+            state["current_turn_id"] = next_turn_id
+            state["current_model"] = payload.get("model") or state["current_model"]
+            state["project_path"] = str(payload.get("cwd") or state["project_path"])
+            return
+
+        if envelope_type == "event_msg":
+            event_type = payload.get("type")
+            if event_type == "task_started":
+                next_turn_id = payload.get("turn_id") or state["current_turn_id"]
+                if next_turn_id != state["current_turn_id"]:
+                    self._close_assistant_phase(state)
+                state["current_turn_id"] = next_turn_id
+            elif event_type == "task_complete":
+                state["status"] = "success"
+            elif event_type == "turn_aborted":
+                state["status"] = "cancelled"
+            elif event_type == "token_count":
+                info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+                usage = info.get("total_token_usage") if isinstance(info.get("total_token_usage"), dict) else {}
+                state["input_tokens"] = int(usage.get("input_tokens") or 0)
+                state["output_tokens"] = int(usage.get("output_tokens") or 0)
+                state["cached_input_tokens"] = int(usage.get("cached_input_tokens") or 0)
+            elif event_type == "agent_reasoning":
+                text = str(payload.get("text") or "").strip()
+                turn_id = self._turn_id(payload, state)
+                if text and turn_id not in state["reasoning_turns"]:
+                    node_id = state["activity_builder"].add_message(
+                        role="assistant",
+                        content=[{"type": "thinking", "thinking": text}],
+                        timestamp=timestamp,
+                        turn_id=turn_id,
+                        source_file=str(state["source_log_path"]),
+                        model=state["current_model"],
+                        assistant_phase_id=self._assistant_phase_id(state, turn_id),
+                    )
+                    state["fallback_reasoning_nodes"].setdefault(turn_id, []).append(node_id)
+            elif event_type in {"context_compacted", "turn_aborted"}:
+                state["activity_builder"].add_event(
+                    str(event_type), dict(payload), timestamp, str(state["source_log_path"])
+                )
+            return
+
+        if envelope_type == "compacted":
+            recap = str(payload.get("message") or "").strip()
+            if recap:
+                state["latest_recap"] = recap
+            compact_payload = {
+                key: payload.get(key)
+                for key in (
+                    "window_number",
+                    "first_window_id",
+                    "previous_window_id",
+                    "current_window_id",
+                    "turn_id",
+                )
+                if payload.get(key) not in (None, "")
+            }
+            if recap:
+                compact_payload["summary_preview"] = recap[:500]
+            state["activity_builder"].add_event(
+                "context-compacted", compact_payload, timestamp, str(state["source_log_path"])
+            )
+            return
+        if envelope_type != "response_item":
+            return
+
+        item_type = payload.get("type")
+        turn_id = self._turn_id(payload, state)
+        source_file = str(state["source_log_path"])
+        builder: CodexActivityGraphBuilder = state["activity_builder"]
+        if item_type == "message":
+            role = str(payload.get("role") or "unknown")
+            # Developer/system/environment messages are context, not conversation prompts.
+            if role not in {"user", "assistant"}:
+                return
+            blocks = self._message_blocks(payload.get("content"))
+            text = "\n".join(str(block.get("text") or "") for block in blocks).strip()
+            if role == "user" and text.startswith(("<environment_context>", "# AGENTS.md instructions")):
+                return
+            if role == "user":
+                self._close_assistant_phase(state)
+            builder.add_message(
+                role=role,
+                content=blocks,
+                timestamp=timestamp,
+                turn_id=turn_id,
+                source_file=source_file,
+                model=state["current_model"] if role == "assistant" else None,
+                record_id=payload.get("id"),
+                assistant_phase_id=(
+                    self._assistant_phase_id(state, turn_id) if role == "assistant" else None
+                ),
+            )
+            state["message_count"] += 1
+            if role == "user" and text:
+                state["first_prompt"] = state["first_prompt"] or text
+            elif role == "assistant" and text:
+                state["last_response"] = text
+            return
+
+        if item_type in {"function_call", "custom_tool_call", "tool_search_call"}:
+            call_id = str(payload.get("call_id") or payload.get("id") or builder.sequence)
+            name = str(payload.get("name") or item_type.removesuffix("_call"))
+            raw_input = payload.get("arguments", payload.get("input", {}))
+            if isinstance(raw_input, str):
+                try:
+                    raw_input = json.loads(raw_input)
+                except json.JSONDecodeError:
+                    raw_input = {"value": raw_input}
+            builder.add_message(
+                role="assistant",
+                content=[{"type": "tool_use", "id": call_id, "name": name, "input": raw_input}],
+                timestamp=timestamp,
+                turn_id=turn_id,
+                source_file=source_file,
+                model=state["current_model"],
+                record_id=payload.get("id") or call_id,
+                assistant_phase_id=self._assistant_phase_id(state, turn_id),
+            )
+            state["tool_names"][name] += 1
+            return
+
+        if item_type in {"function_call_output", "custom_tool_call_output", "tool_search_output"}:
+            call_id = str(payload.get("call_id") or builder.sequence)
+            output = payload.get("output", payload.get("tools", payload.get("result")))
+            self._close_assistant_phase(state)
+            builder.add_message(
+                role="user",
+                content=[{"type": "tool_result", "tool_use_id": call_id, "content": output}],
+                timestamp=timestamp,
+                turn_id=turn_id,
+                source_file=source_file,
+                record_id=f"result-{call_id}-{builder.sequence}",
+            )
+            return
+
+        if item_type == "reasoning":
+            summary = payload.get("summary")
+            text = "\n".join(
+                str(item.get("text") or "") for item in summary or [] if isinstance(item, dict)
+            ) if isinstance(summary, list) else ""
+            if text:
+                state["reasoning_turns"].add(turn_id)
+                for event_id in state["fallback_reasoning_nodes"].pop(turn_id, []):
+                    builder.remove_message(event_id)
+                builder.add_message(
+                    role="assistant",
+                    content=[{"type": "thinking", "thinking": text}],
+                    timestamp=timestamp,
+                    turn_id=turn_id,
+                    source_file=source_file,
+                    model=state["current_model"],
+                    record_id=payload.get("id"),
+                    assistant_phase_id=self._assistant_phase_id(state, turn_id),
+                )
+
+    def finalize_state(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if not state["activity_builder"].nodes:
+            return []
+        metadata = {
+            **state["metadata"],
+            "message_count": state["message_count"],
+            "tool_call_count": sum(state["tool_names"].values()),
+            "tool_name_counts": dict(state["tool_names"]),
+            "project_group": state["project_path"],
+            "major_cwd": state["project_path"],
+            "recap_text": state["latest_recap"],
+        }
+        trace = {
+            "trace_id": f"codex_session_{state['session_id']}",
+            "platform": CODEX_PLATFORM,
+            "agent_name": CODEX_PLATFORM,
+            "session_id": state["session_id"],
+            "session_file_path": str(state["source_log_path"]),
+            "start_time": state["start_time"],
+            "end_time": state["end_time"],
+            "duration_ms": duration_ms_from_times(state["start_time"], state["end_time"]),
+            "model": state["current_model"],
+            "prompt": state["first_prompt"],
+            "response": state["last_response"],
+            "input_tokens": state["input_tokens"],
+            "output_tokens": state["output_tokens"],
+            "cache_read_tokens": state["cached_input_tokens"],
+            "cost_usd": 0.0,
+            "tool_calls": [],
+            "llm_calls": [],
+            "status": state["status"],
+            "project_path": state["project_path"],
+            "metadata": metadata,
+            "activity_graph": state["activity_builder"].build(),
+        }
+        return [trace]
+
+
 class CollectorManager:
-    """Coordinates the Claude Code collector."""
+    """Coordinates supported local session-log collectors."""
 
     def __init__(self, storage):
         self.storage = storage
-        self.collectors: List[LogCollector] = [ClaudeCodeCollector(storage)]
+        self.collectors: List[LogCollector] = [
+            ClaudeCodeCollector(storage),
+            CodexCollector(storage),
+        ]
 
     def start_all(self, interval: float = 1.0):
         for collector in self.collectors:

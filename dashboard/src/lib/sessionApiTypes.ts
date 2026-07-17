@@ -103,7 +103,7 @@ export interface RawSessionRecord {
   trace_id?: string;
   session_id?: string;
   agent_name?: string;
-  platform?: 'claude-code';
+  platform?: 'claude-code' | 'codex';
   status?: string;
   start_time?: string | number;
   end_time?: string | number;

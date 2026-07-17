@@ -548,7 +548,9 @@ class SessionEventsApiTests(unittest.TestCase):
         self.log_path.write_text(
             '{"uuid":"evt-1","type":"user","message":{"role":"user","content":"hello"}}\n'
             "not json at all\n"
-            '{"uuid":"evt-2","type":"assistant","message":{"role":"assistant","content":[]}}\n',
+            '{"uuid":"evt-2","type":"assistant","message":{"role":"assistant","content":[]}}\n'
+            '{"type":"response_item","payload":{"type":"function_call","id":"fc_call_1","call_id":"call_1","name":"exec_command"}}\n'
+            '{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_1","output":"done"}}\n',
             encoding="utf-8",
         )
         subagents_dir = self.tmp_dir / "session-1" / "subagents"
@@ -599,6 +601,22 @@ class SessionEventsApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(len(payload["events"]), 1)
         self.assertIn("agent-abc.jsonl", payload["events"][0]["source_file"])
+        self.assertEqual(payload["missing"], [])
+
+    def test_returns_codex_response_items_by_payload_id_or_call_id(self):
+        response = self.client.get(
+            "/api/v1/sessions/session-1/events",
+            params={"ids": "fc_call_1,call_1"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        returned = {event["uuid"]: event for event in payload["events"]}
+        self.assertEqual(set(returned), {"fc_call_1", "call_1"})
+        self.assertEqual(returned["fc_call_1"]["record"]["payload"]["type"], "function_call")
+        # A call_id identifies the invocation record for provenance; the
+        # corresponding output record uses the same link but is not selected.
+        self.assertEqual(returned["call_1"]["record"]["payload"]["type"], "function_call")
         self.assertEqual(payload["missing"], [])
 
     def test_rejects_unknown_session_and_oversized_requests(self):

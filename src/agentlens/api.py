@@ -25,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from agentlens.realtime import RealtimeUpdater
-from agentlens.storage import CLAUDE_CODE_PLATFORM, SQLiteStorage
+from agentlens.storage import CLAUDE_CODE_PLATFORM, SUPPORTED_PLATFORMS, SQLiteStorage
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -385,7 +385,9 @@ def _build_session_shallow_node(session: Dict[str, Any], project_path: str) -> D
 
 
 def _build_hierarchy_root() -> Dict[str, Any]:
-    sessions_payload = storage.list_sessions(platform=CLAUDE_CODE_PLATFORM, period_hours=720, limit=5000, offset=0, light=True)
+    sessions_payload = storage.list_sessions(
+        period_hours=720, limit=5000, offset=0, light=True
+    )
     sessions = sessions_payload.get("sessions", []) if isinstance(sessions_payload, dict) else []
     global_metadata = _build_global_metadata()
 
@@ -571,7 +573,7 @@ def _build_node_children(node_id: str) -> List[Dict[str, Any]]:
 
 class TraceIn(BaseModel):
     trace_id: str
-    platform: Literal["claude-code"] = CLAUDE_CODE_PLATFORM
+    platform: Literal["claude-code", "codex"] = CLAUDE_CODE_PLATFORM
     agent_name: str
     session_id: str
     start_time: str
@@ -607,7 +609,7 @@ def root():
     return {
         "message": "AgentLens API",
         "version": "0.2.0",
-        "product": "local-first Claude Code session intelligence",
+        "product": "local-first coding-agent session intelligence",
     }
 
 
@@ -639,11 +641,11 @@ def get_traces(
     end_time: Optional[str] = None,
     limit: int = Query(100, ge=1, le=5000),
 ):
-    if platform and platform != CLAUDE_CODE_PLATFORM:
-        raise HTTPException(status_code=400, detail="Only Claude Code traces are supported")
+    if platform and platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(status_code=400, detail="Unsupported platform")
 
     traces = storage.get_traces(
-        platform=CLAUDE_CODE_PLATFORM,
+        platform=platform,
         session_id=session_id,
         start_time=start_time,
         end_time=end_time,
@@ -665,11 +667,11 @@ def get_sessions(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0, le=100000),
 ):
-    if platform and platform != CLAUDE_CODE_PLATFORM:
-        raise HTTPException(status_code=400, detail="Only Claude Code sessions are supported")
+    if platform and platform not in SUPPORTED_PLATFORMS:
+        raise HTTPException(status_code=400, detail="Unsupported platform")
 
     return storage.list_sessions(
-        platform=CLAUDE_CODE_PLATFORM,
+        platform=platform,
         project=project,
         model=model,
         status=status,
@@ -828,10 +830,25 @@ def get_session_events(session_id: str, ids: str = Query(..., min_length=1)):
                         record = json.loads(stripped)
                     except json.JSONDecodeError:
                         continue
-                    uuid = record.get("uuid")
-                    if uuid in wanted and uuid not in events:
-                        events[uuid] = {
-                            "uuid": uuid,
+                    # Claude records use a top-level UUID. Codex response items
+                    # keep their stable provenance ID in payload.id instead;
+                    # call_id links a call to its output and is only a fallback
+                    # for call records that do not have an item ID.
+                    record_ids = [record.get("uuid")]
+                    payload = record.get("payload")
+                    if isinstance(payload, dict):
+                        record_ids.append(payload.get("id"))
+                        item_type = str(payload.get("type") or "")
+                        if item_type.endswith("_call"):
+                            record_ids.append(payload.get("call_id"))
+                    matched_ids = {
+                        str(record_id)
+                        for record_id in record_ids
+                        if record_id is not None and str(record_id) in wanted
+                    }
+                    for matched_id in matched_ids - set(events):
+                        events[matched_id] = {
+                            "uuid": matched_id,
                             "source_file": str(candidate),
                             "record": record,
                         }
@@ -942,15 +959,15 @@ def get_platforms(
     end_time: Optional[str] = None,
     period_hours: int = Query(720, ge=1, le=8760),
 ):
+    stats = storage.get_overview_stats(
+        period_hours,
+        start_time=start_time,
+        end_time=end_time,
+    )
+    platform_counts = stats.get("platform_counts") or {}
     return {
-        "platforms": [CLAUDE_CODE_PLATFORM],
-        "counts": {
-            CLAUDE_CODE_PLATFORM: storage.get_overview_stats(
-                period_hours,
-                start_time=start_time,
-                end_time=end_time,
-            ).get("total_sessions", 0)
-        },
+        "platforms": list(SUPPORTED_PLATFORMS),
+        "counts": {platform: platform_counts.get(platform, 0) for platform in SUPPORTED_PLATFORMS},
     }
 
 

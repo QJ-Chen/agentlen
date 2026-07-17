@@ -6,6 +6,7 @@ import { SURFACE_CLASS, formatClockTime } from './shared';
 
 const PLATFORM_CONFIG = {
   'claude-code': { name: 'Claude Code', color: 'text-orange-700', bg: 'bg-orange-50 border border-orange-100' },
+  codex: { name: 'Codex', color: 'text-emerald-700', bg: 'bg-emerald-50 border border-emerald-100' },
 } as const;
 
 export function OverviewView({
@@ -40,7 +41,9 @@ export function OverviewView({
             <FileText className="h-4 w-4 text-slate-400" />
             Recap
           </h3>
-          <p className="text-sm text-slate-700 whitespace-pre-wrap">{trace.recapText}</p>
+          <div className="max-h-64 overflow-y-auto overscroll-contain pr-2 text-sm text-slate-700 whitespace-pre-wrap">
+            {trace.recapText}
+          </div>
         </div>
       )}
 

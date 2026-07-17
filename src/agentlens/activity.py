@@ -1,4 +1,4 @@
-"""Canonical activity graph construction for Claude Code JSONL records.
+"""Canonical activity graph construction for supported coding-agent logs.
 
 The compatibility session projection intentionally remains in ``collectors.py``.
 This module preserves identities and relationships needed for precise, lazy
@@ -181,6 +181,157 @@ class ActivityGraphBuilder:
         if isinstance(message.get("content"), str):
             payload["content"] = message["content"]
         return {key: value for key, value in payload.items() if value is not None}
+
+
+@dataclass
+class CodexActivityGraphBuilder:
+    """Build canonical activities from Codex rollout response items."""
+
+    session_id: str
+    nodes: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    edges: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    tool_use_nodes: Dict[str, str] = field(default_factory=dict)
+    pending_results: Dict[str, List[str]] = field(default_factory=dict)
+    sequence: int = 0
+
+    def add_message(
+        self,
+        *,
+        role: str,
+        content: List[Dict[str, Any]],
+        timestamp: Any,
+        turn_id: Optional[str],
+        source_file: str,
+        model: Optional[str] = None,
+        usage: Optional[Dict[str, Any]] = None,
+        record_id: Optional[str] = None,
+        assistant_phase_id: Optional[str] = None,
+    ) -> str:
+        sequence = self.sequence
+        self.sequence += 1
+        suffix = record_id or f"{sequence}"
+        event_id = f"event:codex:{suffix}"
+        # Codex turn_id identifies the user-prompt thread. Assistant response
+        # items do not share an invocation ID, so the collector supplies a
+        # synthetic phase ID for compatibility turn grouping. record_id stays
+        # on the event as its item-level provenance identity.
+        message_id = (
+            _text(assistant_phase_id)
+            if role == "assistant"
+            else _text(record_id) or f"codex-message-{sequence}"
+        )
+        payload = {
+            "projection_version": 1,
+            "type": "codex-response-item",
+            "role": role,
+            "model": model,
+            "usage": usage or {},
+        }
+        self.nodes[event_id] = {
+            "id": event_id,
+            "session_id": self.session_id,
+            "kind": f"{role}-message",
+            "sequence": sequence,
+            "timestamp": _text(timestamp),
+            "raw_uuid": _text(record_id),
+            "parent_uuid": None,
+            "prompt_id": _text(turn_id),
+            "message_id": message_id,
+            "tool_use_id": None,
+            "source_tool_assistant_uuid": None,
+            "source_file": source_file,
+            "payload": {key: value for key, value in payload.items() if value is not None},
+        }
+        for index, block in enumerate(content):
+            self._add_block(event_id, block, index)
+        return event_id
+
+    def add_event(
+        self, kind: str, payload: Dict[str, Any], timestamp: Any, source_file: str
+    ) -> str:
+        sequence = self.sequence
+        self.sequence += 1
+        event_id = f"event:codex:{sequence}"
+        self.nodes[event_id] = {
+            "id": event_id,
+            "session_id": self.session_id,
+            "kind": kind,
+            "sequence": sequence,
+            "timestamp": _text(timestamp),
+            "raw_uuid": None,
+            "parent_uuid": None,
+            "prompt_id": _text(payload.get("turn_id")),
+            "message_id": None,
+            "tool_use_id": _text(payload.get("call_id")),
+            "source_tool_assistant_uuid": None,
+            "source_file": source_file,
+            "payload": {"projection_version": 1, "type": kind, **payload},
+        }
+        return event_id
+
+    def remove_message(self, event_id: str) -> None:
+        """Remove a provisional message and its content nodes."""
+        contained = {
+            edge["target"]
+            for edge in self.edges.values()
+            if edge.get("source") == event_id and edge.get("kind") == "contains"
+        }
+        removed = {event_id, *contained}
+        for node_id in removed:
+            self.nodes.pop(node_id, None)
+        self.edges = {
+            edge_id: edge
+            for edge_id, edge in self.edges.items()
+            if edge.get("source") not in removed and edge.get("target") not in removed
+        }
+
+    def _add_block(self, event_id: str, block: Dict[str, Any], index: int) -> None:
+        event = self.nodes[event_id]
+        block_type = str(block.get("type") or "content")
+        tool_id = _text(block.get("id") if block_type == "tool_use" else block.get("tool_use_id"))
+        if block_type == "tool_use" and tool_id:
+            node_id, kind = f"tool-use:{tool_id}", "tool-use"
+        elif block_type == "tool_result":
+            node_id, kind = f"tool-result:codex:{self.sequence - 1}:{index}", "tool-result"
+        else:
+            node_id, kind = f"content:codex:{self.sequence - 1}:{index}", f"content-{block_type}"
+        self.nodes[node_id] = {
+            **event,
+            "id": node_id,
+            "kind": kind,
+            "tool_use_id": tool_id,
+            "payload": {"index": index, "block": block},
+        }
+        self._edge(event_id, node_id, "contains")
+        if kind == "tool-use" and tool_id:
+            self.tool_use_nodes[tool_id] = node_id
+            self._edge(event_id, node_id, "invokes-tool")
+            for result_id in self.pending_results.pop(tool_id, []):
+                self._edge(node_id, result_id, "returns-result")
+        elif kind == "tool-result" and tool_id:
+            tool_node = self.tool_use_nodes.get(tool_id)
+            if tool_node:
+                self._edge(tool_node, node_id, "returns-result")
+            else:
+                self.pending_results.setdefault(tool_id, []).append(node_id)
+
+    def _edge(self, source: str, target: str, kind: str) -> None:
+        edge_id = f"{kind}:{source}:{target}"
+        self.edges[edge_id] = {
+            "id": edge_id,
+            "session_id": self.session_id,
+            "source": source,
+            "target": target,
+            "kind": kind,
+        }
+
+    def build(self) -> Dict[str, Any]:
+        return {
+            "version": 1,
+            "session_id": self.session_id,
+            "nodes": sorted(self.nodes.values(), key=lambda item: (item["sequence"], item["id"])),
+            "edges": list(self.edges.values()),
+        }
 
 
 def validate_activity_graph(graph: Dict[str, Any]) -> List[str]:

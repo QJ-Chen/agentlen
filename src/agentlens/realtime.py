@@ -116,18 +116,21 @@ class RealtimeUpdater:
                     self.current_job["started_at"] = _utc_now_iso()
                     self.current_job["error"] = ""
             try:
-                purged = self.storage.purge_non_claude_rows()
+                purge = getattr(
+                    self.storage, "purge_unsupported_rows", self.storage.purge_non_claude_rows
+                )
+                purged = purge()
                 self.last_purged_rows = purged
                 if purged:
-                    logger.info("Purged %s non-Claude trace rows", purged)
+                    logger.info("Purged %s unsupported trace rows", purged)
 
                 count = self.manager.collect_all_historical()
-                logger.info("%s imported %s Claude Code session records", job_type, count)
+                logger.info("%s imported %s supported session records", job_type, count)
 
                 if start_watch_after and self.running:
                     self.manager.start_all(interval=self.interval)
                     self.startup_backfill_completed = True
-                    logger.info("Started Claude Code session log watching")
+                    logger.info("Started coding-agent session log watching")
 
                 self._finish_current_job("completed", records_imported=count)
             except Exception as exc:  # pragma: no cover - defensive logging path

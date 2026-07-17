@@ -21,8 +21,13 @@ function inputField(tool: ToolCall, key: string): string | null {
 function keyArgSummary(tool: ToolCall): string {
   const filePath = inputField(tool, 'file_path') ?? inputField(tool, 'notebook_path');
   if (filePath) return fileBasename(filePath);
-  const command = inputField(tool, 'command');
+  const command = inputField(tool, 'command') ?? inputField(tool, 'cmd');
   if (command) return truncateText(command.replace(/\n/g, ' '), 72);
+  if (tool.name === 'apply_patch') {
+    const patch = inputField(tool, 'value') ?? inputField(tool, 'patch');
+    const path = patch?.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/m)?.[1];
+    if (path) return fileBasename(path);
+  }
   const pattern = inputField(tool, 'pattern');
   if (pattern) return truncateText(pattern, 72);
   const description = inputField(tool, 'description') ?? inputField(tool, 'prompt');
@@ -156,8 +161,8 @@ function ExpandableLines({
   );
 }
 
-function BashBody({ tool }: { tool: ToolCall }) {
-  const command = inputField(tool, 'command') ?? '';
+function ShellBody({ tool }: { tool: ToolCall }) {
+  const command = inputField(tool, 'command') ?? inputField(tool, 'cmd') ?? '';
   const output = tool.error || outputAsText(tool);
   const text = `$ ${command}${output ? `\n${output}` : '\n(无输出)'}`;
   return (
@@ -166,6 +171,29 @@ function BashBody({ tool }: { tool: ToolCall }) {
       className="border border-slate-700 bg-slate-900"
       lineClassName={tool.status === 'error' ? 'text-red-300' : 'text-slate-100'}
     />
+  );
+}
+
+function PatchBody({ tool }: { tool: ToolCall }) {
+  const patch = inputField(tool, 'value') ?? inputField(tool, 'patch') ?? '';
+  return (
+    <div className="max-h-80 overflow-auto rounded-xl border border-slate-200 bg-white p-2 font-mono text-xs">
+      {patch.split('\n').map((line, idx) => {
+        const isHeader = line.startsWith('***') || line.startsWith('@@');
+        const tone = line.startsWith('+')
+          ? 'bg-emerald-50 text-emerald-800'
+          : line.startsWith('-')
+            ? 'bg-red-50 text-red-800'
+            : isHeader
+              ? 'font-semibold text-violet-700'
+              : 'text-slate-600';
+        return (
+          <div key={idx} className={`whitespace-pre-wrap break-all px-1 ${tone}`}>
+            {line || ' '}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -233,13 +261,16 @@ export function ToolCallCard({
   const isError = tool.status === 'error';
   const summary = keyArgSummary(tool);
   const filePath = inputField(tool, 'file_path') ?? inputField(tool, 'notebook_path');
-  // Edit/Write/Bash bodies already visualize the interesting part of the
-  // input; everything else falls back to the JSON input preview.
+  const isShell = tool.name === 'Bash' || tool.name === 'exec_command';
+  // File-edit and shell bodies visualize the interesting part of the input;
+  // everything else falls back to the JSON input preview.
   const body =
     tool.name === 'Edit' && inputField(tool, 'old_string') != null ? (
       <EditDiffBody tool={tool} />
-    ) : tool.name === 'Bash' && inputField(tool, 'command') ? (
-      <BashBody tool={tool} />
+    ) : isShell && (inputField(tool, 'command') || inputField(tool, 'cmd')) ? (
+      <ShellBody tool={tool} />
+    ) : tool.name === 'apply_patch' && (inputField(tool, 'value') || inputField(tool, 'patch')) ? (
+      <PatchBody tool={tool} />
     ) : tool.name === 'Write' && inputField(tool, 'content') != null ? (
       <WriteBody tool={tool} />
     ) : tool.name === 'Skill' ? (
@@ -247,12 +278,12 @@ export function ToolCallCard({
     ) : (
       <DefaultBody tool={tool} />
     );
-  const showSeparateOutput = tool.name !== 'Bash';
+  const showSeparateOutput = !isShell;
 
   return (
     <div className={`rounded-2xl border p-3 shadow-sm shadow-slate-200/40 ${isError ? 'border-red-200 bg-red-50/60' : 'border-violet-200/80 bg-violet-50/60'}`}>
       <div className="mb-2 flex items-center gap-2">
-        {tool.name === 'Bash' ? (
+        {isShell ? (
           <Terminal className={`h-3.5 w-3.5 shrink-0 ${isError ? 'text-red-500' : 'text-violet-500'}`} />
         ) : (
           <Wrench className={`h-3.5 w-3.5 shrink-0 ${isError ? 'text-red-500' : 'text-violet-500'}`} />
