@@ -257,6 +257,239 @@ def test_codex_agent_reasoning_is_used_when_response_item_summary_is_absent(tmp_
     ]
 
 
+def test_codex_projects_subagent_rollouts_and_collaboration_tasks(tmp_path: Path):
+    parent_path = tmp_path / "rollout-parent.jsonl"
+    child_path = tmp_path / "rollout-child.jsonl"
+    parent_records = [
+        _line(
+            "2026-07-16T02:00:00Z",
+            "session_meta",
+            {"id": "parent-id", "session_id": "parent-id", "cwd": "/repo"},
+        ),
+        _line(
+            "2026-07-16T02:00:01Z",
+            "turn_context",
+            {"turn_id": "turn-1", "cwd": "/repo", "model": "gpt-5"},
+        ),
+        _line(
+            "2026-07-16T02:00:02Z",
+            "response_item",
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Audit the parser"}],
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:03Z",
+            "response_item",
+            {
+                "type": "function_call",
+                "id": "fc-spawn",
+                "call_id": "call-spawn",
+                "name": "spawn_agent",
+                "arguments": json.dumps(
+                    {"task_name": "parser_audit", "message": "Inspect parser behavior"}
+                ),
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:04Z",
+            "response_item",
+            {
+                "type": "function_call_output",
+                "call_id": "call-spawn",
+                "output": json.dumps({"task_name": "/root/parser_audit"}),
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:05Z",
+            "response_item",
+            {
+                "type": "function_call",
+                "call_id": "call-followup",
+                "name": "followup_task",
+                "arguments": json.dumps(
+                    {"target": "parser_audit", "message": "Also inspect malformed input"}
+                ),
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:06Z",
+            "response_item",
+            {
+                "type": "function_call",
+                "call_id": "call-list",
+                "name": "list_agents",
+                "arguments": "{}",
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:07Z",
+            "response_item",
+            {
+                "type": "function_call_output",
+                "call_id": "call-list",
+                "output": json.dumps(
+                    {
+                        "agents": [
+                            {
+                                "agent_name": "/root/parser_audit",
+                                "agent_status": {"completed": "Audit complete"},
+                            }
+                        ]
+                    }
+                ),
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:08Z",
+            "response_item",
+            {
+                "type": "function_call",
+                "call_id": "call-plan-1",
+                "name": "update_plan",
+                "arguments": json.dumps(
+                    {
+                        "plan": [
+                            {"step": "Inspect parser", "status": "in_progress"},
+                            {"step": "Run regression tests", "status": "pending"},
+                        ]
+                    }
+                ),
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:09Z",
+            "response_item",
+            {
+                "type": "function_call",
+                "call_id": "call-plan-2",
+                "name": "update_plan",
+                "arguments": json.dumps(
+                    {
+                        "explanation": "Parser inspection and verification completed.",
+                        "plan": [
+                            {"step": "Inspect parser", "status": "completed"},
+                            {"step": "Run regression tests", "status": "completed"},
+                        ],
+                    }
+                ),
+            },
+        ),
+    ]
+    child_records = [
+        _line(
+            "2026-07-16T02:00:03.500Z",
+            "session_meta",
+            {
+                "id": "child-id",
+                "session_id": "parent-id",
+                "cwd": "/repo",
+                "thread_source": "subagent",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": "parent-id",
+                            "depth": 1,
+                            "agent_path": "/root/parser_audit",
+                            "agent_nickname": "Ada",
+                        }
+                    }
+                },
+            },
+        ),
+        _line(
+            "2026-07-16T02:00:04Z",
+            "turn_context",
+            {"turn_id": "child-turn", "cwd": "/repo", "model": "gpt-5"},
+        ),
+        # Forked rollouts may replay an older root session_meta as history.
+        # It must not replace the child's authoritative first metadata record.
+        _line(
+            "2026-07-16T02:00:04.500Z",
+            "session_meta",
+            {"id": "parent-id", "session_id": "parent-id", "cwd": "/repo"},
+        ),
+        _line(
+            "2026-07-16T02:00:05Z",
+            "response_item",
+            {
+                "type": "message",
+                "role": "assistant",
+                "id": "child-answer",
+                "content": [{"type": "output_text", "text": "Parser audit complete."}],
+            },
+        ),
+        _line("2026-07-16T02:00:06Z", "event_msg", {"type": "task_complete"}),
+    ]
+    parent_path.write_text("\n".join(parent_records) + "\n")
+    child_path.write_text("\n".join(child_records) + "\n")
+
+    collector = CodexCollector(None)
+    collector.get_log_paths = lambda: [parent_path, child_path]  # type: ignore[method-assign]
+
+    traces = collector.collect_historical()
+    assert len(traces) == 1
+    trace = traces[0]
+    assert trace["session_id"] == "parent-id"
+    subagent = trace["metadata"]["subagent_logs"][0]
+    assert subagent["id"] == "child-id"
+    assert subagent["agent_id"] == "/root/parser_audit"
+    assert subagent["tool_use_id"] == "call-spawn"
+    assert subagent["spawn_depth"] == 1
+    assert subagent["meta"]["agent_nickname"] == "Ada"
+    assert subagent["status"] == "completed"
+
+    task_summary = trace["metadata"]["task_summary"]
+    assert task_summary["task_source"] == "codex_plan+collaboration"
+    assert task_summary["created"] == 3
+    assert task_summary["updated"] == 2
+    assert task_summary["listed"] == 1
+    assert task_summary["plan_update_count"] == 2
+    assert task_summary["plan_explanation"] == "Parser inspection and verification completed."
+    assert task_summary["tasks"] == [
+        {
+            "taskId": "agent:parser_audit",
+            "status": "completed",
+            "subject": "parser_audit",
+            "description": "Inspect parser behavior",
+            "tool_use_id": "call-spawn",
+            "task_kind": "collaboration",
+            "latest_message": "Also inspect malformed input",
+        },
+        {
+            "taskId": "plan:1",
+            "status": "completed",
+            "subject": "Inspect parser",
+            "description": "",
+            "task_kind": "plan",
+            "plan_order": 1,
+        },
+        {
+            "taskId": "plan:2",
+            "status": "completed",
+            "subject": "Run regression tests",
+            "description": "",
+            "task_kind": "plan",
+            "plan_order": 2,
+        },
+    ]
+    assert validate_activity_graph(trace["activity_graph"]) == []
+    assert any(
+        node["id"].startswith("subagent:/root/parser_audit:")
+        for node in trace["activity_graph"]["nodes"]
+    )
+    assert any(edge["kind"] == "spawns" for edge in trace["activity_graph"]["edges"])
+
+    storage = SQLiteStorage(str(tmp_path / "subagents.db"))
+    storage.save_trace(trace)
+    session = storage.get_session("parent-id")
+    assert session is not None
+    stored_subagent = session["metadata"]["subagent_logs"][0]
+    assert stored_subagent["llm_calls"][0]["response"] == "Parser audit complete."
+
+
 def test_collector_manager_registers_claude_and_codex():
     assert [collector.get_name() for collector in CollectorManager(None).collectors] == [
         "claude-code",

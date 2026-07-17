@@ -940,6 +940,7 @@ class SessionAggregator:
             "tool_calls": merged_tool_calls,
             "llm_calls": session["assistant_turns"],
             "status": "success",
+            "task_completed": False,
             "project_path": project_path,
             "metadata": {
                 "message_count": session["message_count"],
@@ -1666,6 +1667,14 @@ class ClaudeCodeCollector(LogCollector):
 class CodexCollector(LogCollector):
     """Collect Codex rollout JSONL without translating it into Claude envelopes."""
 
+    COLLABORATION_TOOLS = {
+        "spawn_agent",
+        "followup_task",
+        "list_agents",
+        "interrupt_agent",
+        "update_plan",
+    }
+
     def get_name(self) -> str:
         return CODEX_PLATFORM
 
@@ -1699,7 +1708,35 @@ class CodexCollector(LogCollector):
             "reasoning_turns": set(),
             "fallback_reasoning_nodes": {},
             "status": "success",
+            "rollout_id": fallback_id,
+            "root_session_id": fallback_id,
+            "parent_thread_id": None,
+            "subagent_meta": None,
+            "collaboration_calls": {},
+            "collaboration_order": [],
+            "subagent_statuses": {},
+            "session_meta_seen": False,
         }
+
+    @staticmethod
+    def _decode_json_value(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+    @staticmethod
+    def _thread_spawn(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        source = payload.get("source")
+        if not isinstance(source, dict):
+            return None
+        subagent = source.get("subagent")
+        if not isinstance(subagent, dict):
+            return None
+        thread_spawn = subagent.get("thread_spawn")
+        return dict(thread_spawn) if isinstance(thread_spawn, dict) else None
 
     @staticmethod
     def _turn_id(payload: Dict[str, Any], state: Dict[str, Any]) -> Optional[str]:
@@ -1762,10 +1799,26 @@ class CodexCollector(LogCollector):
         payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
 
         if envelope_type == "session_meta":
-            session_id = str(payload.get("session_id") or payload.get("id") or state["session_id"])
+            if state["session_meta_seen"]:
+                return
+            state["session_meta_seen"] = True
+            thread_spawn = self._thread_spawn(payload)
+            rollout_id = str(payload.get("id") or state["rollout_id"])
+            root_session_id = str(payload.get("session_id") or rollout_id)
+            # A subagent rollout shares the root session_id, but payload.id is
+            # its stable thread identity. Keeping those separate prevents the
+            # child from replacing its parent in storage.
+            session_id = rollout_id if thread_spawn else root_session_id
             if session_id != state["session_id"] and not state["activity_builder"].nodes:
                 state["session_id"] = session_id
                 state["activity_builder"] = CodexActivityGraphBuilder(session_id)
+            state["rollout_id"] = rollout_id
+            state["root_session_id"] = root_session_id
+            state["subagent_meta"] = thread_spawn
+            if thread_spawn:
+                state["parent_thread_id"] = str(
+                    thread_spawn.get("parent_thread_id") or root_session_id
+                )
             state["project_path"] = str(payload.get("cwd") or state["project_path"])
             state["metadata"].update(
                 {
@@ -1778,6 +1831,16 @@ class CodexCollector(LogCollector):
                     if payload.get(key) not in (None, "")
                 }
             )
+            if thread_spawn:
+                state["metadata"].update(
+                    {
+                        "root_session_id": root_session_id,
+                        "parent_thread_id": state["parent_thread_id"],
+                        "agent_path": thread_spawn.get("agent_path"),
+                        "agent_nickname": thread_spawn.get("agent_nickname"),
+                        "spawn_depth": thread_spawn.get("depth"),
+                    }
+                )
             return
 
         if envelope_type == "turn_context":
@@ -1798,6 +1861,7 @@ class CodexCollector(LogCollector):
                 state["current_turn_id"] = next_turn_id
             elif event_type == "task_complete":
                 state["status"] = "success"
+                state["task_completed"] = True
             elif event_type == "turn_aborted":
                 state["status"] = "cancelled"
             elif event_type == "token_count":
@@ -1820,6 +1884,14 @@ class CodexCollector(LogCollector):
                         assistant_phase_id=self._assistant_phase_id(state, turn_id),
                     )
                     state["fallback_reasoning_nodes"].setdefault(turn_id, []).append(node_id)
+            elif event_type == "sub_agent_activity":
+                agent_path = str(payload.get("agent_path") or "")
+                if agent_path:
+                    state["subagent_statuses"][agent_path] = {
+                        "kind": payload.get("kind"),
+                        "timestamp": timestamp,
+                        "thread_id": payload.get("agent_thread_id"),
+                    }
             elif event_type in {"context_compacted", "turn_aborted"}:
                 state["activity_builder"].add_event(
                     str(event_type), dict(payload), timestamp, str(state["source_log_path"])
@@ -1904,11 +1976,24 @@ class CodexCollector(LogCollector):
                 assistant_phase_id=self._assistant_phase_id(state, turn_id),
             )
             state["tool_names"][name] += 1
+            if name in self.COLLABORATION_TOOLS:
+                state["collaboration_calls"][call_id] = {
+                    "call_id": call_id,
+                    "name": name,
+                    "input": raw_input if isinstance(raw_input, dict) else {"value": raw_input},
+                    "timestamp": timestamp,
+                    "turn_id": turn_id,
+                }
+                state["collaboration_order"].append(call_id)
             return
 
         if item_type in {"function_call_output", "custom_tool_call_output", "tool_search_output"}:
             call_id = str(payload.get("call_id") or builder.sequence)
             output = payload.get("output", payload.get("tools", payload.get("result")))
+            decoded_output = self._decode_json_value(output)
+            if call_id in state["collaboration_calls"]:
+                state["collaboration_calls"][call_id]["output"] = decoded_output
+                state["collaboration_calls"][call_id]["output_timestamp"] = timestamp
             self._close_assistant_phase(state)
             builder.add_message(
                 role="user",
@@ -1940,9 +2025,129 @@ class CodexCollector(LogCollector):
                     assistant_phase_id=self._assistant_phase_id(state, turn_id),
                 )
 
-    def finalize_state(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _task_id(value: Any) -> str:
+        text = str(value or "").strip()
+        return text.rsplit("/", 1)[-1] if text else ""
+
+    def _build_task_summary(
+        self, state: Dict[str, Any], subagents: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        summary: Dict[str, Any] = {
+            "created": 0,
+            "updated": 0,
+            "listed": 0,
+            "got": 0,
+            "latest_statuses": [],
+            "latest": None,
+            "tasks": [],
+            "task_source": "codex_collaboration",
+            "plan_update_count": 0,
+            "plan_explanation": "",
+        }
+        tasks: Dict[str, Dict[str, Any]] = {}
+        latest_plan: List[Dict[str, Any]] = []
+        for call_id in state["collaboration_order"]:
+            call = state["collaboration_calls"].get(call_id, {})
+            name = call.get("name")
+            input_data = call.get("input") if isinstance(call.get("input"), dict) else {}
+            output = call.get("output")
+            output_data = output if isinstance(output, dict) else {}
+            if name == "spawn_agent":
+                summary["created"] += 1
+                agent_name = self._task_id(
+                    output_data.get("task_name") or input_data.get("task_name") or call_id
+                )
+                task_id = f"agent:{agent_name}"
+                tasks[task_id] = {
+                    "taskId": task_id,
+                    "status": "running",
+                    "subject": input_data.get("task_name") or agent_name,
+                    "description": input_data.get("message") or "",
+                    "tool_use_id": call_id,
+                    "task_kind": "collaboration",
+                }
+            elif name == "followup_task":
+                summary["updated"] += 1
+                agent_name = self._task_id(input_data.get("target"))
+                if agent_name:
+                    task_id = f"agent:{agent_name}"
+                    tasks.setdefault(task_id, {"taskId": task_id, "status": "running"})
+                    tasks[task_id]["latest_message"] = input_data.get("message") or ""
+            elif name == "interrupt_agent":
+                summary["updated"] += 1
+                agent_name = self._task_id(input_data.get("target"))
+                if agent_name:
+                    task_id = f"agent:{agent_name}"
+                    tasks.setdefault(task_id, {"taskId": task_id})["status"] = "cancelled"
+            elif name == "list_agents":
+                summary["listed"] += 1
+                agents = output_data.get("agents")
+                for agent in agents if isinstance(agents, list) else []:
+                    if not isinstance(agent, dict):
+                        continue
+                    agent_name = self._task_id(agent.get("agent_name"))
+                    if not agent_name or agent_name == "root":
+                        continue
+                    task_id = f"agent:{agent_name}"
+                    status_value = agent.get("agent_status")
+                    if isinstance(status_value, dict):
+                        status = next(iter(status_value), "completed")
+                    else:
+                        status = str(status_value or "unknown")
+                    status = normalize_subagent_status(status, status == "completed")
+                    tasks.setdefault(task_id, {"taskId": task_id})["status"] = status
+            elif name == "update_plan":
+                plan = input_data.get("plan")
+                if not isinstance(plan, list):
+                    continue
+                summary["plan_update_count"] += 1
+                summary["plan_explanation"] = str(input_data.get("explanation") or "")
+                latest_plan = [dict(item) for item in plan if isinstance(item, dict)]
+
+        for subagent in subagents:
+            agent_name = self._task_id(subagent.get("agent_id"))
+            if not agent_name:
+                continue
+            task_id = f"agent:{agent_name}"
+            task = tasks.setdefault(task_id, {"taskId": task_id})
+            task.setdefault("subject", subagent.get("description") or agent_name)
+            task.setdefault("description", subagent.get("prompt") or "")
+            task.setdefault("task_kind", "collaboration")
+            task["status"] = subagent.get("status") or task.get("status") or "unknown"
+
+        for index, item in enumerate(latest_plan, start=1):
+            step = str(item.get("step") or "").strip()
+            if not step:
+                continue
+            task_id = f"plan:{index}"
+            tasks[task_id] = {
+                "taskId": task_id,
+                "status": str(item.get("status") or "unknown"),
+                "subject": step,
+                "description": "",
+                "task_kind": "plan",
+                "plan_order": index,
+            }
+        summary["created"] += len(latest_plan)
+        summary["updated"] += max(0, int(summary["plan_update_count"]) - 1)
+        if latest_plan and any(task_id.startswith("agent:") for task_id in tasks):
+            summary["task_source"] = "codex_plan+collaboration"
+        elif latest_plan:
+            summary["task_source"] = "codex_plan"
+
+        summary["tasks"] = list(tasks.values())
+        summary["latest_statuses"] = [
+            {"taskId": task["taskId"], "status": task.get("status", "unknown")}
+            for task in summary["tasks"]
+        ]
+        if summary["tasks"]:
+            summary["latest"] = summary["tasks"][-1]
+        return summary
+
+    def _raw_trace(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not state["activity_builder"].nodes:
-            return []
+            return None
         metadata = {
             **state["metadata"],
             "message_count": state["message_count"],
@@ -1952,7 +2157,7 @@ class CodexCollector(LogCollector):
             "major_cwd": state["project_path"],
             "recap_text": state["latest_recap"],
         }
-        trace = {
+        return {
             "trace_id": f"codex_session_{state['session_id']}",
             "platform": CODEX_PLATFORM,
             "agent_name": CODEX_PLATFORM,
@@ -1975,7 +2180,147 @@ class CodexCollector(LogCollector):
             "metadata": metadata,
             "activity_graph": state["activity_builder"].build(),
         }
+
+    def _read_rollout_meta(self, log_path: Path) -> Optional[Dict[str, Any]]:
+        try:
+            with log_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    record = json.loads(line)
+                    if record.get("type") == "session_meta" and isinstance(
+                        record.get("payload"), dict
+                    ):
+                        return record["payload"]
+        except (OSError, json.JSONDecodeError):
+            return None
+        return None
+
+    def _rollout_inventory(self) -> List[tuple[Path, Dict[str, Any]]]:
+        active = getattr(self, "_active_rollout_inventory", None)
+        if active is not None:
+            return active
+        inventory = []
+        for path in self.get_log_paths():
+            meta = self._read_rollout_meta(path)
+            if meta:
+                inventory.append((path, meta))
+        return inventory
+
+    def _parent_log_for_state(self, state: Dict[str, Any]) -> Optional[Path]:
+        parent_id = str(state.get("parent_thread_id") or "")
+        if not parent_id:
+            return None
+        for candidate, meta in self._rollout_inventory():
+            if self._thread_spawn(meta):
+                continue
+            if str(meta.get("session_id") or meta.get("id") or "") == parent_id:
+                return candidate
+        return None
+
+    def _subagent_summaries(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        parent_id = str(state["session_id"])
+        launch_by_path: Dict[str, Dict[str, Any]] = {}
+        for call_id in state["collaboration_order"]:
+            call = state["collaboration_calls"].get(call_id, {})
+            if call.get("name") != "spawn_agent":
+                continue
+            input_data = call.get("input") if isinstance(call.get("input"), dict) else {}
+            output_data = call.get("output") if isinstance(call.get("output"), dict) else {}
+            path = str(output_data.get("task_name") or "")
+            if not path and input_data.get("task_name"):
+                path = f"/root/{input_data['task_name']}"
+            launch_by_path[path] = call
+
+        summaries = []
+        for log_path, meta in self._rollout_inventory():
+            spawn = self._thread_spawn(meta)
+            if not spawn or str(spawn.get("parent_thread_id") or "") != parent_id:
+                continue
+            child_state = self.create_incremental_state(log_path)
+            self._consume_file(log_path, child_state)
+            trace = self._raw_trace(child_state)
+            if not trace:
+                continue
+            agent_path = str(spawn.get("agent_path") or "")
+            launch = launch_by_path.get(agent_path, {})
+            input_data = launch.get("input") if isinstance(launch.get("input"), dict) else {}
+            agent_id = agent_path or str(trace["session_id"])
+            status = normalize_subagent_status(
+                trace.get("status") if child_state["task_completed"] else "running",
+                child_state["task_completed"],
+            )
+            summaries.append(
+                {
+                    "id": str(trace["session_id"]),
+                    "agent_id": agent_id,
+                    "parent_session_id": parent_id,
+                    "agent_type": spawn.get("agent_role") or "codex-subagent",
+                    "description": input_data.get("task_name") or agent_path,
+                    "tool_use_id": launch.get("call_id") or "",
+                    "spawn_depth": spawn.get("depth"),
+                    "launch_batch_id": launch.get("call_id") or "",
+                    "launch_timestamp": launch.get("timestamp"),
+                    "launch_order": (
+                        state["collaboration_order"].index(launch["call_id"])
+                        if launch
+                        else None
+                    ),
+                    "launch_prompt_id": launch.get("turn_id") or "",
+                    "launch_user_prompt": state.get("first_prompt") or "",
+                    "session_file_path": str(log_path),
+                    "start_time": trace.get("start_time"),
+                    "end_time": trace.get("end_time"),
+                    "duration_ms": trace.get("duration_ms", 0),
+                    "status": status,
+                    "model": trace.get("model") or "unknown",
+                    "prompt": trace.get("prompt") or input_data.get("message") or "",
+                    "response": trace.get("response") or "",
+                    "input_tokens": int(trace.get("input_tokens") or 0),
+                    "output_tokens": int(trace.get("output_tokens") or 0),
+                    "cost_usd": 0.0,
+                    "tool_calls": [],
+                    "llm_calls": [],
+                    "meta": {**spawn, "agent_nickname": spawn.get("agent_nickname")},
+                    "activity_graph": trace["activity_graph"],
+                }
+            )
+        return summaries
+
+    def finalize_state(self, state: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if state.get("subagent_meta"):
+            parent_log = self._parent_log_for_state(state)
+            return self.parse_session_file(parent_log) if parent_log else []
+        trace = self._raw_trace(state)
+        if not trace:
+            return []
+        subagents = self._subagent_summaries(state)
+        metadata = dict(trace["metadata"])
+        metadata["subagent_logs"] = [
+            {key: value for key, value in item.items() if key != "activity_graph"}
+            for item in subagents
+        ]
+        metadata["task_summary"] = self._build_task_summary(state, subagents)
+        trace["metadata"] = metadata
+        if subagents:
+            trace["activity_graph"] = merge_subagent_graphs(trace["activity_graph"], subagents)
         return [trace]
+
+    def collect_historical(self) -> List[Dict[str, Any]]:
+        """Collect root rollouts once; children are projected into their parent."""
+        with self.state_lock:
+            traces = []
+            inventory = self._rollout_inventory()
+            self._active_rollout_inventory = inventory
+            try:
+                for log_path, meta in inventory:
+                    if self._thread_spawn(meta):
+                        continue
+                    try:
+                        traces.extend(self._rebuild_state(log_path))
+                    except Exception as exc:
+                        logger.error("Error reading %s: %s", log_path, exc)
+            finally:
+                self._active_rollout_inventory = None
+            return traces
 
 
 class CollectorManager:
