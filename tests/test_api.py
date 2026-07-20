@@ -517,6 +517,33 @@ class HierarchyApiTests(unittest.TestCase):
         self.assertEqual(len(session_nodes), 1)
         self.assertEqual(session_nodes[0]["label"], "Goal is improving AgentLens session previews.")
         self.assertEqual(session_nodes[0]["sessionId"], "session-1")
+        self.assertNotIn("count", session_nodes[0])
+
+    def test_hierarchy_root_forwards_session_filters(self):
+        response = self.client.get(
+            "/api/v1/hierarchy",
+            params={
+                "status": "failed",
+                "query": "parser",
+                "start_time": "2026-07-01T00:00:00Z",
+                "end_time": "2026-07-17T23:59:59Z",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.storage.sessions_calls[-1],
+            {
+                "status": "failed",
+                "query": "parser",
+                "period_hours": 720,
+                "start_time": "2026-07-01T00:00:00Z",
+                "end_time": "2026-07-17T23:59:59Z",
+                "limit": 5000,
+                "offset": 0,
+                "light": True,
+            },
+        )
 
     def test_hierarchy_children_returns_session_summaries(self):
         response = self.client.get(

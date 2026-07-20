@@ -97,7 +97,6 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [projectMetadata, setProjectMetadata] = useState<ProjectMetadata | null>(null);
@@ -113,34 +112,62 @@ function App() {
   const fetchAbortRef = useRef<AbortController | null>(null);
   const loadMoreGenerationRef = useRef(0);
   const loadMoreAbortRef = useRef<AbortController | null>(null);
-  const hierarchyFetchInFlightRef = useRef<Promise<void> | null>(null);
+  const hierarchyFetchGenerationRef = useRef(0);
+  const hierarchyFetchAbortRef = useRef<AbortController | null>(null);
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
   const hasActiveDateRange = startDate.length > 0 || endDate.length > 0;
   const activeDateRangeLabel = buildDateRangeLabel(startDate, endDate);
 
   const fetchHierarchyRoot = useCallback(async () => {
-    if (hierarchyFetchInFlightRef.current) {
-      return hierarchyFetchInFlightRef.current;
-    }
+    const generation = ++hierarchyFetchGenerationRef.current;
+    hierarchyFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    hierarchyFetchAbortRef.current = controller;
+    const params = new URLSearchParams();
+    const startTime = toStartOfLocalDayISOString(startDate);
+    const endTime = toEndOfLocalDayISOString(endDate);
+    if (startTime) params.set('start_time', startTime);
+    if (endTime) params.set('end_time', endTime);
+    if (debouncedQuery) params.set('query', debouncedQuery);
+    const queryString = params.toString();
 
-    const request = (async () => {
-      const response = await fetch(`${API_URL}/api/v1/hierarchy`);
+    try {
+      const response = await fetch(
+        `${API_URL}/api/v1/hierarchy${queryString ? `?${queryString}` : ''}`,
+        { signal: controller.signal },
+      );
       if (!response.ok) {
         throw new Error('Failed to load hierarchy');
       }
       const hierarchyData = (await response.json()) as HierarchyResponse;
+      if (generation !== hierarchyFetchGenerationRef.current) return;
       const firstProjectNodeId = hierarchyData.root?.children?.find((child) => child.type === 'projects-root')?.children?.[0]?.id || null;
       setHierarchyRoot(hierarchyData.root || null);
       setExpandedNodeIds(new Set());
-      setSelectedNodeId((existingNodeId) => existingNodeId || firstProjectNodeId || 'global-root');
-    })();
-
-    hierarchyFetchInFlightRef.current = request.finally(() => {
-      hierarchyFetchInFlightRef.current = null;
-    });
-    return hierarchyFetchInFlightRef.current;
-  }, []);
+      setSelectedNodeId((existingNodeId) => {
+        if (existingNodeId && hierarchyData.root) {
+          const stack = [hierarchyData.root];
+          while (stack.length > 0) {
+            const node = stack.pop();
+            if (!node) continue;
+            if (node.id === existingNodeId) return existingNodeId;
+            if (node.children) stack.push(...node.children);
+          }
+        }
+        return firstProjectNodeId || 'global-root';
+      });
+    } catch (requestError) {
+      const isAbort = requestError instanceof Error && requestError.name === 'AbortError';
+      if (generation === hierarchyFetchGenerationRef.current && !isAbort) {
+        setError('无法加载会话层级');
+      }
+    } finally {
+      if (generation === hierarchyFetchGenerationRef.current) {
+        hierarchyFetchAbortRef.current = null;
+      }
+    }
+  }, [startDate, endDate, debouncedQuery]);
 
   const buildSessionParams = useCallback(
     (offset: number) => {
@@ -150,10 +177,9 @@ function App() {
       if (startTime) params.set('start_time', startTime);
       if (endTime) params.set('end_time', endTime);
       if (debouncedQuery) params.set('query', debouncedQuery);
-      if (statusFilter !== 'all') params.set('status', statusFilter);
       return params;
     },
-    [startDate, endDate, debouncedQuery, statusFilter],
+    [startDate, endDate, debouncedQuery],
   );
 
   const fetchData = useCallback(async () => {
@@ -271,8 +297,8 @@ function App() {
       return;
     }
     if (!hasLoadedInitiallyRef.current) return;
-    void fetchData();
-  }, [fetchData, startDate, endDate, debouncedQuery, statusFilter]);
+    void Promise.all([fetchData(), fetchHierarchyRoot()]);
+  }, [fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
 
   useEffect(() => {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
@@ -441,7 +467,7 @@ function App() {
     return () => controller.abort();
   }, [selectedProjectPath]);
 
-  const hasActiveSessionFilters = searchQuery.length > 0 || statusFilter !== 'all';
+  const hasActiveSessionFilters = searchQuery.length > 0;
   const hasMoreSessions = traces.length < sessionsTotal;
 
   if (error) {
@@ -477,7 +503,7 @@ function App() {
 
             <div className="flex items-center gap-2 text-sm text-ink-700/70">
               {stats && <span className="hidden font-mono text-xs xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
-              <button onClick={() => void fetchData()} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
+              <button onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
                 <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
             </div>
@@ -597,32 +623,14 @@ function App() {
                   />
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    <Filter className="h-4 w-4" />
-                    <span className="text-slate-700">Claude Code only</span>
-                  </div>
-                  <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="bg-transparent focus:outline-none text-slate-700">
-                      <option value="all">All status</option>
-                      <option value="completed">completed</option>
-                      <option value="failed">failed</option>
-                      <option value="running">running</option>
-                      <option value="cancelled">cancelled</option>
-                    </select>
-                  </div>
-                  {hasActiveSessionFilters && (
-                    <button
-                      onClick={() => {
-                        setSearchQuery('');
-                        setStatusFilter('all');
-                      }}
-                      className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
-                    >
-                      <X className="h-3.5 w-3.5" /> Clear
-                    </button>
-                  )}
-                </div>
+                {hasActiveSessionFilters && (
+                  <button
+                    onClick={() => setSearchQuery('')}
+                    className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
+                  >
+                    <X className="h-3.5 w-3.5" /> Clear
+                  </button>
+                )}
               </div>
             </div>
           </div>

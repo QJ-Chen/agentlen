@@ -366,9 +366,6 @@ def _build_session_overview_node(session: Dict[str, Any], project_path: str) -> 
 def _build_session_shallow_node(session: Dict[str, Any], project_path: str) -> Dict[str, Any]:
     session_id = str(session.get("session_id") or "")
     metadata = session.get("metadata") or {}
-    llm_call_count = metadata.get("llm_call_count")
-    if llm_call_count is None:
-        llm_call_count = len(session.get("llm_calls") or [])
     recap_text = str(metadata.get("recap_text") or "").strip()
     return {
         "id": f"session:{session_id}",
@@ -378,15 +375,27 @@ def _build_session_shallow_node(session: Dict[str, Any], project_path: str) -> D
         "sessionId": session_id,
         "status": str(session.get("status") or "completed"),
         "projectPath": project_path,
-        "count": llm_call_count,
         "hasChildren": True,
         "children": [],
     }
 
 
-def _build_hierarchy_root() -> Dict[str, Any]:
+def _build_hierarchy_root(
+    *,
+    status: Optional[str] = None,
+    query: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+) -> Dict[str, Any]:
     sessions_payload = storage.list_sessions(
-        period_hours=720, limit=5000, offset=0, light=True
+        status=status,
+        query=query,
+        period_hours=720,
+        start_time=start_time,
+        end_time=end_time,
+        limit=5000,
+        offset=0,
+        light=True,
     )
     sessions = sessions_payload.get("sessions", []) if isinstance(sessions_payload, dict) else []
     global_metadata = _build_global_metadata()
@@ -869,8 +878,24 @@ def get_project_metadata(project_path: str = Query(..., min_length=1)):
 
 
 @app.get("/api/v1/hierarchy")
-def get_hierarchy():
-    return {"root": _cached("hierarchy", _build_hierarchy_root)}
+def get_hierarchy(
+    status: Optional[str] = None,
+    query: Optional[str] = None,
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+):
+    cache_key = f"hierarchy:{status}:{query}:{start_time}:{end_time}"
+    return {
+        "root": _cached(
+            cache_key,
+            lambda: _build_hierarchy_root(
+                status=status,
+                query=query,
+                start_time=start_time,
+                end_time=end_time,
+            ),
+        )
+    }
 
 
 @app.get("/api/v1/hierarchy/children")
