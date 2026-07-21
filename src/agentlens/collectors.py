@@ -1199,6 +1199,7 @@ class ClaudeCodeCollector(LogCollector):
         launches: Dict[str, Dict[str, Any]] = {}
         launch_orders: Dict[str, int] = {}
         latest_user_prompt: Optional[str] = None
+        latest_user_prompt_id: str = ""
 
         try:
             with open(parent_log_path, "r", encoding="utf-8") as handle:
@@ -1217,6 +1218,12 @@ class ClaudeCodeCollector(LogCollector):
                         extracted_prompt = extract_user_prompt_text(message.get("content"))
                         if extracted_prompt:
                             latest_user_prompt = extracted_prompt
+                            latest_user_prompt_id = str(
+                                data.get("promptId")
+                                or message.get("promptId")
+                                or message.get("prompt_id")
+                                or ""
+                            )
                         continue
 
                     if record_type != "assistant":
@@ -1227,14 +1234,16 @@ class ClaudeCodeCollector(LogCollector):
                         continue
 
                     batch_id = str(message.get("id") or "")
-                    launch_prompt_id = str(data.get("promptId") or "")
+                    launch_prompt_id = str(data.get("promptId") or latest_user_prompt_id or "")
                     launch_timestamp = data.get("timestamp")
                     launch_order = launch_orders.get(batch_id, 0)
 
                     for item in content:
                         if not isinstance(item, dict):
                             continue
-                        if item.get("type") != "tool_use" or item.get("name") != "Agent":
+                        # Claude Code has emitted both `Agent` and `Task` for
+                        # subagent launches across versions.
+                        if item.get("type") != "tool_use" or item.get("name") not in {"Agent", "Task"}:
                             continue
 
                         tool_use_id = str(item.get("id") or "")
@@ -1697,6 +1706,7 @@ class CodexCollector(LogCollector):
             "start_time": None,
             "end_time": None,
             "first_prompt": None,
+            "turn_prompts": {},
             "last_response": None,
             "project_path": "",
             "input_tokens": 0,
@@ -1705,6 +1715,7 @@ class CodexCollector(LogCollector):
             "tool_names": Counter(),
             "message_count": 0,
             "latest_recap": "",
+            "compaction_records": [],
             "reasoning_turns": set(),
             "fallback_reasoning_nodes": {},
             "status": "success",
@@ -1915,6 +1926,12 @@ class CodexCollector(LogCollector):
             }
             if recap:
                 compact_payload["summary_preview"] = recap[:500]
+                compact_payload["summary"] = recap
+            state.setdefault("compaction_records", []).append({
+                "timestamp": timestamp,
+                "summary": recap,
+                **compact_payload,
+            })
             state["activity_builder"].add_event(
                 "context-compacted", compact_payload, timestamp, str(state["source_log_path"])
             )
@@ -1952,6 +1969,8 @@ class CodexCollector(LogCollector):
             state["message_count"] += 1
             if role == "user" and text:
                 state["first_prompt"] = state["first_prompt"] or text
+                if turn_id:
+                    state.setdefault("turn_prompts", {})[str(turn_id)] = text
             elif role == "assistant" and text:
                 state["last_response"] = text
             return
@@ -2156,6 +2175,7 @@ class CodexCollector(LogCollector):
             "project_group": state["project_path"],
             "major_cwd": state["project_path"],
             "recap_text": state["latest_recap"],
+            "compaction_records": list(state.get("compaction_records") or []),
         }
         return {
             "trace_id": f"codex_session_{state['session_id']}",
@@ -2257,7 +2277,10 @@ class CodexCollector(LogCollector):
                     "description": input_data.get("task_name") or agent_path,
                     "tool_use_id": launch.get("call_id") or "",
                     "spawn_depth": spawn.get("depth"),
-                    "launch_batch_id": launch.get("call_id") or "",
+                    # All collaboration calls issued in one Codex turn are
+                    # one launch batch. The individual call ID identifies a
+                    # child, while turn_id identifies the parent prompt.
+                    "launch_batch_id": launch.get("turn_id") or launch.get("call_id") or "",
                     "launch_timestamp": launch.get("timestamp"),
                     "launch_order": (
                         state["collaboration_order"].index(launch["call_id"])
@@ -2265,7 +2288,15 @@ class CodexCollector(LogCollector):
                         else None
                     ),
                     "launch_prompt_id": launch.get("turn_id") or "",
-                    "launch_user_prompt": state.get("first_prompt") or "",
+                    # The collaboration call carries the turn that launched
+                    # this child. Use that turn's prompt, not the session's
+                    # first prompt (which is wrong for later subagents).
+                    "launch_user_prompt": (
+                        state.get("turn_prompts", {}).get(str(launch.get("turn_id") or ""))
+                        or input_data.get("message")
+                        or state.get("first_prompt")
+                        or ""
+                    ),
                     "session_file_path": str(log_path),
                     "start_time": trace.get("start_time"),
                     "end_time": trace.get("end_time"),

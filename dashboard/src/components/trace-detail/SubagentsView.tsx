@@ -48,7 +48,6 @@ export function SubagentsView({
   onToggle,
   onToggleMany,
   onCopy,
-  onJumpToLaunchPrompt,
 }: {
   subagentLogs: SubagentLog[];
   groupedSubagentLogs: SubagentLaunchGroup[];
@@ -60,7 +59,6 @@ export function SubagentsView({
   onToggle: (key: string) => void;
   onToggleMany: (keys: string[], expand: boolean) => void;
   onCopy: (text: string, id: string) => void;
-  onJumpToLaunchPrompt: (promptId?: string) => void;
 }) {
   if (subagentLogs.length === 0 || !isKindVisible('subagent')) {
     return <EmptyState icon={Bot} label="当前筛选条件下无可见 Subagent 日志" />;
@@ -138,14 +136,6 @@ export function SubagentsView({
                       </div>
                     </div>
                   </button>
-                  {group.subagents[0]?.launchPromptId && (
-                    <button
-                      onClick={() => onJumpToLaunchPrompt(group.subagents[0]?.launchPromptId)}
-                      className="shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-[11px] text-slate-600 hover:border-slate-300 hover:text-slate-900 shadow-sm"
-                    >
-                      Go to prompt
-                    </button>
-                  )}
                   <button
                     onClick={() => onToggle(groupKey)}
                     aria-label={isGroupExpanded ? 'Collapse subagent batch' : 'Expand subagent batch'}
@@ -190,7 +180,8 @@ export function SubagentsView({
 
                     return (
                       <div key={subagent.id} className={`overflow-hidden rounded-xl border-l-4 transition-all ${isSubagentExpanded ? 'border-violet-300 bg-white shadow-md shadow-violet-100/35 ring-1 ring-violet-100' : 'border-slate-200/80 border-l-violet-200 bg-white/80 hover:border-slate-300 hover:bg-white'}`}>
-                        <button onClick={() => onToggle(subagentKey)} className="w-full px-3.5 py-3 text-left">
+                        <div className="flex items-center gap-2">
+                        <button onClick={() => onToggle(subagentKey)} className="min-w-0 flex-1 px-3.5 py-3 text-left">
                           <div className="flex items-center gap-3">
                             <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-violet-200 bg-violet-50 text-[10px] font-mono text-violet-700">
                               {subagentIdx + 1}
@@ -233,6 +224,7 @@ export function SubagentsView({
                             </div>
                           </div>
                         </button>
+                        </div>
 
                         {isSubagentExpanded && (
                           <div className="ml-5 border-l-2 border-violet-100/80 px-3.5 pb-3 pt-3 space-y-4 bg-violet-50/25 rounded-bl-xl">

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Activity, Bot, Code, FileText, Layers, MessageSquare } from 'lucide-react';
 import type { Trace } from '../types';
 import { API_URL } from '../lib/api';
@@ -76,8 +76,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [openingTarget, setOpeningTarget] = useState<'project' | 'session_folder' | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  const [pendingLaunchPromptId, setPendingLaunchPromptId] = useState<string | null>(null);
-  const llmGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const copyToClipboard = useCallback(async (text: string, id: string) => {
     await navigator.clipboard.writeText(text);
@@ -164,33 +162,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
       }
       return next;
     });
-  }, []);
-
-  const registerJumpRef = useCallback((id: string, node: HTMLDivElement | null) => {
-    llmGroupRefs.current[id] = node;
-  }, []);
-
-  useEffect(() => {
-    if (activeTab !== 'llm' || !pendingLaunchPromptId) {
-      return;
-    }
-    const target = llmGroupRefs.current[pendingLaunchPromptId];
-    if (!target) {
-      return;
-    }
-    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setPendingLaunchPromptId(null);
-  }, [activeTab, pendingLaunchPromptId, assistantTurnGroups]);
-
-  const jumpToLaunchPrompt = useCallback((promptId?: string) => {
-    if (!promptId) return;
-    setExpandedLLMs((current) => {
-      const next = new Set(current);
-      next.add(promptId);
-      return next;
-    });
-    setPendingLaunchPromptId(promptId);
-    setActiveTab('llm');
   }, []);
 
   useEffect(() => {
@@ -318,7 +289,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             onToggle={toggleLLM}
             onToggleMany={toggleManyLLMs}
             onCopy={copyToClipboard}
-            registerJumpRef={registerJumpRef}
           />
         ))}
       </div>
@@ -445,7 +415,6 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
             onToggle={toggleLLM}
             onToggleMany={toggleManyLLMs}
             onCopy={copyToClipboard}
-            onJumpToLaunchPrompt={jumpToLaunchPrompt}
           />
         )}
         {activeTab === 'taskStatus' && <TaskStatusView trace={effectiveTypedTrace} />}

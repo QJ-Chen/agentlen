@@ -266,6 +266,62 @@ export function buildAssistantTurns(record: RawSessionRecord | RawSubagentLog, r
   });
 }
 
+function addCodexCompactionTurns(
+  record: RawSessionRecord,
+  turns: AssistantTurn[],
+): AssistantTurn[] {
+  if (record.platform !== 'codex' || !Array.isArray(record.metadata?.compaction_records)) {
+    return turns;
+  }
+  const compactions = record.metadata.compaction_records as Array<Record<string, unknown>>;
+  const synthetic = compactions.flatMap((item, index) => {
+    const summary = typeof item.summary === 'string' ? item.summary.trim() : '';
+    const timestamp = toTimestamp(item.timestamp as string | number | null) ?? 0;
+    if (!summary) return [];
+    const id = `codex-compaction-${timestamp || index}`;
+    return [{
+      id,
+      messageId: id,
+      prompt: '',
+      promptId: id,
+      command: { name: '/compact', args: '', message: 'compact' },
+      attributionSkill: '',
+      attributionToolUseId: '',
+      startTime: timestamp,
+      endTime: timestamp,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      cost: 0,
+      childRecords: [{
+        id: `${id}-summary`,
+        messageId: `${id}-summary`,
+        sourceEventIds: [],
+        contentBlocks: [{ type: 'output_text', text: summary }],
+        model: record.model || 'unknown',
+        startTime: timestamp,
+        endTime: timestamp,
+        duration: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0,
+        cost: 0,
+        status: 'success',
+        prompt: '',
+        response: summary,
+        promptId: id,
+        attributionSkill: '',
+        attributionToolUseId: '',
+      }],
+      childRecordCount: 1,
+      sourceEventIds: [],
+    } satisfies AssistantTurn];
+  });
+  return [...turns, ...synthetic].sort((a, b) => a.startTime - b.startTime);
+}
+
 function extractCommandOnlyRecords(
   source: Record<string, unknown>,
   fallbackTimestamp: number,
@@ -340,7 +396,7 @@ export function transformSession(record: RawSessionRecord): TraceWithRaw {
 
   const tools = buildMergedTools(record, recordStartTime);
   const llmCalls = buildLLMCalls(record, recordStartTime);
-  const assistantTurns = buildAssistantTurns(record, recordStartTime);
+  const assistantTurns = addCodexCompactionTurns(record, buildAssistantTurns(record, recordStartTime));
   const commandOnlyRecords = extractCommandOnlyRecords(record.metadata || {}, recordStartTime);
   const promptThreads = buildPromptThreadsFromAssistantTurns(assistantTurns, commandOnlyRecords);
   const rawSubagentLogs = Array.isArray(record.metadata?.subagent_logs)

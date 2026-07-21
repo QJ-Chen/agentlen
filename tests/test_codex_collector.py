@@ -437,6 +437,8 @@ def test_codex_projects_subagent_rollouts_and_collaboration_tasks(tmp_path: Path
     assert subagent["id"] == "child-id"
     assert subagent["agent_id"] == "/root/parser_audit"
     assert subagent["tool_use_id"] == "call-spawn"
+    assert subagent["launch_prompt_id"] == "turn-1"
+    assert subagent["launch_user_prompt"] == "Audit the parser"
     assert subagent["spawn_depth"] == 1
     assert subagent["meta"]["agent_nickname"] == "Ada"
     assert subagent["status"] == "completed"

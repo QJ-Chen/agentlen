@@ -804,3 +804,33 @@ def test_finalize_merges_subagent_activity_under_agent_tool(tmp_path: Path):
         for edge in graph["edges"]
     )
     assert trace["metadata"]["subagent_logs"][0]["spawn_depth"] == 1
+
+
+def test_finalize_links_claude_subagent_to_latest_user_prompt(tmp_path: Path):
+    project_dir = tmp_path / "-Users-example-repo"
+    project_dir.mkdir()
+    log_path = project_dir / "session-1.jsonl"
+    subagent_dir = project_dir / "session-1" / "subagents"
+    subagent_dir.mkdir(parents=True)
+    (subagent_dir / "agent-child.jsonl").write_text(
+        '{"type":"user","uuid":"child-u1","message":{"role":"user","content":"inspect"}}\n',
+        encoding="utf-8",
+    )
+    (subagent_dir / "agent-child.meta.json").write_text(
+        '{"agentType":"Explore","toolUseId":"agent-tool"}', encoding="utf-8"
+    )
+    log_path.write_text(
+        '{"type":"user","uuid":"u1","promptId":"prompt-1","message":{"role":"user","content":"find the bug"}}\n'
+        '{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_use","id":"agent-tool","name":"Task","input":{}}]}}\n',
+        encoding="utf-8",
+    )
+
+    collector = ClaudeCodeCollector(DummyStorage())
+    state = collector.create_incremental_state(log_path)
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        collector.process_line(state, line)
+    trace = collector.finalize_state(state)[0]
+    launch = trace["metadata"]["subagent_logs"][0]
+
+    assert launch["launch_prompt_id"] == "prompt-1"
+    assert launch["launch_user_prompt"] == "find the bug"
