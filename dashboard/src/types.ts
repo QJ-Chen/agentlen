@@ -264,9 +264,14 @@ export interface ProjectMetadata {
 
 export type HierarchyNodeType =
   | 'global-root'
+  | 'claude-global-root'
+  | 'codex-global-root'
   | 'global-instruction'
   | 'global-skills'
   | 'global-config'
+  | 'codex-global-instruction'
+  | 'codex-global-skills'
+  | 'codex-global-config'
   | 'projects-root'
   | 'skill'
   | 'project'

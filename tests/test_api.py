@@ -504,6 +504,30 @@ class HierarchyApiTests(unittest.TestCase):
         self.assertIn("children", payload)
         self.assertNotIn("detail", payload)
 
+    def test_hierarchy_root_includes_codex_global_artifacts(self):
+        response = self.client.get("/api/v1/hierarchy")
+
+        self.assertEqual(response.status_code, 200)
+        children = response.json()["root"]["children"]
+        codex_root = next(child for child in children if child["type"] == "codex-global-root")
+        nodes_by_type = {child["type"]: child for child in codex_root["children"]}
+        self.assertIn("codex-global-instruction", nodes_by_type)
+        self.assertIn("codex-global-skills", nodes_by_type)
+        self.assertIn("codex-global-config", nodes_by_type)
+        self.assertTrue(nodes_by_type["codex-global-instruction"]["detail"]["path"].endswith("/.codex/AGENTS.md"))
+        self.assertTrue(nodes_by_type["codex-global-config"]["detail"]["path"].endswith("/.codex/config.toml"))
+
+    def test_hierarchy_root_groups_claude_global_artifacts(self):
+        response = self.client.get("/api/v1/hierarchy")
+
+        self.assertEqual(response.status_code, 200)
+        children = response.json()["root"]["children"]
+        claude_root = next(child for child in children if child["type"] == "claude-global-root")
+        self.assertEqual(
+            [child["type"] for child in claude_root["children"]],
+            ["global-skills", "global-instruction", "global-config"],
+        )
+
     def test_hierarchy_root_uses_recap_text_as_session_label(self):
         response = self.client.get("/api/v1/hierarchy")
 

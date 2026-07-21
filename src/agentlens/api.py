@@ -58,6 +58,7 @@ app.add_middleware(
 storage = SQLiteStorage()
 realtime_updater: Optional[RealtimeUpdater] = None
 CLAUDE_ROOT = Path.home() / ".claude"
+CODEX_ROOT = Path.home() / ".codex"
 PROJECTS_ROOT = CLAUDE_ROOT / "projects"
 TASKS_ROOT = CLAUDE_ROOT / "tasks"
 
@@ -201,6 +202,33 @@ def _summarize_skills(skills_dir: Path) -> Dict[str, Any]:
     }
 
 
+def _summarize_nested_skills(skills_dir: Path) -> Dict[str, Any]:
+    """Summarize Codex skills, which may live below namespaces such as .system/."""
+    skills = []
+    if skills_dir.exists() and skills_dir.is_dir():
+        for skill_doc in sorted(skills_dir.glob("**/SKILL.md")):
+            content = _safe_read_text(skill_doc, max_chars=4000)
+            description = ""
+            for line in content.splitlines()[:24]:
+                if line.startswith("description:"):
+                    description = line.split(":", 1)[1].strip().strip('"')
+                    break
+            skills.append(
+                {
+                    "name": str(skill_doc.parent.relative_to(skills_dir)),
+                    "path": str(skill_doc),
+                    "description": description,
+                    "content": content,
+                }
+            )
+    return {
+        "exists": skills_dir.exists(),
+        "path": str(skills_dir),
+        "count": len(skills),
+        "items": skills,
+    }
+
+
 def _summarize_worktrees(worktrees_dir: Path) -> Dict[str, Any]:
     worktrees = []
     if worktrees_dir.exists():
@@ -321,6 +349,14 @@ def _build_global_metadata() -> Dict[str, Any]:
     }
 
 
+def _build_codex_global_metadata() -> Dict[str, Any]:
+    return {
+        "instructions": _summarize_claude_md(CODEX_ROOT / "AGENTS.md"),
+        "config": _summarize_settings_local(CODEX_ROOT / "config.toml"),
+        "skills": _summarize_nested_skills(CODEX_ROOT / "skills"),
+    }
+
+
 def _node_file_detail(title: str, summary: Dict[str, Any], description: str) -> Dict[str, Any]:
     path = str(summary.get("path") or "")
     return {
@@ -399,6 +435,7 @@ def _build_hierarchy_root(
     )
     sessions = sessions_payload.get("sessions", []) if isinstance(sessions_payload, dict) else []
     global_metadata = _build_global_metadata()
+    codex_global_metadata = _build_codex_global_metadata()
 
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for session in sessions:
@@ -472,6 +509,7 @@ def _build_hierarchy_root(
         )
 
     global_skill_count = int(global_metadata.get("skills", {}).get("count") or 0)
+    codex_skill_count = int(codex_global_metadata.get("skills", {}).get("count") or 0)
     return {
         "id": "global-root",
         "type": "global-root",
@@ -479,38 +517,64 @@ def _build_hierarchy_root(
         "hasChildren": True,
         "children": [
             {
-                "id": "global-instruction",
-                "type": "global-instruction",
-                "label": "Global instruction",
-                "hasChildren": False,
-                "detail": _node_file_detail(
-                    "Global instruction",
-                    global_metadata.get("instructions") or {},
-                    "Global ~/.claude/CLAUDE.md",
-                ),
+                "id": "claude-global-root",
+                "type": "claude-global-root",
+                "label": "Claude Code global",
+                "hasChildren": True,
+                "children": [
+                    {
+                        "id": "global-skills",
+                        "type": "global-skills",
+                        "label": "Skills",
+                        "count": global_skill_count,
+                        "hasChildren": False,
+                        "detail": _node_skills_detail("Global skills", global_metadata.get("skills") or {}, "Installed global Claude skills"),
+                    },
+                    {
+                        "id": "global-instruction",
+                        "type": "global-instruction",
+                        "label": "Instruction",
+                        "hasChildren": False,
+                        "detail": _node_file_detail("Global instruction", global_metadata.get("instructions") or {}, "Global ~/.claude/CLAUDE.md"),
+                    },
+                    {
+                        "id": "global-config",
+                        "type": "global-config",
+                        "label": "Config",
+                        "hasChildren": False,
+                        "detail": _node_file_detail("Global config", global_metadata.get("config") or {}, "Global ~/.claude/settings.json"),
+                    },
+                ],
             },
             {
-                "id": "global-skills",
-                "type": "global-skills",
-                "label": "Global skills",
-                "count": global_skill_count,
-                "hasChildren": False,
-                "detail": _node_skills_detail(
-                    "Global skills",
-                    global_metadata.get("skills") or {},
-                    "Installed global Claude skills",
-                ),
-            },
-            {
-                "id": "global-config",
-                "type": "global-config",
-                "label": "Global config",
-                "hasChildren": False,
-                "detail": _node_file_detail(
-                    "Global config",
-                    global_metadata.get("config") or {},
-                    "Global ~/.claude/settings.json",
-                ),
+                "id": "codex-global-root",
+                "type": "codex-global-root",
+                "label": "Codex global",
+                "hasChildren": True,
+                "children": [
+                    {
+                        "id": "codex-global-skills",
+                        "type": "codex-global-skills",
+                        "label": "Skills",
+                        "count": codex_skill_count,
+                        "hasChildren": False,
+                        "detail": _node_skills_detail("Codex skills", codex_global_metadata.get("skills") or {}, "Installed global Codex skills"),
+                    },
+                    {
+                        "id": "codex-global-instruction",
+                        "type": "codex-global-instruction",
+                        "label": "Instruction",
+                        "hasChildren": False,
+                        "detail": _node_file_detail("Codex instruction", codex_global_metadata.get("instructions") or {}, "Global ~/.codex/AGENTS.md"),
+                    },
+                    {
+                        "id": "codex-global-config",
+                        "type": "codex-global-config",
+                        "label": "Config",
+                        "hasChildren": False,
+                        "detail": _node_file_detail("Codex config", codex_global_metadata.get("config") or {}, "Global ~/.codex/config.toml"),
+                    },
+                ],
             },
             {
                 "id": "projects-root",

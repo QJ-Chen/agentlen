@@ -29,17 +29,22 @@ const INDENT = 16;
 function nodeIcon(node: HierarchyNode): { kind: 'folder' | 'book' | 'json' | 'code' | 'scroll' | 'list' | 'terminal' | 'sparkles' | 'text' | 'wrench' } {
   switch (node.type) {
     case 'global-root':
+    case 'claude-global-root':
+    case 'codex-global-root':
     case 'projects-root':
     case 'project':
     case 'project-sessions':
       return { kind: 'folder' };
     case 'global-instruction':
+    case 'codex-global-instruction':
     case 'project-instructions':
       return { kind: 'book' };
     case 'global-config':
+    case 'codex-global-config':
     case 'project-config':
       return { kind: 'json' };
     case 'global-skills':
+    case 'codex-global-skills':
     case 'project-skills':
     case 'skill':
       return { kind: 'code' };

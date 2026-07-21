@@ -1,10 +1,10 @@
 # AgentLens
 
-> **Local-first session intelligence for Claude Code.**
+> **Local-first session intelligence for coding agents.**
 
-AgentLens reads your local `~/.claude/projects/.../*.jsonl` session logs, normalizes them into structured session records, stores them in SQLite, and serves a searchable inbox, a hierarchy explorer, and a per-session inspector from a FastAPI + React dashboard.
+AgentLens reads local Claude Code and Codex session logs, normalizes them into structured session records, stores them in SQLite, and serves a searchable inbox, a hierarchy explorer, and a per-session inspector from a FastAPI + React dashboard.
 
-It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic OpenTelemetry backend. The product is best understood as a forensic replay and analytics layer for the Claude Code history that already exists on your machine.
+It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic OpenTelemetry backend. The product is a local forensic replay and analytics layer for agent history already on your machine.
 
 ---
 
@@ -28,13 +28,15 @@ It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic O
 
 ## Highlights
 
-- **Hierarchy explorer.** Browse global → projects → sessions → subagents/llm/vision/tasks. Recap text drives the session labels so the most recent intent is always visible.
+- **Hierarchy explorer.** Browse Claude Code global settings, Codex global settings, projects, sessions, subagents, LLM activity, vision, and tasks. Recap text drives session labels so the most recent intent is visible.
 - **Session inspector with Recap card.** Every session surfaces an `away_summary` recap, prompt-thread list, tool calls, subagent activity, and provenance (project path + source JSONL).
 - **Structured control-plane cards.** `<task-notification>`, `<bash-stdout>`, `<bash-stderr>`, `<bash-input>`, `<bash-output>`, and `<bash-exit-code>` wrappers are decoded into typed UI cards with explicit `无输出` / `无错误输出` / `不完整` badges.
 - **Slash commands as first-class prompt threads.** `/loop`, `/clear`, `/model`, `/compact` and friends are preserved with their `command-name` / `command-args` / `command-message` fields and rendered as standalone rows. `/loop` dedupes across its `isMeta: true` skill expansion.
 - **Lightweight hierarchy projection.** Lazy `/api/v1/hierarchy` + `/api/v1/hierarchy/children` keep the inbox responsive on long sessions.
 - **Project metadata panel.** CLAUDE.md instructions, `MEMORY.md` index, local `.claude/settings.local.json` permissions, git worktrees, and counts of session/subagent/task artifacts.
 - **Date-range filter** on sessions, overview stats, and project rollups.
+- **Bilingual dashboard.** Toggle English/中文 from the header. The language preference is persisted locally, including the custom date-range calendar.
+- **Codex support.** Ingests Codex rollout JSONL from `~/.codex/sessions/` and exposes `~/.codex/AGENTS.md`, `config.toml`, and installed skills in the hierarchy.
 - **Local-first, no cloud dependency.** SQLite at `~/.agentlens/agentlens.db`; no third-party services required.
 
 See [`FEATURES.md`](FEATURES.md) for the full list and [`CHANGELOG.md`](CHANGELOG.md) for release-by-release notes.
@@ -68,10 +70,10 @@ See [`FEATURES.md`](FEATURES.md) for the full list and [`CHANGELOG.md`](CHANGELO
 ## How it works
 
 ```text
-Claude Code session logs (JSONL)
+Claude Code + Codex session logs (JSONL)
         │
         ▼
-CollectorManager + Claude Code collector
+CollectorManager + platform collectors
         │  historical backfill + watch mode
         ▼
 SessionAggregator (collectors.py)
@@ -90,7 +92,7 @@ React dashboard (dashboard/)
 You
 ```
 
-The collector is the canonical entrypoint. `src/agentlens/api.py` starts it on FastAPI startup. `session_scanner.py` is a thin CLI wrapper around the same pipeline for use as a standalone process.
+The collectors are the canonical ingestion entrypoint. `src/agentlens/api.py` starts them on FastAPI startup. `session_scanner.py` is a thin CLI wrapper around the same pipeline for use as a standalone process.
 
 ---
 
@@ -98,7 +100,7 @@ The collector is the canonical entrypoint. `src/agentlens/api.py` starts it on F
 
 - Python ≥ 3.10
 - Node.js ≥ 18 (for the dashboard)
-- A populated `~/.claude/projects/` directory (i.e. you have used Claude Code locally)
+- Claude Code logs under `~/.claude/projects/`, Codex logs under `~/.codex/sessions/`, or both.
 
 Optional:
 
@@ -153,7 +155,7 @@ python3 session_scanner.py --watch --interval 5
 curl -s http://localhost:8080/api/v1/sessions | python3 -m json.tool | head
 ```
 
-You should see Claude Code sessions indexed from `~/.claude/projects/...`.
+You should see sessions indexed from `~/.claude/projects/...` and/or `~/.codex/sessions/...`.
 
 ---
 
@@ -176,7 +178,7 @@ agentlen/
 ├── src/agentlens/
 │   ├── api.py                # FastAPI backend
 │   ├── storage.py            # SQLite persistence + query helpers
-│   ├── collectors.py         # Claude Code ingestion pipeline
+│   ├── collectors.py         # Claude Code + Codex ingestion pipelines
 │   ├── realtime.py           # background collector watch
 │   └── ...
 ├── dashboard/
@@ -212,12 +214,14 @@ Base URL: `http://localhost:8080`.
 
 ### Hierarchy
 
-- `GET /api/v1/hierarchy` — lightweight root (no detail payload).
+- `GET /api/v1/hierarchy` — lightweight root with grouped Claude Code global, Codex global, and project branches.
 - `GET /api/v1/hierarchy/children` — children for a given `node_id`. Opens a session / project lazily.
 
 ### Project metadata
 
 - `GET /api/v1/projects/by-path?project_path=...` — CLAUDE.md instructions, memory index, local config, worktrees, session/task artifact counts.
+
+Global configuration is exposed in the hierarchy under separate `Claude Code global` and `Codex global` branches. Claude Code reads `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, and `~/.claude/skills/`; Codex reads `~/.codex/AGENTS.md`, `~/.codex/config.toml`, and recursively discovers `~/.codex/skills/**/SKILL.md`.
 
 ### Ingestion
 

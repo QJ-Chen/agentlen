@@ -3,11 +3,13 @@ import type { ComponentType } from 'react';
 import {
   Activity,
   BarChart3,
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
   Filter,
   LayoutDashboard,
   RefreshCw,
   Search,
-  Terminal,
   X,
 } from 'lucide-react';
 import type { OverviewStats, HierarchyNode, ProjectMetadata } from './types';
@@ -15,9 +17,9 @@ import { NodeDetailPane } from './components/NodeDetailPane';
 import { HierarchyTree } from './components/HierarchyTree';
 import type { HierarchyChildrenResponse, HierarchyResponse, ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { API_URL } from './lib/api';
+import { useLanguage } from './lib/language';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
 import {
-  formatCompactDuration,
   formatInteger,
   formatTokens,
   toEndOfLocalDayISOString,
@@ -81,13 +83,115 @@ function localDateString(daysAgo: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-const DATE_PRESETS: Array<{ label: string; days: number }> = [
-  { label: '今天', days: 0 },
-  { label: '近7天', days: 6 },
-  { label: '近30天', days: 29 },
-];
+function parseLocalDate(value: string): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : null;
+}
+
+function toLocalDateValue(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function DatePicker({
+  value,
+  min,
+  max,
+  language,
+  label,
+  onChange,
+}: {
+  value: string;
+  min?: string;
+  max?: string;
+  language: 'en' | 'zh';
+  label: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const selected = parseLocalDate(value) || new Date();
+    return new Date(selected.getFullYear(), selected.getMonth(), 1);
+  });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const locale = language === 'en' ? 'en-US' : 'zh-CN';
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => {
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  const firstWeekday = visibleMonth.getDay();
+  const daysInMonth = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 0).getDate();
+  const weekdays = Array.from({ length: 7 }, (_, day) =>
+    new Intl.DateTimeFormat(locale, { weekday: 'short' }).format(new Date(2026, 0, 4 + day)),
+  );
+  const cells = Array.from({ length: firstWeekday + daysInMonth }, (_, index) =>
+    index < firstWeekday ? null : index - firstWeekday + 1,
+  );
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        aria-label={label}
+        aria-expanded={open}
+        onClick={() => {
+          if (!open) {
+            const selected = parseLocalDate(value);
+            if (selected) setVisibleMonth(new Date(selected.getFullYear(), selected.getMonth(), 1));
+          }
+          setOpen((current) => !current);
+        }}
+        className="inline-flex min-w-36 items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 hover:border-slate-300 focus:border-clay-500 focus:bg-white focus:outline-none"
+      >
+        <span>{value || (language === 'en' ? 'Select date' : '选择日期')}</span>
+        <CalendarDays className="h-4 w-4 text-slate-400" />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-2 w-72 rounded-2xl border border-slate-200 bg-white p-3 shadow-xl shadow-slate-300/40">
+          <div className="mb-3 flex items-center justify-between">
+            <button type="button" aria-label={language === 'en' ? 'Previous month' : '上个月'} onClick={() => setVisibleMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() - 1, 1))} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100">
+              <ChevronLeft className="h-4 w-4" />
+            </button>
+            <span className="text-sm font-semibold text-slate-800">
+              {new Intl.DateTimeFormat(locale, { month: 'long', year: 'numeric' }).format(visibleMonth)}
+            </span>
+            <button type="button" aria-label={language === 'en' ? 'Next month' : '下个月'} onClick={() => setVisibleMonth(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + 1, 1))} className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100">
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center">
+            {weekdays.map((weekday) => <span key={weekday} className="py-1 text-[11px] font-medium text-slate-400">{weekday}</span>)}
+            {cells.map((day, index) => {
+              if (day === null) return <span key={`empty-${index}`} />;
+              const dateValue = toLocalDateValue(new Date(visibleMonth.getFullYear(), visibleMonth.getMonth(), day));
+              const disabled = Boolean((min && dateValue < min) || (max && dateValue > max));
+              return (
+                <button
+                  key={dateValue}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => { onChange(dateValue); setOpen(false); }}
+                  className={`rounded-lg py-1.5 text-xs transition-colors ${dateValue === value ? 'bg-ink-900 text-white' : 'text-slate-700 hover:bg-clay-50'} disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent`}
+                >
+                  {day}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function App() {
+  const { language, setLanguage, t } = useLanguage();
+  const DATE_PRESETS = [{ label: t('today'), days: 0 }, { label: t('last7'), days: 6 }, { label: t('last30'), days: 29 }];
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
   const [sessionsTotal, setSessionsTotal] = useState(0);
@@ -160,14 +264,14 @@ function App() {
     } catch (requestError) {
       const isAbort = requestError instanceof Error && requestError.name === 'AbortError';
       if (generation === hierarchyFetchGenerationRef.current && !isAbort) {
-        setError('无法加载会话层级');
+        setError(t('connection'));
       }
     } finally {
       if (generation === hierarchyFetchGenerationRef.current) {
         hierarchyFetchAbortRef.current = null;
       }
     }
-  }, [startDate, endDate, debouncedQuery]);
+  }, [startDate, endDate, debouncedQuery, t]);
 
   const buildSessionParams = useCallback(
     (offset: number) => {
@@ -231,7 +335,7 @@ function App() {
     } catch (requestError) {
       const isAbort = requestError instanceof Error && requestError.name === 'AbortError';
       if (generation === fetchGenerationRef.current && !isAbort) {
-        setError('无法连接到 AgentLens API 服务器');
+        setError(t('connection'));
       }
     } finally {
       if (generation === fetchGenerationRef.current) {
@@ -239,7 +343,7 @@ function App() {
         fetchAbortRef.current = null;
       }
     }
-  }, [startDate, endDate, buildSessionParams]);
+  }, [startDate, endDate, buildSessionParams, t]);
 
   const loadMoreSessions = useCallback(async () => {
     if (loadingMore) return;
@@ -344,7 +448,7 @@ function App() {
         const payload = (await response.json()) as HierarchyChildrenResponse;
         setHierarchyRoot((currentRoot) => (currentRoot ? mergeNodeChildren(currentRoot, id, payload.children) : currentRoot));
       } catch {
-        setError('无法加载层级子节点');
+        setError(t('connection'));
       } finally {
         setLoadingNodeChildrenIds((current) => {
           const next = new Set(current);
@@ -360,7 +464,7 @@ function App() {
       else next.add(id);
       return next;
     });
-  }, [hierarchyRoot]);
+  }, [hierarchyRoot, t]);
 
   const handleResizeStart = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -400,13 +504,13 @@ function App() {
               const normalized = transformSession(payload as SessionsResponse['sessions'][number]);
               setSessionDetailsById((current) => ({ ...current, [node.sessionId as string]: normalized }));
             } catch {
-              setError('无法加载会话详情');
+        setError(t('connection'));
             }
           })();
         }
       }
     },
-    [sessionDetailsById],
+    [sessionDetailsById, t],
   );
 
   const selectedHierarchyNode = useMemo(() => {
@@ -497,7 +601,7 @@ function App() {
                 <h1 className="text-xl font-bold tracking-tight text-ink-900">
                   Agent<span className="text-clay-600">Lens</span>
                 </h1>
-                <p className="font-mono text-[11px] text-ink-700/60">local session intelligence · ~/.claude</p>
+                <p className="font-mono text-[11px] text-ink-700/60">local session intelligence</p>
               </div>
             </div>
 
@@ -506,6 +610,7 @@ function App() {
               <button onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
                 <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
               </button>
+              <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="rounded-xl border border-ink-100 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-ink-50">{t('toggle')}</button>
             </div>
           </div>
         </div>
@@ -514,7 +619,7 @@ function App() {
       {stats && (
         <section className="border-b border-ink-100 bg-transparent">
           <div className="mx-auto max-w-7xl px-4 py-4">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
               <StatsCard
                 title="Sessions"
                 value={formatInteger(stats.total_sessions)}
@@ -533,12 +638,6 @@ function App() {
                 subtext={`${formatInteger(stats.total_tool_calls)} tools`}
                 icon={LayoutDashboard}
               />
-              <StatsCard
-                title="Avg duration"
-                value={formatCompactDuration(stats.avg_duration_ms)}
-                subtext={`${stats.active_days.length} active days`}
-                icon={Terminal}
-              />
             </div>
           </div>
         </section>
@@ -550,7 +649,7 @@ function App() {
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex items-center gap-2 rounded-xl bg-ink-900 px-4 py-2 text-sm font-medium text-paper shadow-sm">
                 <Activity className="h-4 w-4 text-clay-200" />
-                Sessions Inbox
+                {t('inbox')}
               </div>
             </div>
 
@@ -558,7 +657,7 @@ function App() {
               <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
                   <Filter className="h-4 w-4" />
-                  <span className="text-slate-700">Active between</span>
+                  <span className="text-slate-700">{t('activeBetween')}</span>
                 </div>
                 {DATE_PRESETS.map((preset) => {
                   const presetStart = localDateString(preset.days);
@@ -581,22 +680,20 @@ function App() {
                     </button>
                   );
                 })}
-                <input
-                  type="date"
+                <DatePicker
                   value={startDate}
-                  onChange={(e) => setStartDate(e.target.value)}
+                  onChange={setStartDate}
                   max={endDate || undefined}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-clay-500 focus:bg-white focus:outline-none"
-                  aria-label="Start date"
+                  language={language}
+                  label={language === 'en' ? 'Start date' : '开始日期'}
                 />
                 <span className="text-sm text-slate-400">→</span>
-                <input
-                  type="date"
+                <DatePicker
                   value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
+                  onChange={setEndDate}
                   min={startDate || undefined}
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-900 focus:border-clay-500 focus:bg-white focus:outline-none"
-                  aria-label="End date"
+                  language={language}
+                  label={language === 'en' ? 'End date' : '结束日期'}
                 />
                 {hasActiveDateRange && (
                   <button
@@ -606,7 +703,7 @@ function App() {
                     }}
                     className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
                   >
-                    <X className="h-3.5 w-3.5" /> Reset dates
+                    <X className="h-3.5 w-3.5" /> {t('reset')}
                   </button>
                 )}
               </div>
@@ -616,7 +713,7 @@ function App() {
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Search session, project, or prompt…"
+                    placeholder={t('search')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2 pl-10 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-clay-500 focus:bg-white focus:outline-none"
@@ -628,7 +725,7 @@ function App() {
                     onClick={() => setSearchQuery('')}
                     className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 hover:border-slate-300 hover:text-slate-900"
                   >
-                    <X className="h-3.5 w-3.5" /> Clear
+                    <X className="h-3.5 w-3.5" /> {t('clear')}
                   </button>
                 )}
               </div>
@@ -637,7 +734,7 @@ function App() {
 
           <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-slate-500">
             <span>
-              Showing <span className="font-mono text-slate-900">{formatInteger(traces.length)}</span> of{' '}
+              {t('showing')} <span className="font-mono text-slate-900">{formatInteger(traces.length)}</span> {t('of')}{' '}
               <span className="font-mono text-slate-900">{formatInteger(sessionsTotal)}</span> matching sessions
             </span>
             {hasMoreSessions && (
@@ -646,16 +743,16 @@ function App() {
                 disabled={loadingMore}
                 className="rounded-xl border border-ink-100 bg-white px-3 py-1 text-ink-700 hover:border-ink-200 hover:bg-ink-50 disabled:opacity-50"
               >
-                {loadingMore ? '加载中…' : `加载更多 (${formatInteger(sessionsTotal - traces.length)})`}
+                {loadingMore ? t('loading') : `${t('loadMore')} (${formatInteger(sessionsTotal - traces.length)})`}
               </button>
             )}
             {hasActiveDateRange && (
               <span className="rounded-full border border-clay-100 bg-clay-50 px-3 py-1 text-clay-700">
-                Date range: {activeDateRangeLabel}
+                {t('dateRange')}: {activeDateRangeLabel}
               </span>
             )}
             {hasActiveSessionFilters && (
-              <span className="rounded-full bg-clay-50 px-3 py-1 text-clay-700 border border-clay-100">Inbox filters active</span>
+              <span className="rounded-full bg-clay-50 px-3 py-1 text-clay-700 border border-clay-100">{t('active')}</span>
             )}
           </div>
         </section>

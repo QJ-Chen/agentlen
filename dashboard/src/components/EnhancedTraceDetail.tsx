@@ -17,6 +17,7 @@ import {
   REPLAY_KIND_LABELS,
   type ReplayMessageKind,
 } from './trace-detail/shared';
+import { useLanguage } from '../lib/language';
 
 interface EnhancedTraceDetailProps {
   trace: Trace;
@@ -49,9 +50,9 @@ function metadataForConversationWindow(
 }
 
 const DETAIL_LEVEL_LABELS: Record<DetailLevel, string> = {
-  summary: '摘要',
-  standard: '标准',
-  verbose: '详细',
+  summary: 'Summary',
+  standard: 'Standard',
+  verbose: 'Verbose',
 };
 
 export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
@@ -59,6 +60,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   initialTab = 'overview',
   hideTabs = false,
 }) => {
+  const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState<TabType>(initialTab);
   const [fullTrace, setFullTrace] = useState<TraceWithRaw | null>(null);
   const [fullDetailLoading, setFullDetailLoading] = useState(false);
@@ -281,21 +283,21 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
   }, [conversationCursor, conversationLoading, fullTrace, trace]);
 
   const tabs = [
-    { id: 'overview', label: '概览', icon: Activity },
+    { id: 'overview', label: t('overview'), icon: Activity },
     { id: 'llm', label: `LLM (${assistantTurnGroups.length}组)`, icon: MessageSquare },
     { id: 'subagents', label: `Subagents (${subagentLogs.length})`, icon: Bot },
-    { id: 'taskStatus', label: '任务状态', icon: Layers },
+    { id: 'taskStatus', label: t('taskStatus'), icon: Layers },
     { id: 'vision', label: `Vision (${trace.visionReferences?.length || 0})`, icon: FileText },
-    { id: 'raw', label: '原始', icon: Code },
+    { id: 'raw', label: t('raw'), icon: Code },
   ] as const;
 
   const renderLLM = () => {
     if (allLLMCalls.length === 0) {
-      return <EmptyState icon={MessageSquare} label="无 LLM 调用记录" />;
+      return <EmptyState icon={MessageSquare} label={t('noLlm')} />;
     }
 
     if (!assistantTurnGroups.some((thread) => isThreadVisible(thread, isKindVisible, detailLevel))) {
-      return <EmptyState icon={MessageSquare} label="当前筛选条件下无可见消息" />;
+      return <EmptyState icon={MessageSquare} label={t('noMessages')} />;
     }
 
     return (
@@ -419,7 +421,7 @@ export const EnhancedTraceDetail: React.FC<EnhancedTraceDetailProps> = ({
                 disabled={conversationLoading}
                 className="mb-4 rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-600 hover:border-slate-300 disabled:opacity-50"
               >
-                {conversationLoading ? '加载中…' : '加载更早对话'}
+                {conversationLoading ? t('loadingShort') : t('loadEarlier')}
               </button>
             )}
             {renderLLM()}

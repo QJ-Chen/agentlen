@@ -225,6 +225,14 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
     );
   }
 
+  if (node.type === 'claude-global-root' || node.type === 'codex-global-root') {
+    return (
+      <Surface title={node.label} subtitle="Global configuration">
+        <div className="text-sm text-slate-500">Select a child node to inspect skills, instructions, or configuration.</div>
+      </Surface>
+    );
+  }
+
   if (node.type === 'global-root' || node.type === 'projects-root' || node.type === 'project' || node.type === 'project-sessions') {
     return (
       <PendingProjectPane
@@ -261,6 +269,38 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
       <FileDetailPane
         title="Global config"
         subtitle="Global ~/.claude/settings.json"
+        path={node.detail?.path}
+        content={node.detail?.content}
+      />
+    );
+  }
+
+  if (node.type === 'codex-global-instruction') {
+    return (
+      <FileDetailPane
+        title="Codex instruction"
+        subtitle="Global ~/.codex/AGENTS.md"
+        path={node.detail?.path}
+        content={node.detail?.content}
+      />
+    );
+  }
+
+  if (node.type === 'codex-global-skills') {
+    return (
+      <SkillsDetailPane
+        title="Codex skills"
+        subtitle="Installed global Codex skills"
+        items={node.detail?.items || []}
+      />
+    );
+  }
+
+  if (node.type === 'codex-global-config') {
+    return (
+      <FileDetailPane
+        title="Codex config"
+        subtitle="Global ~/.codex/config.toml"
         path={node.detail?.path}
         content={node.detail?.content}
       />
