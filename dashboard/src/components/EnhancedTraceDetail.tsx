@@ -46,6 +46,14 @@ function metadataForConversationWindow(
         return timestamp !== undefined && timestamp >= earliestTurn;
       })
     : [];
+  const compactions = metadata?.compaction_records;
+  next.compaction_records = Number.isFinite(earliestTurn) && Array.isArray(compactions)
+    ? compactions.filter((compaction) => {
+        if (!compaction || typeof compaction !== 'object') return false;
+        const timestamp = toTimestamp((compaction as { timestamp?: string | number }).timestamp);
+        return timestamp !== undefined && timestamp >= earliestTurn;
+      })
+    : [];
   return next;
 }
 
