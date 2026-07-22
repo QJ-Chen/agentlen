@@ -1,0 +1,17 @@
+{
+  "name": "AgentLens",
+  "short_name": "AgentLens",
+  "description": "Local-first session intelligence for Claude Code and Codex coding agents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f5ef",
+  "theme_color": "#17211c",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

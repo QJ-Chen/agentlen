@@ -3,8 +3,58 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/site.webmanifest" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>dashboard</title>
+    <meta name="theme-color" content="#17211c" />
+    <meta name="color-scheme" content="light" />
+    <meta
+      name="description"
+      content="AgentLens is a local-first dashboard for searching, replaying, and analyzing Claude Code and Codex sessions on your machine."
+    />
+    <meta
+      name="keywords"
+      content="AgentLens, Claude Code, Codex, AI coding agents, session analytics, local-first developer tools"
+    />
+    <meta name="author" content="AgentLens Maintainers" />
+    <meta name="application-name" content="AgentLens" />
+    <meta name="apple-mobile-web-app-title" content="AgentLens" />
+
+    <!-- Session data is private and local. Public discovery belongs on the project repository. -->
+    <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AgentLens" />
+    <meta property="og:title" content="AgentLens | Local Session Intelligence for Coding Agents" />
+    <meta
+      property="og:description"
+      content="Search, replay, and analyze local Claude Code and Codex sessions from one private dashboard."
+    />
+    <meta property="og:image" content="/social-preview.png" />
+    <meta property="og:image:alt" content="AgentLens session intelligence dashboard" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="AgentLens | Local Session Intelligence for Coding Agents" />
+    <meta
+      name="twitter:description"
+      content="Search, replay, and analyze local Claude Code and Codex sessions from one private dashboard."
+    />
+    <meta name="twitter:image" content="/social-preview.png" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "AgentLens",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "description": "Local-first session intelligence for Claude Code and Codex coding agents.",
+        "softwareVersion": "0.2.0",
+        "isAccessibleForFree": true,
+        "codeRepository": "https://github.com/QJ-Chen/agentlen"
+      }
+    </script>
+
+    <title>AgentLens | Local Session Intelligence for Coding Agents</title>
   </head>
   <body>
     <div id="root"></div>
