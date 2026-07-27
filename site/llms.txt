@@ -1,0 +1,30 @@
+# AgentLens
+
+> AgentLens is a free, open-source, local-first session log viewer for Claude Code and OpenAI Codex CLI.
+
+AgentLens reads existing JSONL session logs from a developer's machine, normalizes them into structured records, stores them in local SQLite, and serves a FastAPI and React dashboard. It does not upload prompts, source paths, tool output, or coding history to a hosted service.
+
+## Core capabilities
+
+- Search Claude Code and Codex sessions across local projects.
+- Replay prompts, assistant turns, slash commands, tool calls, subagents, tasks, and vision references.
+- Inspect session provenance, including the source JSONL path and project path.
+- Analyze tokens, recorded cost data, model activity, tool usage, and project totals.
+- Browse project instructions, local configuration, skills, and session artifacts.
+
+## Supported sources
+
+- Claude Code logs under `~/.claude/projects/`
+- OpenAI Codex CLI rollout logs under `~/.codex/sessions/`
+
+## Links
+
+- Website: https://qj-chen.github.io/agentlen/
+- Source and installation: https://github.com/QJ-Chen/agentlen
+- Features: https://github.com/QJ-Chen/agentlen/blob/main/FEATURES.md
+- Architecture: https://github.com/QJ-Chen/agentlen/blob/main/docs/architecture.md
+- Session log formats: https://github.com/QJ-Chen/agentlen/blob/main/docs/session-log-formats.md
+
+## Product boundary
+
+AgentLens is a local forensic replay and analytics tool. It is not a hosted telemetry service, remote-control platform, or generic OpenTelemetry backend.

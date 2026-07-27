@@ -2,7 +2,11 @@
 
 > **Local-first session intelligence for coding agents.**
 
-AgentLens reads local Claude Code and Codex session logs, normalizes them into structured session records, stores them in SQLite, and serves a searchable inbox, a hierarchy explorer, and a per-session inspector from a FastAPI + React dashboard.
+[Website](https://qj-chen.github.io/agentlen/) · [Install](#install) · [Screenshots](#screenshots) · [HTTP API](#http-api)
+
+AgentLens is an open-source, local-first **AI agent log viewer** and **agent session viewer** for Claude Code and OpenAI Codex CLI. It reads local session logs, normalizes them into structured records, stores them in SQLite, and serves a searchable inbox, hierarchy explorer, analytics overview, and per-session replay from a FastAPI + React dashboard.
+
+If you are looking for a Claude Code log viewer, Codex log viewer, or `cc-log-viewer` that keeps coding history on your own machine, AgentLens provides one interface for both agent formats.
 
 It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic OpenTelemetry backend. The product is a local forensic replay and analytics layer for agent history already on your machine.
 

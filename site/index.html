@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#20242e" />
+    <meta name="color-scheme" content="light" />
+
+    <title>AgentLens: Claude Code &amp; Codex Session Log Viewer</title>
+    <meta
+      name="description"
+      content="Search, replay, and analyze local Claude Code and Codex CLI sessions. AgentLens is a free, open-source AI agent log viewer that keeps coding history private."
+    />
+    <meta
+      name="keywords"
+      content="AgentLens, agent log viewer, AI agent log viewer, cc-log-viewer, Claude Code log viewer, Codex log viewer, agent session viewer"
+    />
+    <meta name="author" content="AgentLens Maintainers" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <meta
+      name="googlebot"
+      content="index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
+    />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <link rel="canonical" href="https://qj-chen.github.io/agentlen/" />
+    <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+    <link rel="alternate" type="text/plain" href="./llms.txt" title="AgentLens overview" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="en_US" />
+    <meta property="og:site_name" content="AgentLens" />
+    <meta property="og:url" content="https://qj-chen.github.io/agentlen/" />
+    <meta property="og:title" content="AgentLens: Claude Code &amp; Codex Session Log Viewer" />
+    <meta
+      property="og:description"
+      content="Search, replay, and analyze local Claude Code and Codex sessions from one private dashboard."
+    />
+    <meta property="og:image" content="https://qj-chen.github.io/agentlen/assets/social-preview.png" />
+    <meta property="og:image:secure_url" content="https://qj-chen.github.io/agentlen/assets/social-preview.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1323" />
+    <meta property="og:image:height" content="792" />
+    <meta property="og:image:alt" content="AgentLens showing a coding agent session timeline and recap" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="AgentLens: Claude Code &amp; Codex Session Log Viewer" />
+    <meta
+      name="twitter:description"
+      content="A free, local-first viewer for Claude Code and Codex session logs."
+    />
+    <meta name="twitter:image" content="https://qj-chen.github.io/agentlen/assets/social-preview.png" />
+    <meta name="twitter:image:alt" content="AgentLens showing a coding agent session timeline and recap" />
+
+    <link rel="stylesheet" href="./styles.css" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://qj-chen.github.io/agentlen/#software",
+            "name": "AgentLens",
+            "url": "https://qj-chen.github.io/agentlen/",
+            "sameAs": "https://github.com/QJ-Chen/agentlen",
+            "downloadUrl": "https://github.com/QJ-Chen/agentlen",
+            "codeRepository": "https://github.com/QJ-Chen/agentlen",
+            "applicationCategory": "DeveloperApplication",
+            "applicationSubCategory": "AI agent log viewer",
+            "operatingSystem": "macOS, Linux, Windows",
+            "softwareVersion": "0.2.0",
+            "isAccessibleForFree": true,
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "image": "https://qj-chen.github.io/agentlen/assets/social-preview.png",
+            "screenshot": [
+              "https://qj-chen.github.io/agentlen/assets/session-overview-recap.png",
+              "https://qj-chen.github.io/agentlen/assets/prompt-thread-detail.png"
+            ],
+            "description": "A local-first AI agent log and session viewer for Claude Code and Codex.",
+            "featureList": [
+              "Search Claude Code and Codex sessions",
+              "Replay prompts, responses, and tool calls",
+              "Inspect subagents, tasks, vision references, token usage, and cost",
+              "Store session data locally in SQLite"
+            ]
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "@id": "https://github.com/QJ-Chen/agentlen#source",
+            "name": "AgentLens source code",
+            "url": "https://github.com/QJ-Chen/agentlen",
+            "codeRepository": "https://github.com/QJ-Chen/agentlen",
+            "programmingLanguage": ["Python", "TypeScript"],
+            "runtimePlatform": ["Python 3.10 or newer", "Node.js 18 or newer"],
+            "description": "Open-source code for the AgentLens local Claude Code and Codex session log viewer."
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://qj-chen.github.io/agentlen/#website",
+            "url": "https://qj-chen.github.io/agentlen/",
+            "name": "AgentLens",
+            "description": "Local-first AI agent log viewer for Claude Code and Codex",
+            "inLanguage": "en"
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "What is AgentLens?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "AgentLens is a local-first AI agent log viewer that turns Claude Code and Codex JSONL session history into a searchable dashboard."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Is AgentLens a Claude Code log viewer or cc-log-viewer?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. AgentLens reads local Claude Code logs and adds Codex support, session search, hierarchical browsing, replay, token and cost analytics, tool-call inspection, and subagent views."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Does AgentLens upload agent logs?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "No. AgentLens is local-first. It reads logs from your machine and stores normalized session data in a local SQLite database."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Which operating systems and agents are supported?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "AgentLens is designed for macOS, Linux, and Windows. Its current collectors support Claude Code and OpenAI Codex CLI session formats."
+                }
+              },
+              {
+                "@type": "Question",
+                "name": "Can AgentLens inspect tool calls and subagents?",
+                "acceptedAnswer": {
+                  "@type": "Answer",
+                  "text": "Yes. Session replay connects prompts and assistant turns with tool inputs and outputs, slash commands, subagent activity, task status, vision references, token totals, and source JSONL provenance."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="#top" aria-label="AgentLens home">
+        <img src="./assets/favicon.svg" alt="" width="30" height="29" />
+        <span>Agent<span>Lens</span></span>
+      </a>
+      <nav aria-label="Primary navigation">
+        <a href="#capabilities">Capabilities</a>
+        <a href="#how-it-works">How it works</a>
+        <a href="#faq">FAQ</a>
+        <a class="icon-link" href="https://github.com/QJ-Chen/agentlen" aria-label="View AgentLens on GitHub">
+          <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 .7a11.5 11.5 0 0 0-3.6 22.4c.6.1.8-.2.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C14.2 4.8 15.3 5 15.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.8 5.4-5.5 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 12 .7Z"/></svg>
+        </a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-labelledby="hero-title">
+        <img
+          class="hero-image"
+          src="./assets/session-overview-recap.png"
+          alt="AgentLens dashboard displaying a Claude Code session recap, prompts, tool calls, and project hierarchy"
+          width="1323"
+          height="792"
+          fetchpriority="high"
+        />
+        <div class="hero-shade"></div>
+        <div class="hero-content">
+          <p class="eyebrow">Local-first · Claude Code + Codex</p>
+          <h1 id="hero-title">AgentLens</h1>
+          <p class="hero-summary">The open-source AI agent log viewer for finding, replaying, and understanding every Claude Code and Codex CLI session on your machine.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/QJ-Chen/agentlen#install">Install from GitHub</a>
+            <a class="button button-secondary" href="#how-it-works">See how it works</a>
+          </div>
+          <ul class="proof" aria-label="Product characteristics">
+            <li>Open source</li>
+            <li>Local SQLite</li>
+            <li>No cloud upload</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="intro section" id="capabilities">
+        <div class="section-heading">
+          <p class="eyebrow">One searchable history</p>
+          <h2>A Claude Code log viewer and Codex session viewer in one</h2>
+          <p>AgentLens reads the JSONL session history your coding agents already create. It normalizes both formats into a consistent timeline without sending prompts, source paths, or tool output to a hosted service.</p>
+        </div>
+        <div class="capability-grid">
+          <article>
+            <span class="capability-number">01</span>
+            <h3>Find the session</h3>
+            <p>Search across projects and sessions, filter by date, and use automatic recaps to identify the work you need.</p>
+          </article>
+          <article>
+            <span class="capability-number">02</span>
+            <h3>Replay the work</h3>
+            <p>Inspect user prompts, assistant responses, slash commands, tool calls, subagents, tasks, and vision references in order.</p>
+          </article>
+          <article>
+            <span class="capability-number">03</span>
+            <h3>Measure agent usage</h3>
+            <p>Review token volume, model activity, tool usage, project totals, and recorded cost data from a local analytics dashboard.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="product-band section" aria-labelledby="inspect-title">
+        <div class="section-heading compact">
+          <p class="eyebrow">Forensic session replay</p>
+          <h2 id="inspect-title">See what the agent did, not just what it said</h2>
+          <p>Conversation threads remain connected to the commands, files, subagents, and structured control-plane events that produced the result.</p>
+        </div>
+        <figure class="product-shot">
+          <img
+            src="./assets/prompt-thread-detail.png"
+            alt="Detailed AgentLens prompt thread with assistant response and tool-call records"
+            width="1313"
+            height="909"
+            loading="lazy"
+          />
+          <figcaption>Prompt-thread detail preserves tool activity and assistant turns alongside the original request.</figcaption>
+        </figure>
+      </section>
+
+      <section class="workflow section" id="how-it-works">
+        <div class="section-heading">
+          <p class="eyebrow">Private by architecture</p>
+          <h2>Your agent logs stay on your machine</h2>
+          <p>The public website contains product information only. The AgentLens application runs locally and indexes local session files into a SQLite database you control.</p>
+        </div>
+        <ol class="steps">
+          <li><strong>Read</strong><span>Claude Code and Codex JSONL session logs</span></li>
+          <li><strong>Normalize</strong><span>Prompts, calls, tools, tasks, vision, and subagents</span></li>
+          <li><strong>Store</strong><span>Structured session history in local SQLite</span></li>
+          <li><strong>Explore</strong><span>Search and replay from the React dashboard</span></li>
+        </ol>
+        <div class="install">
+          <div>
+            <p class="eyebrow">Run locally</p>
+            <h3>Start exploring your coding-agent history</h3>
+          </div>
+          <pre><code>git clone https://github.com/QJ-Chen/agentlen.git
+cd agentlen
+pip install -e .</code></pre>
+          <a class="button button-primary" href="https://github.com/QJ-Chen/agentlen#run">Full setup guide</a>
+        </div>
+      </section>
+
+      <section class="faq section" id="faq">
+        <div class="section-heading compact">
+          <p class="eyebrow">Common questions</p>
+          <h2>Agent log viewer FAQ</h2>
+        </div>
+        <div class="faq-list">
+          <details open>
+            <summary>What is AgentLens?</summary>
+            <p>AgentLens is a local-first AI agent log viewer. It turns Claude Code and Codex session files into a searchable project hierarchy, analytics overview, and detailed session replay.</p>
+          </details>
+          <details>
+            <summary>Is AgentLens a Claude Code log viewer or cc-log-viewer?</summary>
+            <p>Yes. It reads Claude Code logs from <code>~/.claude/projects/</code> and also reads Codex rollout logs from <code>~/.codex/sessions/</code>. AgentLens adds unified search, recaps, tool inspection, subagent views, and usage analytics.</p>
+          </details>
+          <details>
+            <summary>Does AgentLens upload prompts or source code?</summary>
+            <p>No. Collection, normalization, storage, API access, and dashboard rendering run locally. The default SQLite database is stored at <code>~/.agentlens/agentlens.db</code>.</p>
+          </details>
+          <details>
+            <summary>Which operating systems and agents are supported?</summary>
+            <p>AgentLens is a Python and React application designed for macOS, Linux, and Windows. The current collectors support Claude Code and OpenAI Codex CLI session formats.</p>
+          </details>
+          <details>
+            <summary>Can AgentLens inspect tool calls and subagents?</summary>
+            <p>Yes. Session replay connects prompts and assistant turns with tool inputs and outputs, slash commands, subagent activity, task status, vision references, token totals, and source JSONL provenance.</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="final-cta">
+        <p class="eyebrow">Agent history should be usable</p>
+        <h2>Turn scattered coding sessions into evidence you can search.</h2>
+        <a class="button button-primary" href="https://github.com/QJ-Chen/agentlen">View AgentLens on GitHub</a>
+      </section>
+    </main>
+
+    <footer>
+      <a class="brand" href="#top"><img src="./assets/favicon.svg" alt="" width="24" height="23" /><span>AgentLens</span></a>
+      <p>Local-first session intelligence for coding agents.</p>
+      <a href="https://github.com/QJ-Chen/agentlen">Source code</a>
+    </footer>
+  </body>
+</html>

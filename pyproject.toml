@@ -1,10 +1,21 @@
 [tool.poetry]
 name = "agentlens"
 version = "0.2.0"
-description = "Local-first session intelligence for coding agents"
+description = "Local-first AI agent session and log viewer for Claude Code and OpenAI Codex CLI"
 authors = ["AgentLens Maintainers"]
 readme = "README.md"
 packages = [{include = "agentlens", from = "src"}]
+homepage = "https://qj-chen.github.io/agentlen/"
+repository = "https://github.com/QJ-Chen/agentlen"
+keywords = [
+    "agent-log-viewer",
+    "agent-session-viewer",
+    "claude-code",
+    "claude-code-log-viewer",
+    "codex",
+    "codex-session-viewer",
+    "developer-tools",
+]
 
 [tool.poetry.dependencies]
 python = "^3.10"

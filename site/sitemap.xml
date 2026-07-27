@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset
+  xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+  xmlns:image="http://www.google.com/schemas/sitemap-image/1.1"
+>
+  <url>
+    <loc>https://qj-chen.github.io/agentlen/</loc>
+    <lastmod>2026-07-23</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://qj-chen.github.io/agentlen/assets/session-overview-recap.png</image:loc>
+      <image:title>AgentLens Claude Code and Codex session overview</image:title>
+      <image:caption>AgentLens dashboard showing a coding agent session recap, prompts, tool calls, and project hierarchy.</image:caption>
+    </image:image>
+    <image:image>
+      <image:loc>https://qj-chen.github.io/agentlen/assets/prompt-thread-detail.png</image:loc>
+      <image:title>AgentLens prompt thread and tool call detail</image:title>
+      <image:caption>Detailed coding agent prompt thread with assistant responses and tool-call records.</image:caption>
+    </image:image>
+  </url>
+</urlset>
