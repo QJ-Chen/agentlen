@@ -108,6 +108,7 @@ AgentLens 是一个 **local-first 的 Claude Code session intelligence 工具**�
 - 初始化本地 SQLite
 - 保存 normalized session records
 - 提供 session 查询、overview stats、project rollups
+- 支持 All projects 与 exact `project_path` workspace 查询范围
 - 兼容旧的 trace-oriented API，但仅支持 Claude Code 平台
 
 ### 4.3 `api.py`
@@ -116,6 +117,7 @@ AgentLens 是一个 **local-first 的 Claude Code session intelligence 工具**�
 - 提供 ingest 触发入口
 - 保持与兼容 trace 写入路径的一致 contract
 - 拒绝非 Claude Code 平台写入
+- 提供项目目录与 workspace-scoped sessions/stats/hierarchy 查询
 
 ### 4.4 `realtime.py`
 职责：
@@ -172,6 +174,17 @@ AgentLens 是一个 **local-first 的 Claude Code session intelligence 工具**�
 ---
 
 ## 6. 产品表面设计
+
+### 6.0 Project workspace
+
+Dashboard 默认进入 **All projects**。用户可以从 header 选择一个已发现的
+project，随后 sessions inbox、search、overview stats、hierarchy 和 project
+metadata 都使用同一个 exact `project_path` 范围。切换 project 只改变查询范围，
+不会停止或重启全局 collector。
+
+Remote 方向保持 local-first：未来由本地 AgentLens backend 通过 SSH/SFTP
+读取远端 Claude Code/Codex logs，在本地 normalization 与 SQLite 中处理，不在
+远端部署 AgentLens worker。
 
 ### 6.1 Sessions Inbox
 目标：快速找到值得看的 session

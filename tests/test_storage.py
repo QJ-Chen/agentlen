@@ -892,6 +892,38 @@ def test_overview_stats_uses_metadata_counts():
         assert stats["top_tools"] == [{"name": "Bash", "count": 1}]
 
 
+def test_project_workspace_scope_filters_sessions_stats_and_catalog():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        project_a = _sample_trace()
+        project_a.update({
+            "trace_id": "session_a",
+            "session_id": "a",
+            "project_path": "/demo/a",
+        })
+        project_b = _sample_trace()
+        project_b.update({
+            "trace_id": "session_b",
+            "session_id": "b",
+            "project_path": "/demo/b",
+        })
+        storage.save_traces([project_a, project_b])
+
+        sessions = storage.list_sessions(project_path="/demo/a", period_hours=100000)
+        overview = storage.get_overview_stats(project_path="/demo/a", period_hours=100000)
+        project_stats = storage.get_project_stats(project_path="/demo/a", period_hours=100000)
+        catalog = storage.get_project_catalog(period_hours=None)
+
+        assert [session["session_id"] for session in sessions["sessions"]] == ["a"]
+        assert sessions["total"] == 1
+        assert overview["total_sessions"] == 1
+        assert overview["total_projects"] == 1
+        assert overview["total_traces"] == 1
+        assert [item["project_path"] for item in project_stats] == ["/demo/a"]
+        assert {item["path"] for item in catalog} == {"/demo/a", "/demo/b"}
+        assert storage.project_id("/demo/a") != storage.project_id("/demo/b")
+
+
 def test_time_window_matches_sessions_active_in_window():
     with tempfile.TemporaryDirectory() as tmp_dir:
         storage = _make_storage(tmp_dir)

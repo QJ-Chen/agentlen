@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
+  FolderOpen,
   LayoutDashboard,
   RefreshCw,
   Search,
@@ -15,7 +16,7 @@ import {
 import type { OverviewStats, HierarchyNode, ProjectMetadata } from './types';
 import { NodeDetailPane } from './components/NodeDetailPane';
 import { HierarchyTree } from './components/HierarchyTree';
-import type { HierarchyChildrenResponse, HierarchyResponse, ProjectMetadataResponse, SessionsResponse } from './lib/sessionApiTypes';
+import type { HierarchyChildrenResponse, HierarchyResponse, ProjectCatalogItem, ProjectMetadataResponse, ProjectsResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { API_URL } from './lib/api';
 import { useLanguage } from './lib/language';
 import { transformSession, type TraceWithRaw } from './lib/sessionNormalization';
@@ -193,6 +194,11 @@ function App() {
   const { language, setLanguage, t } = useLanguage();
   const DATE_PRESETS = [{ label: t('today'), days: 0 }, { label: t('last7'), days: 6 }, { label: t('last30'), days: 29 }];
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectCatalogItem[]>([]);
+  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(() => {
+    const projectParam = new URLSearchParams(window.location.search).get('project');
+    return projectParam || localStorage.getItem('agentlens-project-path');
+  });
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
   const [sessionsTotal, setSessionsTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -234,6 +240,7 @@ function App() {
     if (startTime) params.set('start_time', startTime);
     if (endTime) params.set('end_time', endTime);
     if (debouncedQuery) params.set('query', debouncedQuery);
+    if (activeProjectPath) params.set('project_path', activeProjectPath);
     const queryString = params.toString();
 
     try {
@@ -271,7 +278,7 @@ function App() {
         hierarchyFetchAbortRef.current = null;
       }
     }
-  }, [startDate, endDate, debouncedQuery, t]);
+  }, [startDate, endDate, debouncedQuery, activeProjectPath, t]);
 
   const buildSessionParams = useCallback(
     (offset: number) => {
@@ -281,9 +288,10 @@ function App() {
       if (startTime) params.set('start_time', startTime);
       if (endTime) params.set('end_time', endTime);
       if (debouncedQuery) params.set('query', debouncedQuery);
+      if (activeProjectPath) params.set('project_path', activeProjectPath);
       return params;
     },
-    [startDate, endDate, debouncedQuery],
+    [startDate, endDate, debouncedQuery, activeProjectPath],
   );
 
   const fetchData = useCallback(async () => {
@@ -305,20 +313,22 @@ function App() {
     const endTime = toEndOfLocalDayISOString(endDate);
     if (startTime) statsParams.set('start_time', startTime);
     if (endTime) statsParams.set('end_time', endTime);
+    if (activeProjectPath) statsParams.set('project_path', activeProjectPath);
     const statsQuery = statsParams.toString();
-
     try {
-      const [sessionsRes, statsRes] = await Promise.all([
+      const [sessionsRes, statsRes, projectsRes] = await Promise.all([
         fetch(`${API_URL}/api/v1/sessions?${sessionQuery}`, { signal: controller.signal }),
         fetch(`${API_URL}/api/v1/stats/overview?${statsQuery}`, { signal: controller.signal }),
+        fetch(`${API_URL}/api/v1/projects`, { signal: controller.signal }),
       ]);
 
-      if (!sessionsRes.ok || !statsRes.ok) {
+      if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
         throw new Error('API request failed');
       }
 
       const sessionsData = (await sessionsRes.json()) as SessionsResponse;
       const statsData = (await statsRes.json()) as OverviewStats;
+      const projectsData = (await projectsRes.json()) as ProjectsResponse;
       if (generation !== fetchGenerationRef.current) return;
 
       const transformed = (sessionsData.sessions || []).map(transformSession);
@@ -326,6 +336,13 @@ function App() {
       setTraces(transformed);
       setSessionsTotal(sessionsData.total ?? transformed.length);
       setStats(statsData);
+      setProjects(projectsData.projects || []);
+      setActiveProjectPath((current) => {
+        if (!current || projectsData.projects.some((project) => project.path === current)) {
+          return current;
+        }
+        return null;
+      });
       setError(null);
       setSelectedTraceId((current) => (
         current && transformed.some((trace) => trace.id === current)
@@ -343,7 +360,7 @@ function App() {
         fetchAbortRef.current = null;
       }
     }
-  }, [startDate, endDate, buildSessionParams, t]);
+  }, [startDate, endDate, activeProjectPath, buildSessionParams, t]);
 
   const loadMoreSessions = useCallback(async () => {
     if (loadingMore) return;
@@ -403,6 +420,26 @@ function App() {
     if (!hasLoadedInitiallyRef.current) return;
     void Promise.all([fetchData(), fetchHierarchyRoot()]);
   }, [fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
+
+  useEffect(() => {
+    const nextUrl = new URL(window.location.href);
+    if (activeProjectPath) {
+      nextUrl.searchParams.set('project', activeProjectPath);
+      localStorage.setItem('agentlens-project-path', activeProjectPath);
+    } else {
+      nextUrl.searchParams.delete('project');
+      localStorage.removeItem('agentlens-project-path');
+    }
+    window.history.replaceState({}, '', nextUrl);
+  }, [activeProjectPath]);
+
+  const handleProjectChange = useCallback((projectPath: string) => {
+    setActiveProjectPath(projectPath || null);
+    setSelectedTraceId(null);
+    setSelectedNodeId(null);
+    setSessionDetailsById({});
+    setProjectMetadata(null);
+  }, []);
 
   useEffect(() => {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
@@ -606,6 +643,23 @@ function App() {
             </div>
 
             <div className="flex items-center gap-2 text-sm text-ink-700/70">
+              <label className="flex min-w-0 items-center gap-2" title={t('projectWorkspace')}>
+                <FolderOpen className="hidden h-4 w-4 shrink-0 text-clay-600 sm:block" />
+                <span className="sr-only">{t('projectWorkspace')}</span>
+                <select
+                  aria-label={t('projectWorkspace')}
+                  value={activeProjectPath || ''}
+                  onChange={(event) => handleProjectChange(event.target.value)}
+                  className="max-w-[15rem] rounded-xl border border-ink-100 bg-white px-3 py-2 text-xs font-medium text-ink-700 shadow-sm outline-none hover:border-ink-200 focus:border-clay-500"
+                >
+                  <option value="">{t('allProjects')}</option>
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.path}>
+                      {project.name} ({project.session_count})
+                    </option>
+                  ))}
+                </select>
+              </label>
               {stats && <span className="hidden font-mono text-xs xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
               <button onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
                 <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />

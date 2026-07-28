@@ -33,6 +33,7 @@ It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic O
 ## Highlights
 
 - **Hierarchy explorer.** Browse Claude Code global settings, Codex global settings, projects, sessions, subagents, LLM activity, vision, and tasks. Recap text drives session labels so the most recent intent is visible.
+- **Project workspaces.** Start in All projects or select an exact discovered project from the header; the inbox, hierarchy, search, and overview stats follow the active review context.
 - **Session inspector with Recap card.** Every session surfaces an `away_summary` recap, prompt-thread list, tool calls, subagent activity, and provenance (project path + source JSONL).
 - **Structured control-plane cards.** `<task-notification>`, `<bash-stdout>`, `<bash-stderr>`, `<bash-input>`, `<bash-output>`, and `<bash-exit-code>` wrappers are decoded into typed UI cards with explicit `无输出` / `无错误输出` / `不完整` badges.
 - **Slash commands as first-class prompt threads.** `/loop`, `/clear`, `/model`, `/compact` and friends are preserved with their `command-name` / `command-args` / `command-message` fields and rendered as standalone rows. `/loop` dedupes across its `isMeta: true` skill expansion.
@@ -208,22 +209,23 @@ Base URL: `http://localhost:8080`.
 
 ### Sessions
 
-- `GET /api/v1/sessions` — list sessions, with `start_time`, `end_time`, `period_hours`, `limit`, `status`, and free-text search parameters.
+- `GET /api/v1/sessions` — list sessions, with `start_time`, `end_time`, `period_hours`, `limit`, `status`, free-text search, and exact `project_path` parameters.
 - `GET /api/v1/sessions/{session_id}` — full session record (prompt threads, tool calls, LLM calls, subagent logs, tasks, vision, recap).
 
 ### Stats
 
-- `GET /api/v1/stats/overview` — totals, model mix, status counts, top tools, active days. Supports `start_time`, `end_time`, `period_hours`.
+- `GET /api/v1/stats/overview` — totals, model mix, status counts, top tools, active days. Supports `start_time`, `end_time`, `period_hours`, and exact `project_path`.
 - `GET /api/v1/stats/projects` — project rollups. Same date-range parameters.
 
 ### Hierarchy
 
-- `GET /api/v1/hierarchy` — lightweight root with grouped Claude Code global, Codex global, and project branches.
+- `GET /api/v1/hierarchy` — lightweight root with grouped Claude Code global, Codex global, and project branches. Supports exact `project_path` scoping.
 - `GET /api/v1/hierarchy/children` — children for a given `node_id`. Opens a session / project lazily.
 
 ### Project metadata
 
 - `GET /api/v1/projects/by-path?project_path=...` — CLAUDE.md instructions, memory index, local config, worktrees, session/task artifact counts.
+- `GET /api/v1/projects` — discovered project catalog with stable local IDs, paths, session counts, and last activity.
 
 Global configuration is exposed in the hierarchy under separate `Claude Code global` and `Codex global` branches. Claude Code reads `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, and `~/.claude/skills/`; Codex reads `~/.codex/AGENTS.md`, `~/.codex/config.toml`, and recursively discovers `~/.codex/skills/**/SKILL.md`.
 

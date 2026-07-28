@@ -422,16 +422,22 @@ def _build_hierarchy_root(
     query: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    project_path: Optional[str] = None,
 ) -> Dict[str, Any]:
+    session_kwargs = {
+        "status": status,
+        "query": query,
+        "period_hours": 720,
+        "start_time": start_time,
+        "end_time": end_time,
+        "limit": 5000,
+        "offset": 0,
+        "light": True,
+    }
+    if project_path is not None:
+        session_kwargs["project_path"] = project_path
     sessions_payload = storage.list_sessions(
-        status=status,
-        query=query,
-        period_hours=720,
-        start_time=start_time,
-        end_time=end_time,
-        limit=5000,
-        offset=0,
-        light=True,
+        **session_kwargs,
     )
     sessions = sessions_payload.get("sessions", []) if isinstance(sessions_payload, dict) else []
     global_metadata = _build_global_metadata()
@@ -734,6 +740,7 @@ def get_sessions(
     model: Optional[str] = None,
     status: Optional[str] = None,
     query: Optional[str] = None,
+    project_path: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     period_hours: Optional[int] = Query(default=720, ge=1, le=8760),
@@ -746,6 +753,7 @@ def get_sessions(
     return storage.list_sessions(
         platform=platform,
         project=project,
+        project_path=project_path,
         model=model,
         status=status,
         query=query,
@@ -941,14 +949,31 @@ def get_project_metadata(project_path: str = Query(..., min_length=1)):
     return metadata
 
 
+@app.get("/api/v1/projects")
+def get_projects(
+    start_time: Optional[str] = None,
+    end_time: Optional[str] = None,
+    period_hours: Optional[int] = Query(None, ge=1, le=8760),
+):
+    return {
+        "period_hours": period_hours,
+        "projects": storage.get_project_catalog(
+            period_hours=period_hours,
+            start_time=start_time,
+            end_time=end_time,
+        ),
+    }
+
+
 @app.get("/api/v1/hierarchy")
 def get_hierarchy(
     status: Optional[str] = None,
     query: Optional[str] = None,
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    project_path: Optional[str] = None,
 ):
-    cache_key = f"hierarchy:{status}:{query}:{start_time}:{end_time}"
+    cache_key = f"hierarchy:{status}:{query}:{start_time}:{end_time}:{project_path}"
     return {
         "root": _cached(
             cache_key,
@@ -957,6 +982,7 @@ def get_hierarchy(
                 query=query,
                 start_time=start_time,
                 end_time=end_time,
+                project_path=project_path,
             ),
         )
     }
@@ -1011,22 +1037,34 @@ def open_session_path(session_id: str, target: Literal["project", "session_folde
 def get_stats(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    project_path: Optional[str] = None,
     period_hours: int = Query(720, ge=1, le=8760),
 ):
     """Backward-compatible overview stats endpoint."""
-    return storage.get_overview_stats(period_hours, start_time=start_time, end_time=end_time)
+    kwargs = {"start_time": start_time, "end_time": end_time}
+    if project_path is not None:
+        kwargs["project_path"] = project_path
+    return storage.get_overview_stats(period_hours, **kwargs)
 
 
 @app.get("/api/v1/stats/overview")
 def get_overview_stats(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    project_path: Optional[str] = None,
     period_hours: int = Query(720, ge=1, le=8760),
 ):
-    cache_key = f"overview:{period_hours}:{start_time}:{end_time}"
+    cache_key = f"overview:{period_hours}:{start_time}:{end_time}:{project_path}"
     return _cached(
         cache_key,
-        lambda: storage.get_overview_stats(period_hours, start_time=start_time, end_time=end_time),
+        lambda: storage.get_overview_stats(
+            period_hours,
+            **{
+                "start_time": start_time,
+                "end_time": end_time,
+                **({"project_path": project_path} if project_path is not None else {}),
+            },
+        ),
     )
 
 
@@ -1034,11 +1072,19 @@ def get_overview_stats(
 def get_project_stats(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
+    project_path: Optional[str] = None,
     period_hours: int = Query(720, ge=1, le=8760),
 ):
     return {
         "period_hours": period_hours,
-        "projects": storage.get_project_stats(period_hours, start_time=start_time, end_time=end_time),
+        "projects": storage.get_project_stats(
+            period_hours,
+            **{
+                "start_time": start_time,
+                "end_time": end_time,
+                **({"project_path": project_path} if project_path is not None else {}),
+            },
+        ),
     }
 
 

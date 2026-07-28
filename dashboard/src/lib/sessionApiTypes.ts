@@ -130,6 +130,20 @@ export interface SessionsResponse {
   total?: number;
 }
 
+export interface ProjectCatalogItem {
+  id: string;
+  name: string;
+  path: string;
+  session_count: number;
+  last_activity?: string | null;
+  connection_id: string;
+}
+
+export interface ProjectsResponse {
+  period_hours: number | null;
+  projects: ProjectCatalogItem[];
+}
+
 export interface ConversationPageResponse {
   session_id: string;
   llm_calls: RawLLMCall[];

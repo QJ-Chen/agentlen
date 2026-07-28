@@ -74,6 +74,7 @@ class RangeCaptureStorage:
         self.sessions_calls = []
         self.overview_calls = []
         self.projects_calls = []
+        self.catalog_calls = []
         self.session_detail = {
             "session_id": "session-1",
             "project_path": "/demo/project",
@@ -115,14 +116,15 @@ class RangeCaptureStorage:
             return self.session_detail
         return None
 
-    def get_overview_stats(self, period_hours, start_time=None, end_time=None):
-        self.overview_calls.append(
-            {
-                "period_hours": period_hours,
-                "start_time": start_time,
-                "end_time": end_time,
-            }
-        )
+    def get_overview_stats(self, period_hours, start_time=None, end_time=None, project_path=None):
+        call = {
+            "period_hours": period_hours,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        if project_path is not None:
+            call["project_path"] = project_path
+        self.overview_calls.append(call)
         return {
             "period_hours": period_hours,
             "total_sessions": 0,
@@ -141,15 +143,29 @@ class RangeCaptureStorage:
             "active_days": [],
         }
 
-    def get_project_stats(self, period_hours, start_time=None, end_time=None):
-        self.projects_calls.append(
-            {
-                "period_hours": period_hours,
-                "start_time": start_time,
-                "end_time": end_time,
-            }
-        )
+    def get_project_stats(self, period_hours, start_time=None, end_time=None, project_path=None):
+        call = {
+            "period_hours": period_hours,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        if project_path is not None:
+            call["project_path"] = project_path
+        self.projects_calls.append(call)
         return []
+
+    def get_project_catalog(self, period_hours=None, start_time=None, end_time=None):
+        self.catalog_calls.append(
+            {"period_hours": period_hours, "start_time": start_time, "end_time": end_time}
+        )
+        return [{
+            "id": "local:demo",
+            "name": "project",
+            "path": "/demo/project",
+            "session_count": 1,
+            "last_activity": "2026-07-08T00:01:00Z",
+            "connection_id": "local",
+        }]
 
 
 class ProjectMetadataApiTests(unittest.TestCase):
@@ -412,6 +428,14 @@ class DateRangeApiTests(unittest.TestCase):
             "2026-06-29T23:59:59Z",
         )
 
+    def test_sessions_endpoint_forwards_exact_project_scope(self):
+        response = self.client.get(
+            "/api/v1/sessions", params={"project_path": "/demo/project"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.sessions_calls[0]["project_path"], "/demo/project")
+
     def test_overview_stats_endpoint_passes_explicit_date_range(self):
         response = self.client.get(
             "/api/v1/stats/overview",
@@ -435,6 +459,14 @@ class DateRangeApiTests(unittest.TestCase):
             ],
         )
 
+    def test_overview_stats_endpoint_forwards_exact_project_scope(self):
+        response = self.client.get(
+            "/api/v1/stats/overview", params={"project_path": "/demo/project"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.overview_calls[0]["project_path"], "/demo/project")
+
     def test_project_stats_endpoint_passes_explicit_date_range(self):
         response = self.client.get(
             "/api/v1/stats/projects",
@@ -455,6 +487,24 @@ class DateRangeApiTests(unittest.TestCase):
                     "end_time": "2026-06-29T23:59:59Z",
                 }
             ],
+        )
+
+    def test_project_stats_endpoint_forwards_exact_project_scope(self):
+        response = self.client.get(
+            "/api/v1/stats/projects", params={"project_path": "/demo/project"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.projects_calls[0]["project_path"], "/demo/project")
+
+    def test_projects_endpoint_returns_catalog(self):
+        response = self.client.get("/api/v1/projects")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["projects"][0]["path"], "/demo/project")
+        self.assertEqual(
+            self.storage.catalog_calls,
+            [{"period_hours": None, "start_time": None, "end_time": None}],
         )
 
     def test_compat_stats_endpoint_passes_explicit_date_range(self):
@@ -568,6 +618,14 @@ class HierarchyApiTests(unittest.TestCase):
                 "light": True,
             },
         )
+
+    def test_hierarchy_root_forwards_exact_project_scope(self):
+        response = self.client.get(
+            "/api/v1/hierarchy", params={"project_path": "/demo/project"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.sessions_calls[-1]["project_path"], "/demo/project")
 
     def test_hierarchy_children_returns_session_summaries(self):
         response = self.client.get(

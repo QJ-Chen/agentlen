@@ -9,6 +9,7 @@ helpers used by the dashboard.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sqlite3
 import warnings
@@ -1693,6 +1694,7 @@ class SQLiteStorage(Storage):
         self,
         platform: Optional[str] = None,
         project: Optional[str] = None,
+        project_path: Optional[str] = None,
         model: Optional[str] = None,
         status: Optional[str] = None,
         query: Optional[str] = None,
@@ -1728,6 +1730,8 @@ class SQLiteStorage(Storage):
 
         if project:
             sessions = [s for s in sessions if project.lower() in (s.get("project_path") or "").lower()]
+        if project_path is not None:
+            sessions = [s for s in sessions if (s.get("project_path") or "") == project_path]
         if model:
             sessions = [s for s in sessions if model.lower() in (s.get("model") or "").lower()]
         if status:
@@ -1759,6 +1763,54 @@ class SQLiteStorage(Storage):
             "count": min(limit, max(total - offset, 0)),
             "total": total,
         }
+
+    @staticmethod
+    def project_id(project_path: str, connection_id: str = "local") -> str:
+        """Return a stable project identity without exposing the path as an ID."""
+        digest = hashlib.sha256(f"{connection_id}\0{project_path}".encode("utf-8")).hexdigest()[:16]
+        return f"{connection_id}:{digest}"
+
+    def get_project_catalog(
+        self,
+        period_hours: Optional[int] = 720,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return lightweight discovered projects for workspace selection."""
+        sessions_payload = self.list_sessions(
+            period_hours=period_hours,
+            start_time=start_time,
+            end_time=end_time,
+            limit=5000,
+            offset=0,
+            light=True,
+        )
+        grouped: Dict[str, Dict[str, Any]] = {}
+        for session in sessions_payload.get("sessions", []):
+            project_path = str(session.get("project_path") or "")
+            if not project_path:
+                continue
+            project = grouped.setdefault(
+                project_path,
+                {
+                    "id": self.project_id(project_path),
+                    "name": Path(project_path).name or project_path,
+                    "path": project_path,
+                    "session_count": 0,
+                    "last_activity": None,
+                    "connection_id": "local",
+                },
+            )
+            project["session_count"] += 1
+            activity = session.get("last_updated") or session.get("start_time")
+            if activity and (not project["last_activity"] or activity > project["last_activity"]):
+                project["last_activity"] = activity
+
+        return sorted(
+            grouped.values(),
+            key=lambda item: (item.get("last_activity") or "", item.get("path") or ""),
+            reverse=True,
+        )
 
     def get_session(
         self, session_id: str, detail: str = "full"
@@ -1874,6 +1926,7 @@ class SQLiteStorage(Storage):
         period_hours: int = 24,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        project_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         effective_start_time, effective_end_time = self._resolve_time_range(
             period_hours=period_hours,
@@ -1885,6 +1938,8 @@ class SQLiteStorage(Storage):
             end_time=effective_end_time,
             limit=None,
         )
+        if project_path is not None:
+            rows = [row for row in rows if row.get("project_path") == project_path]
 
         grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for row in rows:
@@ -2010,6 +2065,7 @@ class SQLiteStorage(Storage):
         period_hours: int = 24,
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
+        project_path: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         effective_start_time, effective_end_time = self._resolve_time_range(
             period_hours=period_hours,
@@ -2022,6 +2078,8 @@ class SQLiteStorage(Storage):
             limit=None,
         )
         sessions = self._collapse_sessions(traces)
+        if project_path is not None:
+            sessions = [session for session in sessions if session.get("project_path") == project_path]
 
         grouped: Dict[str, Dict[str, Any]] = {}
         for session in sessions:

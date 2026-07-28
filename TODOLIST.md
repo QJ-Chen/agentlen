@@ -4,6 +4,7 @@ Tracking open work for AgentLens. Items already shipped on `main` have been move
 
 ## Backend
 
+- [ ] Add SSH-backed remote log sources fetched by the local AgentLens backend (SFTP/SSH commands, local cache, incremental sync)
 - [ ] Harden SQLite for concurrent watcher writes and API reads
 - [ ] Fix cost accounting to preserve cache-token usage and actual session totals
 - [ ] Move session aggregation/querying out of Python-side collapse logic and remove silent backend caps
@@ -16,6 +17,9 @@ Tracking open work for AgentLens. Items already shipped on `main` have been move
 
 ## Frontend
 
+- [x] Add project workspace context with All projects mode, exact project scoping, and persisted project selection
+- [ ] Add local project registration for directories with no discovered session history
+- [ ] Add connection-aware UI state for future local SSH log sources
 - [ ] Custom session listing windows in frontend
 - [ ] Remove the silent 200-session frontend ceiling and align inbox data with overview totals
 - [ ] Centralize frontend API fetching with env-based config and partial-failure handling
@@ -27,6 +31,7 @@ Tracking open work for AgentLens. Items already shipped on `main` have been move
 
 ## Docs & onboarding
 
+- [x] Document project workspaces and local-server SSH log fetching architecture
 - [ ] Resolve the API-vs-scanner watcher workflow contradiction in docs and runtime guidance
 - [ ] Add explicit prerequisites and configurable frontend backend URL setup docs
 - [ ] Clarify which scripts and entrypoints are canonical versus compatibility utilities
