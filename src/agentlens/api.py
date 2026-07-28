@@ -300,7 +300,10 @@ def _summarize_task_artifacts(session_ids: List[str]) -> Dict[str, Any]:
 
 
 def _build_project_metadata(project_path: str) -> Dict[str, Any]:
-    normalized_project_path = str(Path(project_path).expanduser().resolve()) if project_path else ""
+    resolved_project_path = Path(project_path).expanduser().resolve() if project_path else None
+    normalized_project_path = str(resolved_project_path) if resolved_project_path else ""
+    path_exists = bool(resolved_project_path and resolved_project_path.exists())
+    is_directory = bool(resolved_project_path and resolved_project_path.is_dir())
     project_key = _encode_project_path(normalized_project_path)
     project_dir = PROJECTS_ROOT / project_key
     repo_claude_dir = Path(normalized_project_path) / ".claude"
@@ -327,6 +330,8 @@ def _build_project_metadata(project_path: str) -> Dict[str, Any]:
             "project_path": normalized_project_path,
             "project_key": project_key,
             "project_dir": str(project_dir),
+            "exists": path_exists,
+            "is_directory": is_directory,
         },
         "instructions": _summarize_claude_md(repo_claude_md),
         "memory": _summarize_memory(memory_dir),
@@ -424,6 +429,9 @@ def _build_hierarchy_root(
     end_time: Optional[str] = None,
     project_path: Optional[str] = None,
 ) -> Dict[str, Any]:
+    normalized_project_path = (
+        str(Path(project_path).expanduser().resolve()) if project_path is not None else None
+    )
     session_kwargs = {
         "status": status,
         "query": query,
@@ -434,8 +442,8 @@ def _build_hierarchy_root(
         "offset": 0,
         "light": True,
     }
-    if project_path is not None:
-        session_kwargs["project_path"] = project_path
+    if normalized_project_path is not None:
+        session_kwargs["project_path"] = normalized_project_path
     sessions_payload = storage.list_sessions(
         **session_kwargs,
     )
@@ -445,8 +453,10 @@ def _build_hierarchy_root(
 
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for session in sessions:
-        project_path = str(session.get("project_path") or "")
-        grouped.setdefault(project_path, []).append(session)
+        session_project_path = str(session.get("project_path") or "")
+        grouped.setdefault(session_project_path, []).append(session)
+    if normalized_project_path:
+        grouped.setdefault(normalized_project_path, [])
 
     project_nodes = []
     for project_path, project_sessions in sorted(grouped.items(), key=lambda item: item[0]):
@@ -946,6 +956,15 @@ def get_session_events(session_id: str, ids: str = Query(..., min_length=1)):
 @app.get("/api/v1/projects/by-path")
 def get_project_metadata(project_path: str = Query(..., min_length=1)):
     metadata = _build_project_metadata(project_path)
+    normalized_project_path = metadata["identity"]["project_path"]
+    indexed_sessions = storage.list_sessions(
+        project_path=normalized_project_path,
+        period_hours=None,
+        limit=1,
+        offset=0,
+        light=True,
+    )
+    metadata["indexed_session_count"] = int(indexed_sessions.get("total") or 0)
     return metadata
 
 

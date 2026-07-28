@@ -210,7 +210,10 @@ export interface ProjectMetadata {
     project_path: string;
     project_key: string;
     project_dir: string;
+    exists: boolean;
+    is_directory: boolean;
   };
+  indexed_session_count: number;
   instructions: {
     exists: boolean;
     path: string;

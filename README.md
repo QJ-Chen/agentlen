@@ -33,7 +33,7 @@ It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic O
 ## Highlights
 
 - **Hierarchy explorer.** Browse Claude Code global settings, Codex global settings, projects, sessions, subagents, LLM activity, vision, and tasks. Recap text drives session labels so the most recent intent is visible.
-- **Project workspaces.** Start in All projects or select an exact discovered project from the header; the inbox, hierarchy, search, and overview stats follow the active review context.
+- **Project workspaces.** The dashboard opens with no project loaded. Open a detected project or inspect a custom local path; the inbox, hierarchy, search, and overview stats then follow that exact review context.
 - **Session inspector with Recap card.** Every session surfaces an `away_summary` recap, prompt-thread list, tool calls, subagent activity, and provenance (project path + source JSONL).
 - **Structured control-plane cards.** `<task-notification>`, `<bash-stdout>`, `<bash-stderr>`, `<bash-input>`, `<bash-output>`, and `<bash-exit-code>` wrappers are decoded into typed UI cards with explicit `无输出` / `无错误输出` / `不完整` badges.
 - **Slash commands as first-class prompt threads.** `/loop`, `/clear`, `/model`, `/compact` and friends are preserved with their `command-name` / `command-args` / `command-message` fields and rendered as standalone rows. `/loop` dedupes across its `isMeta: true` skill expansion.
@@ -224,7 +224,7 @@ Base URL: `http://localhost:8080`.
 
 ### Project metadata
 
-- `GET /api/v1/projects/by-path?project_path=...` — CLAUDE.md instructions, memory index, local config, worktrees, session/task artifact counts.
+- `GET /api/v1/projects/by-path?project_path=...` — normalized path validity, indexed session count, CLAUDE.md instructions, memory index, local config, worktrees, and session/task artifact counts.
 - `GET /api/v1/projects` — discovered project catalog with stable local IDs, paths, session counts, and last activity.
 
 Global configuration is exposed in the hierarchy under separate `Claude Code global` and `Codex global` branches. Claude Code reads `~/.claude/CLAUDE.md`, `~/.claude/settings.json`, and `~/.claude/skills/`; Codex reads `~/.codex/AGENTS.md`, `~/.codex/config.toml`, and recursively discovers `~/.codex/skills/**/SKILL.md`.

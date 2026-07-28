@@ -16,6 +16,7 @@ import {
 import type { OverviewStats, HierarchyNode, ProjectMetadata } from './types';
 import { NodeDetailPane } from './components/NodeDetailPane';
 import { HierarchyTree } from './components/HierarchyTree';
+import { OpenProjectDialog } from './components/OpenProjectDialog';
 import type { HierarchyChildrenResponse, HierarchyResponse, ProjectCatalogItem, ProjectMetadataResponse, ProjectsResponse, SessionsResponse } from './lib/sessionApiTypes';
 import { API_URL } from './lib/api';
 import { useLanguage } from './lib/language';
@@ -197,8 +198,9 @@ function App() {
   const [projects, setProjects] = useState<ProjectCatalogItem[]>([]);
   const [activeProjectPath, setActiveProjectPath] = useState<string | null>(() => {
     const projectParam = new URLSearchParams(window.location.search).get('project');
-    return projectParam || localStorage.getItem('agentlens-project-path');
+    return projectParam || null;
   });
+  const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
   const [sessionsTotal, setSessionsTotal] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -230,6 +232,15 @@ function App() {
   const activeDateRangeLabel = buildDateRangeLabel(startDate, endDate);
 
   const fetchHierarchyRoot = useCallback(async () => {
+    if (!activeProjectPath) {
+      hierarchyFetchGenerationRef.current += 1;
+      hierarchyFetchAbortRef.current?.abort();
+      hierarchyFetchAbortRef.current = null;
+      setHierarchyRoot(null);
+      setSelectedNodeId(null);
+      setExpandedNodeIds(new Set());
+      return;
+    }
     const generation = ++hierarchyFetchGenerationRef.current;
     hierarchyFetchAbortRef.current?.abort();
     const controller = new AbortController();
@@ -240,7 +251,7 @@ function App() {
     if (startTime) params.set('start_time', startTime);
     if (endTime) params.set('end_time', endTime);
     if (debouncedQuery) params.set('query', debouncedQuery);
-    if (activeProjectPath) params.set('project_path', activeProjectPath);
+    params.set('project_path', activeProjectPath);
     const queryString = params.toString();
 
     try {
@@ -255,7 +266,7 @@ function App() {
       if (generation !== hierarchyFetchGenerationRef.current) return;
       const firstProjectNodeId = hierarchyData.root?.children?.find((child) => child.type === 'projects-root')?.children?.[0]?.id || null;
       setHierarchyRoot(hierarchyData.root || null);
-      setExpandedNodeIds(new Set());
+      setExpandedNodeIds(new Set(['global-root', 'projects-root', ...(firstProjectNodeId ? [firstProjectNodeId] : [])]));
       setSelectedNodeId((existingNodeId) => {
         if (existingNodeId && hierarchyData.root) {
           const stack = [hierarchyData.root];
@@ -295,6 +306,20 @@ function App() {
   );
 
   const fetchData = useCallback(async () => {
+    if (!activeProjectPath) {
+      fetchGenerationRef.current += 1;
+      fetchAbortRef.current?.abort();
+      fetchAbortRef.current = null;
+      loadMoreGenerationRef.current += 1;
+      loadMoreAbortRef.current?.abort();
+      loadMoreAbortRef.current = null;
+      setTraces([]);
+      setSessionsTotal(0);
+      setStats(null);
+      setSelectedTraceId(null);
+      setLoading(false);
+      return;
+    }
     const generation = ++fetchGenerationRef.current;
     fetchAbortRef.current?.abort();
     loadMoreAbortRef.current?.abort();
@@ -313,22 +338,20 @@ function App() {
     const endTime = toEndOfLocalDayISOString(endDate);
     if (startTime) statsParams.set('start_time', startTime);
     if (endTime) statsParams.set('end_time', endTime);
-    if (activeProjectPath) statsParams.set('project_path', activeProjectPath);
+    statsParams.set('project_path', activeProjectPath);
     const statsQuery = statsParams.toString();
     try {
-      const [sessionsRes, statsRes, projectsRes] = await Promise.all([
+      const [sessionsRes, statsRes] = await Promise.all([
         fetch(`${API_URL}/api/v1/sessions?${sessionQuery}`, { signal: controller.signal }),
         fetch(`${API_URL}/api/v1/stats/overview?${statsQuery}`, { signal: controller.signal }),
-        fetch(`${API_URL}/api/v1/projects`, { signal: controller.signal }),
       ]);
 
-      if (!sessionsRes.ok || !statsRes.ok || !projectsRes.ok) {
+      if (!sessionsRes.ok || !statsRes.ok) {
         throw new Error('API request failed');
       }
 
       const sessionsData = (await sessionsRes.json()) as SessionsResponse;
       const statsData = (await statsRes.json()) as OverviewStats;
-      const projectsData = (await projectsRes.json()) as ProjectsResponse;
       if (generation !== fetchGenerationRef.current) return;
 
       const transformed = (sessionsData.sessions || []).map(transformSession);
@@ -336,13 +359,6 @@ function App() {
       setTraces(transformed);
       setSessionsTotal(sessionsData.total ?? transformed.length);
       setStats(statsData);
-      setProjects(projectsData.projects || []);
-      setActiveProjectPath((current) => {
-        if (!current || projectsData.projects.some((project) => project.path === current)) {
-          return current;
-        }
-        return null;
-      });
       setError(null);
       setSelectedTraceId((current) => (
         current && transformed.some((trace) => trace.id === current)
@@ -361,6 +377,17 @@ function App() {
       }
     }
   }, [startDate, endDate, activeProjectPath, buildSessionParams, t]);
+
+  const fetchProjects = useCallback(async () => {
+    try {
+      const response = await fetch(`${API_URL}/api/v1/projects`);
+      if (!response.ok) throw new Error('Failed to load projects');
+      const payload = (await response.json()) as ProjectsResponse;
+      setProjects(payload.projects || []);
+    } catch {
+      setError(t('connection'));
+    }
+  }, [t]);
 
   const loadMoreSessions = useCallback(async () => {
     if (loadingMore) return;
@@ -404,8 +431,9 @@ function App() {
   useEffect(() => {
     if (hasLoadedInitiallyRef.current) return;
     hasLoadedInitiallyRef.current = true;
-    void Promise.all([fetchData(), fetchHierarchyRoot()]);
-  }, [fetchData, fetchHierarchyRoot]);
+    void fetchProjects();
+    if (activeProjectPath) void Promise.all([fetchData(), fetchHierarchyRoot()]);
+  }, [activeProjectPath, fetchData, fetchHierarchyRoot, fetchProjects]);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
@@ -419,26 +447,30 @@ function App() {
     }
     if (!hasLoadedInitiallyRef.current) return;
     void Promise.all([fetchData(), fetchHierarchyRoot()]);
-  }, [fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
+  }, [activeProjectPath, fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
 
   useEffect(() => {
     const nextUrl = new URL(window.location.href);
     if (activeProjectPath) {
       nextUrl.searchParams.set('project', activeProjectPath);
-      localStorage.setItem('agentlens-project-path', activeProjectPath);
     } else {
       nextUrl.searchParams.delete('project');
-      localStorage.removeItem('agentlens-project-path');
     }
     window.history.replaceState({}, '', nextUrl);
   }, [activeProjectPath]);
 
   const handleProjectChange = useCallback((projectPath: string) => {
     setActiveProjectPath(projectPath || null);
+    setProjectDialogOpen(false);
     setSelectedTraceId(null);
     setSelectedNodeId(null);
     setSessionDetailsById({});
     setProjectMetadata(null);
+    setProjectMetadataError(null);
+    setHierarchyRoot(null);
+    setStats(null);
+    setTraces([]);
+    setSessionsTotal(0);
   }, []);
 
   useEffect(() => {
@@ -611,13 +643,13 @@ function App() {
   const hasActiveSessionFilters = searchQuery.length > 0;
   const hasMoreSessions = traces.length < sessionsTotal;
 
-  if (error) {
+  if (error && activeProjectPath) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-950 flex items-center justify-center p-6">
         <div className="max-w-md rounded-3xl border border-red-200 bg-white p-8 text-center shadow-sm shadow-slate-200">
           <h1 className="text-2xl font-semibold text-red-600 mb-4">连接错误</h1>
           <p className="text-slate-600 mb-4">{error}</p>
-          <button onClick={() => void fetchData()} className="px-4 py-2 bg-clay-600 text-white hover:bg-clay-700 rounded-xl transition-colors shadow-sm">
+          <button onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="px-4 py-2 bg-clay-600 text-white hover:bg-clay-700 rounded-xl transition-colors shadow-sm">
             重试
           </button>
         </div>
@@ -629,7 +661,7 @@ function App() {
     <div className="min-h-screen text-ink-900">
       <header className="border-b border-ink-100 bg-white/92 backdrop-blur">
         <div className="mx-auto max-w-7xl px-4 py-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 sm:flex-nowrap sm:gap-4">
             <div className="flex items-center gap-3 min-w-0">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-ink-900 text-clay-200">
                 <LayoutDashboard className="h-5 w-5" />
@@ -642,35 +674,84 @@ function App() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2 text-sm text-ink-700/70">
-              <label className="flex min-w-0 items-center gap-2" title={t('projectWorkspace')}>
-                <FolderOpen className="hidden h-4 w-4 shrink-0 text-clay-600 sm:block" />
-                <span className="sr-only">{t('projectWorkspace')}</span>
-                <select
-                  aria-label={t('projectWorkspace')}
-                  value={activeProjectPath || ''}
-                  onChange={(event) => handleProjectChange(event.target.value)}
-                  className="max-w-[15rem] rounded-xl border border-ink-100 bg-white px-3 py-2 text-xs font-medium text-ink-700 shadow-sm outline-none hover:border-ink-200 focus:border-clay-500"
+            <div className="ml-auto flex min-w-0 items-center gap-2 text-sm text-ink-700/70">
+              {activeProjectPath ? (
+                <div className="flex min-w-0 items-center rounded-xl border border-ink-100 bg-white shadow-sm">
+                  <button
+                    type="button"
+                    onClick={() => setProjectDialogOpen(true)}
+                    title={activeProjectPath}
+                    className="flex min-w-0 max-w-[17rem] items-center gap-2 px-3 py-2 text-xs font-medium text-ink-700 hover:bg-ink-50"
+                  >
+                    <FolderOpen className="h-4 w-4 shrink-0 text-clay-600" />
+                    <span className="truncate">{activeProjectPath.split(/[\\/]/).filter(Boolean).pop() || activeProjectPath}</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t('closeProjectWorkspace')}
+                    title={t('closeProjectWorkspace')}
+                    onClick={() => handleProjectChange('')}
+                    className="border-l border-ink-100 p-2 text-ink-700/55 hover:bg-ink-50 hover:text-ink-900"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setError(null);
+                    void fetchProjects();
+                    setProjectDialogOpen(true);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-xl bg-ink-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-ink-800"
                 >
-                  <option value="">{t('allProjects')}</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.path}>
-                      {project.name} ({project.session_count})
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  <FolderOpen className="h-4 w-4 text-clay-200" />
+                  {t('openProjectWorkspace')}
+                </button>
+              )}
               {stats && <span className="hidden font-mono text-xs xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
-              <button onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
-                <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
-              </button>
+              {activeProjectPath && (
+                <button aria-label="Refresh project" onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
+                  <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
+                </button>
+              )}
               <button onClick={() => setLanguage(language === 'en' ? 'zh' : 'en')} className="rounded-xl border border-ink-100 bg-white px-3 py-2 text-xs font-medium text-ink-700 hover:bg-ink-50">{t('toggle')}</button>
             </div>
           </div>
         </div>
       </header>
 
-      {stats && (
+      <OpenProjectDialog
+        open={projectDialogOpen}
+        projects={projects}
+        language={language}
+        onClose={() => setProjectDialogOpen(false)}
+        onOpenProject={handleProjectChange}
+      />
+
+      {!activeProjectPath && (
+        <main className="mx-auto flex min-h-[calc(100vh-73px)] max-w-7xl items-center justify-center px-4 py-10">
+          <div className="w-full max-w-md border-y border-ink-200 py-10 text-center">
+            <FolderOpen className="mx-auto h-9 w-9 text-clay-600" />
+            <h2 className="mt-4 text-lg font-semibold text-ink-900">{t('openProjectWorkspace')}</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                void fetchProjects();
+                setProjectDialogOpen(true);
+              }}
+              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-ink-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-ink-800"
+            >
+              <FolderOpen className="h-4 w-4 text-clay-200" />
+              {t('openProjectWorkspace')}
+            </button>
+          </div>
+        </main>
+      )}
+
+      {activeProjectPath && stats && (
         <section className="border-b border-ink-100 bg-transparent">
           <div className="mx-auto max-w-7xl px-4 py-4">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -697,7 +778,7 @@ function App() {
         </section>
       )}
 
-      <main className="mx-auto max-w-7xl px-4 py-5 space-y-5">
+      {activeProjectPath && <main className="mx-auto max-w-7xl px-4 py-5 space-y-5">
         <section className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm shadow-ink-100/60">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
@@ -845,7 +926,7 @@ function App() {
             />
           </section>
         </div>
-      </main>
+      </main>}
     </div>
   );
 }

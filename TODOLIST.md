@@ -17,8 +17,8 @@ Tracking open work for AgentLens. Items already shipped on `main` have been move
 
 ## Frontend
 
-- [x] Add project workspace context with All projects mode, exact project scoping, and persisted project selection
-- [ ] Add local project registration for directories with no discovered session history
+- [x] Add an explicit Open Project workflow with no project loaded initially and exact project scoping
+- [x] Inspect custom local project paths and add projects with no indexed session history to the hierarchy
 - [ ] Add connection-aware UI state for future local SSH log sources
 - [ ] Custom session listing windows in frontend
 - [ ] Remove the silent 200-session frontend ceiling and align inbox data with overview totals

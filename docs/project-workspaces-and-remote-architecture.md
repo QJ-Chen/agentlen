@@ -5,11 +5,11 @@
 AgentLens should evolve from a global session inbox into a workspace-oriented
 review tool:
 
-1. Start in **All projects** so first-time users can discover their history.
-2. Let the user select a project and make it the active review context.
+1. Start with no project loaded and make opening a workspace explicit.
+2. Let the user choose a detected project or inspect a custom local path.
 3. Scope sessions, hierarchy, search, statistics, and project metadata to that
    context.
-4. Keep the current global view for cross-project comparison.
+4. Add the opened project to the hierarchy even when it has no indexed sessions.
 5. Model the source of the data as a connection, so a future remote log source
    can be used without redesigning the dashboard.
 
@@ -28,8 +28,8 @@ The repository already has most of the domain primitives:
 - The hierarchy groups sessions under project nodes.
 - `/api/v1/projects/by-path` exposes project instructions, memory, local
   settings, skills, worktrees, and artifact counts.
-- Session queries support a loose `project` text filter, but the dashboard
-  currently loads the global session list and global statistics.
+- Session queries support a loose `project` text filter and exact
+  `project_path` workspace scope.
 - The collector watches all supported local log sources; it is not configured
   per project.
 
@@ -42,9 +42,9 @@ avoids repeatedly rebuilding the database when the user changes projects.
 
 ### Initial states
 
-The dashboard should have an explicit active context in the header:
+The dashboard should have an explicit workspace state in the header:
 
-- **All projects**: global inbox, global hierarchy, and cross-project stats.
+- **Closed**: no session, stats, or hierarchy workspace is loaded.
 - **A project**: one project’s sessions, hierarchy, metadata, and stats.
 
 The existing hierarchy remains useful inside a project. In project mode, the
@@ -57,14 +57,17 @@ The first useful flow is:
 
 1. Open the project selector.
 2. Show recently active and discovered projects, with session counts and last
-   activity.
-3. Select a project.
-4. Update the URL and persisted local preference so the context survives a
-   refresh and can be bookmarked.
-5. Refresh all project-scoped data in one coordinated request cycle.
+   activity, plus a custom local path input.
+3. Inspect custom paths for directory validity, indexed sessions, instructions,
+   memory, skills, and worktrees.
+4. Select a project and add it to the left hierarchy, including projects with
+   zero indexed sessions.
+5. Update the URL so the explicit context can be bookmarked.
+6. Refresh all project-scoped data in one coordinated request cycle.
 
-The selector should include a clear **All projects** entry. A project should
-be identified by a stable ID, while its normalized path is displayed as
+The header should expose **Open Project** while closed and the active project
+with change/close actions while open. A project should be identified by a
+stable ID, while its normalized path is displayed as
 provenance. The path should not be the only identity because remote paths and
 two machines with similar directory layouts will eventually collide.
 
@@ -131,7 +134,7 @@ activeConnectionId: string
 activeProjectId: string | null
 ```
 
-Persist it in the URL first, with local storage as a convenience fallback. A
+Persist an explicitly opened context in the URL. A
 URL such as `/project/local:<stable-id>` makes refresh, bookmarks, and future
 multi-connection navigation predictable. The current inbox and hierarchy
 requests should derive their query parameters from this state, rather than
@@ -268,8 +271,9 @@ the SSH library's structured APIs or safely escaped command arguments.
 - Limit remote reads to configured Claude Code and Codex log roots.
 - Treat remote file contents as sensitive data when caching them locally.
 - Treat project paths, prompts, tool inputs, and raw logs as sensitive data.
-- Do not add an endpoint that accepts arbitrary filesystem paths for reading
-  without an explicit project registration or allowlist.
+- Custom local path inspection must validate that the target is a directory
+  and read only the fixed metadata allowlist (`CLAUDE.md`, `.claude` settings,
+  skills, worktrees, and matching AgentLens/Claude artifact roots).
 - Keep the local dashboard’s `noindex` behavior; project/session content must
   never become part of the public SEO site.
 - Make remote capabilities explicit. Read-only review should be separate from
@@ -277,21 +281,21 @@ the SSH library's structured APIs or safely escaped command arguments.
 
 ## Phased Implementation
 
-### Phase 1: Project context, low risk
+### Phase 1: Project context, complete
 
 - Add `GET /api/v1/projects` based on indexed session rollups.
 - Add exact `project_path` filtering to sessions, stats, and hierarchy.
-- Add a header project selector with All projects, recent projects, counts, and
-  last activity.
-- Persist the active project in the URL and local storage.
+- Start with no project loaded and add an Open Project dialog with detected
+  projects, counts, and paths.
+- Persist an explicitly opened project in the URL.
 - Add tests proving that sessions, stats, and hierarchy all apply the same
   project scope.
 
-### Phase 2: Local project onboarding
+### Phase 2: Local project onboarding, partially complete
 
-- Add a validated “Add local project” path flow.
-- Verify the directory exists and report whether AgentLens has discovered
-  session history for it.
+- Add a validated custom local project path flow. (Complete)
+- Verify the directory exists and report indexed session history and project
+  metadata. (Complete)
 - Offer a rescan without changing the global collector behavior.
 - Make open-folder behavior explicit and platform-aware.
 
@@ -312,18 +316,17 @@ the SSH library's structured APIs or safely escaped command arguments.
   metadata, search, and analytics.
 - Add bounded event streaming only if polling is insufficient for live review.
 
-## Decisions to Make Before Coding
+## Remaining Decisions
 
-1. Should “Add local project” accept a typed path in the browser first, or wait
-   for a desktop wrapper with a native folder picker?
+1. Should a desktop wrapper later add a native folder picker alongside the
+   implemented typed-path flow?
 2. Should project mode hide global configuration or keep it as a secondary
    branch?
 3. Should the first remote feature target one developer's SSH hosts, or a
    broader connection manager? A single-user SSH profile is the lower-risk
    default.
-4. Should the project catalog include directories with no discovered sessions?
-   This requires an explicit registration store rather than deriving projects
-   only from logs.
+4. Should custom directories be persisted in an explicit registration store so
+   they reappear in the detected catalog before they have session history?
 
 ## Recommendation
 

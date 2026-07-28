@@ -231,6 +231,9 @@ class ProjectMetadataApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["identity"]["project_key"], project_key)
+        self.assertTrue(payload["identity"]["exists"])
+        self.assertTrue(payload["identity"]["is_directory"])
+        self.assertEqual(payload["indexed_session_count"], 0)
         self.assertTrue(payload["instructions"]["exists"])
         self.assertTrue(payload["memory"]["exists"])
         self.assertEqual(payload["memory"]["note_count"], 1)
@@ -243,6 +246,21 @@ class ProjectMetadataApiTests(unittest.TestCase):
         self.assertEqual(payload["session_artifacts"]["tool_result_count"], 1)
         self.assertEqual(payload["task_artifacts"]["directory_count"], 1)
         self.assertEqual(payload["task_artifacts"]["task_file_count"], 1)
+
+    def test_project_metadata_reports_invalid_path(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            missing_path = Path(tmp_dir) / "missing"
+            client = TestClient(api.app)
+            response = client.get(
+                "/api/v1/projects/by-path",
+                params={"project_path": str(missing_path)},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertFalse(payload["identity"]["exists"])
+        self.assertFalse(payload["identity"]["is_directory"])
+        self.assertEqual(payload["indexed_session_count"], 0)
 
 
 class StubRealtimeUpdater:
@@ -626,6 +644,37 @@ class HierarchyApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.storage.sessions_calls[-1]["project_path"], "/demo/project")
+
+    def test_hierarchy_root_keeps_selected_project_without_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            project_path = Path(tmp_dir) / "empty-project"
+            project_path.mkdir()
+            with patch.object(
+                self.storage,
+                "list_sessions",
+                return_value={"sessions": [], "count": 0, "total": 0},
+            ) as list_sessions:
+                response = self.client.get(
+                    "/api/v1/hierarchy",
+                    params={"project_path": str(project_path)},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        normalized_path = str(project_path.resolve())
+        self.assertEqual(list_sessions.call_args.kwargs["project_path"], normalized_path)
+        projects_root = next(
+            child
+            for child in response.json()["root"]["children"]
+            if child["type"] == "projects-root"
+        )
+        self.assertEqual(len(projects_root["children"]), 1)
+        project_node = projects_root["children"][0]
+        self.assertEqual(project_node["projectPath"], normalized_path)
+        sessions_node = next(
+            child for child in project_node["children"] if child["type"] == "project-sessions"
+        )
+        self.assertEqual(sessions_node["count"], 0)
+        self.assertEqual(sessions_node["children"], [])
 
     def test_hierarchy_children_returns_session_summaries(self):
         response = self.client.get(
