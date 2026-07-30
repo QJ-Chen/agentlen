@@ -42,7 +42,7 @@ A lazy tree of the recent local Claude Code activity.
 Surfaced from `/api/v1/projects/by-path`:
 
 - **Identity and inspection** — encoded project key, resolved absolute path, directory validity, and indexed session count.
-- **Instructions** — the project's `CLAUDE.md` exists flag and content (truncated).
+- **Instructions** — the project's `CLAUDE.md` exists flag and GitHub-flavored Markdown rendering for headings, lists, tables, links, blockquotes, and code.
 - **Memory** — `MEMORY.md` index entries and per-file body excerpts.
 - **Local config** — `.claude/settings.local.json` parsed permissions (allow/deny rules).
 - **Worktrees** — git worktree list with active branch detection.

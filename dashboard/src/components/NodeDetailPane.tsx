@@ -7,6 +7,8 @@ import type { HierarchyNode, ProjectMetadata, Trace } from '../types';
 import { EnhancedTraceDetail, type TabType } from './EnhancedTraceDetail';
 import { EmptyState, InfoField, PathField } from './TraceDetailBlocks';
 
+const MarkdownContent = React.lazy(() => import('./MarkdownContent'));
+
 interface NodeDetailPaneProps {
   node: HierarchyNode | null;
   selectedTrace: Trace | null;
@@ -46,6 +48,31 @@ function FileDetailPane({
           {content || 'No content available.'}
         </pre>
       </div>
+    </Surface>
+  );
+}
+
+function MarkdownDetailPane({
+  title,
+  subtitle,
+  path,
+  content,
+}: {
+  title: string;
+  subtitle?: string;
+  path?: string;
+  content?: string;
+}) {
+  return (
+    <Surface title={title} subtitle={subtitle}>
+      {path && <PathField label="Path" value={path} />}
+      {content ? (
+        <React.Suspense fallback={<div className="text-sm text-slate-500">Rendering Markdown…</div>}>
+          <MarkdownContent content={content} />
+        </React.Suspense>
+      ) : (
+        <div className="text-sm text-slate-500">No instruction content available.</div>
+      )}
     </Surface>
   );
 }
@@ -324,7 +351,7 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
       return <Surface title="Project instruction" subtitle="Project metadata"><div className="text-sm text-red-600">{projectMetadataError}</div></Surface>;
     }
     return (
-      <FileDetailPane
+      <MarkdownDetailPane
         title="Project instruction"
         subtitle="Project CLAUDE.md"
         path={projectMetadata?.instructions.path}

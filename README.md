@@ -38,7 +38,7 @@ It is **not** a remote-control platform, a hosted telemetry SaaS, or a generic O
 - **Structured control-plane cards.** `<task-notification>`, `<bash-stdout>`, `<bash-stderr>`, `<bash-input>`, `<bash-output>`, and `<bash-exit-code>` wrappers are decoded into typed UI cards with explicit `无输出` / `无错误输出` / `不完整` badges.
 - **Slash commands as first-class prompt threads.** `/loop`, `/clear`, `/model`, `/compact` and friends are preserved with their `command-name` / `command-args` / `command-message` fields and rendered as standalone rows. `/loop` dedupes across its `isMeta: true` skill expansion.
 - **Lightweight hierarchy projection.** Lazy `/api/v1/hierarchy` + `/api/v1/hierarchy/children` keep the inbox responsive on long sessions.
-- **Project metadata panel.** CLAUDE.md instructions, `MEMORY.md` index, local `.claude/settings.local.json` permissions, git worktrees, and counts of session/subagent/task artifacts.
+- **Project metadata panel.** Rendered CLAUDE.md instructions, `MEMORY.md` index, local `.claude/settings.local.json` permissions, git worktrees, and counts of session/subagent/task artifacts.
 - **Date-range filter** on sessions, overview stats, and project rollups.
 - **Bilingual dashboard.** Toggle English/中文 from the header. The language preference is persisted locally, including the custom date-range calendar.
 - **Codex support.** Ingests Codex rollout JSONL from `~/.codex/sessions/` and exposes `~/.codex/AGENTS.md`, `config.toml`, and installed skills in the hierarchy.
