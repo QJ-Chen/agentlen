@@ -1,7 +1,8 @@
 import type { ComponentType } from 'react';
 import { Clock, MessageSquare, Sparkles, Wrench } from 'lucide-react';
 import type { LLMCall, ToolCall } from '../types';
-import { cleanSessionText, fileBasename } from './sessionUtils';
+import { cleanSessionText } from './sessionUtils';
+import { toolCallPreview } from './toolCallSummary';
 
 export type DetailLevel = 'summary' | 'standard' | 'verbose';
 export type ResponseKind = 'empty' | 'thinking' | 'tool' | 'text';
@@ -76,17 +77,9 @@ export function classifyCallResponse(call: LLMCall, relatedTools: ToolCall[]): C
       icon: Wrench,
       accent: 'text-violet-700',
       badge: 'bg-violet-100 text-violet-700',
-      // "ToolName: basename" for file-operating tools (Read, Edit, Write, etc.)
       preview:
         relatedTools.length > 0
-          ? relatedTools
-              .map((tool) => {
-                const filePath = tool.input?.file_path;
-                return typeof filePath === 'string' && filePath
-                  ? `${tool.name}: ${fileBasename(filePath)}`
-                  : tool.name;
-              })
-              .join(' · ')
+          ? relatedTools.map(toolCallPreview).join(' · ')
           : toolResponseMatch?.[1] ?? response,
     };
   }

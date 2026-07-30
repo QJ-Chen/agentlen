@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Terminal, Wrench, X } from 'lucide-react';
 import type { ToolCall } from '../types';
-import { fileBasename, truncateText } from '../lib/sessionUtils';
+import { applyPatchFilePath, toolCallArgumentSummary } from '../lib/toolCallSummary';
 
 const PREVIEW_LINES = 12;
 const DIFF_SIDE_LINES = 40;
@@ -15,26 +15,6 @@ function inputField(tool: ToolCall, key: string): string | null {
   const input = tool.input;
   if (!input || typeof input !== 'object') return null;
   return asString((input as Record<string, unknown>)[key]);
-}
-
-// One-line human summary of the call, shown next to the tool name.
-function keyArgSummary(tool: ToolCall): string {
-  const filePath = inputField(tool, 'file_path') ?? inputField(tool, 'notebook_path');
-  if (filePath) return fileBasename(filePath);
-  const command = inputField(tool, 'command') ?? inputField(tool, 'cmd');
-  if (command) return truncateText(command.replace(/\n/g, ' '), 72);
-  if (tool.name === 'apply_patch') {
-    const patch = inputField(tool, 'value') ?? inputField(tool, 'patch');
-    const path = patch?.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/m)?.[1];
-    if (path) return fileBasename(path);
-  }
-  const pattern = inputField(tool, 'pattern');
-  if (pattern) return truncateText(pattern, 72);
-  const description = inputField(tool, 'description') ?? inputField(tool, 'prompt');
-  if (description) return truncateText(description.replace(/\n/g, ' '), 72);
-  const skill = inputField(tool, 'skill');
-  if (skill) return skill;
-  return '';
 }
 
 function outputAsText(tool: ToolCall): string {
@@ -259,8 +239,10 @@ export function ToolCallCard({
 }) {
   const [showFullInput, setShowFullInput] = useState(false);
   const isError = tool.status === 'error';
-  const summary = keyArgSummary(tool);
-  const filePath = inputField(tool, 'file_path') ?? inputField(tool, 'notebook_path');
+  const summary = toolCallArgumentSummary(tool);
+  const filePath = inputField(tool, 'file_path')
+    ?? inputField(tool, 'notebook_path')
+    ?? applyPatchFilePath(tool);
   const isShell = tool.name === 'Bash' || tool.name === 'exec_command';
   // File-edit and shell bodies visualize the interesting part of the input;
   // everything else falls back to the JSON input preview.
