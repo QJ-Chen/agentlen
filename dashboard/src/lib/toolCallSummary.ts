@@ -1,5 +1,7 @@
 import type { ToolCall } from '../types';
-import { fileBasename, truncateText } from './sessionUtils';
+import { fileBasename } from './sessionUtils';
+
+const SINGLE_FILE_TOOLS = new Set(['Read', 'Write', 'Edit', 'NotebookEdit']);
 
 function inputString(tool: ToolCall, key: string): string | null {
   const value = tool.input?.[key];
@@ -10,27 +12,60 @@ export function applyPatchFilePath(tool: ToolCall): string | null {
   if (tool.name !== 'apply_patch') return null;
   const patch = inputString(tool, 'value') ?? inputString(tool, 'patch');
   if (!patch) return null;
-  const match = patch.match(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/m);
-  return match?.[1]?.trim() || null;
+  const paths = [...patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)]
+    .map((match) => match[1]?.trim())
+    .filter((path): path is string => Boolean(path));
+  return new Set(paths).size === 1 ? paths[0] : null;
+}
+
+function shellWords(command: string): string[] {
+  return command.match(/(?:[^\s'"\\]+|\\.|"(?:\\.|[^"])*"|'[^']*')+/g) ?? [];
+}
+
+function unquoteShellWord(word: string): string {
+  if (
+    word.length >= 2
+    && ((word.startsWith('"') && word.endsWith('"'))
+      || (word.startsWith("'") && word.endsWith("'")))
+  ) {
+    return word.slice(1, -1);
+  }
+  return word;
+}
+
+export function execCommandName(tool: ToolCall): string | null {
+  if (tool.name !== 'exec_command') return null;
+  const command = inputString(tool, 'command') ?? inputString(tool, 'cmd');
+  if (!command) return null;
+
+  const words = shellWords(command.trim().replace(/^\$\s+/, ''));
+  let index = 0;
+  while (index < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index])) index++;
+
+  if (words[index] === 'env') {
+    index++;
+    while (
+      index < words.length
+      && (words[index].startsWith('-') || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]))
+    ) {
+      index++;
+    }
+  }
+
+  const executable = words[index] ? unquoteShellWord(words[index]) : '';
+  return executable ? fileBasename(executable) : null;
 }
 
 export function toolCallArgumentSummary(tool: ToolCall): string {
-  const filePath = inputString(tool, 'file_path') ?? inputString(tool, 'notebook_path');
-  if (filePath) return fileBasename(filePath);
+  if (SINGLE_FILE_TOOLS.has(tool.name)) {
+    const filePath = inputString(tool, 'file_path') ?? inputString(tool, 'notebook_path');
+    if (filePath) return fileBasename(filePath);
+  }
 
   const patchPath = applyPatchFilePath(tool);
   if (patchPath) return fileBasename(patchPath);
 
-  const command = inputString(tool, 'command') ?? inputString(tool, 'cmd');
-  if (command) return truncateText(command.replace(/\n/g, ' '), 72);
-
-  const pattern = inputString(tool, 'pattern');
-  if (pattern) return truncateText(pattern, 72);
-
-  const description = inputString(tool, 'description') ?? inputString(tool, 'prompt');
-  if (description) return truncateText(description.replace(/\n/g, ' '), 72);
-
-  return inputString(tool, 'skill') ?? '';
+  return execCommandName(tool) ?? '';
 }
 
 export function toolCallPreview(tool: ToolCall): string {
