@@ -8,14 +8,18 @@ function inputString(tool: ToolCall, key: string): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-export function applyPatchFilePath(tool: ToolCall): string | null {
-  if (tool.name !== 'apply_patch') return null;
+export function applyPatchFilePaths(tool: ToolCall): string[] {
+  if (tool.name !== 'apply_patch') return [];
   const patch = inputString(tool, 'value') ?? inputString(tool, 'patch');
-  if (!patch) return null;
-  const paths = [...patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)]
+  if (!patch) return [];
+  const paths = [...patch.matchAll(/^\*\*\* (?:(?:Update|Add|Delete) File|Move to): (.+)$/gm)]
     .map((match) => match[1]?.trim())
     .filter((path): path is string => Boolean(path));
-  return paths[0] ?? null;
+  return [...new Set(paths)];
+}
+
+export function applyPatchFilePath(tool: ToolCall): string | null {
+  return applyPatchFilePaths(tool)[0] ?? null;
 }
 
 function shellWords(command: string): string[] {
@@ -62,8 +66,8 @@ export function toolCallArgumentSummary(tool: ToolCall): string {
     if (filePath) return fileBasename(filePath);
   }
 
-  const patchPath = applyPatchFilePath(tool);
-  if (patchPath) return fileBasename(patchPath);
+  const patchPaths = applyPatchFilePaths(tool);
+  if (patchPaths.length > 0) return patchPaths.map(fileBasename).join(' · ');
 
   return execCommandName(tool) ?? '';
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Check, ChevronDown, ChevronRight, Copy, Terminal, Wrench, X } from 'lucide-react';
 import type { ToolCall } from '../types';
-import { applyPatchFilePath, toolCallArgumentSummary } from '../lib/toolCallSummary';
+import { applyPatchFilePaths, toolCallArgumentSummary } from '../lib/toolCallSummary';
 
 const PREVIEW_LINES = 12;
 const DIFF_SIDE_LINES = 40;
@@ -240,9 +240,8 @@ export function ToolCallCard({
   const [showFullInput, setShowFullInput] = useState(false);
   const isError = tool.status === 'error';
   const summary = toolCallArgumentSummary(tool);
-  const filePath = inputField(tool, 'file_path')
-    ?? inputField(tool, 'notebook_path')
-    ?? applyPatchFilePath(tool);
+  const directFilePath = inputField(tool, 'file_path') ?? inputField(tool, 'notebook_path');
+  const patchFilePaths = applyPatchFilePaths(tool);
   const isShell = tool.name === 'Bash' || tool.name === 'exec_command';
   // File-edit and shell bodies visualize the interesting part of the input;
   // everything else falls back to the JSON input preview.
@@ -287,8 +286,11 @@ export function ToolCallCard({
         </button>
       </div>
 
-      {filePath && (
-        <div className="mb-2 break-all font-mono text-[11px] text-slate-500">{filePath}</div>
+      {(directFilePath || patchFilePaths.length > 0) && (
+        <div className="mb-2 space-y-1 break-all font-mono text-[11px] text-slate-500">
+          {directFilePath && <div>{directFilePath}</div>}
+          {patchFilePaths.map((path) => <div key={path}>{path}</div>)}
+        </div>
       )}
 
       <div className="space-y-2">
