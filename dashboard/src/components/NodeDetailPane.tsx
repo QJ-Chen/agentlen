@@ -183,10 +183,12 @@ function sessionTabForNode(nodeType: HierarchyNode['type']): TabType {
 }
 
 function PendingProjectPane({
+  node,
   projectMetadata,
   projectMetadataLoading,
   projectMetadataError,
 }: {
+  node: HierarchyNode;
   projectMetadata: ProjectMetadata | null;
   projectMetadataLoading: boolean;
   projectMetadataError: string | null;
@@ -200,12 +202,18 @@ function PendingProjectPane({
   if (!projectMetadata) {
     return <Surface title="Project" subtitle="Project metadata"><div className="text-sm text-slate-500">No project metadata available.</div></Surface>;
   }
+  const scopedSessionCount = node.type === 'project-sessions'
+    ? node.count
+    : node.children?.find((child) => child.type === 'project-sessions')?.count;
   return (
     <Surface title={projectMetadata.identity.project_path} subtitle="Project summary">
       <InfoField label="Instruction" value={projectMetadata.instructions.exists ? 'present' : 'missing'} />
       <InfoField label="Memory notes" value={String(projectMetadata.memory.note_count)} />
       <InfoField label="Skills" value={String(projectMetadata.skills.count)} />
-      <InfoField label="Sessions" value={String(projectMetadata.indexed_session_count)} />
+      <InfoField
+        label="Sessions"
+        value={String(scopedSessionCount ?? projectMetadata.indexed_session_count)}
+      />
     </Surface>
   );
 }
@@ -236,6 +244,7 @@ export const NodeDetailPane: React.FC<NodeDetailPaneProps> = ({
   if (node.type === 'global-root' || node.type === 'projects-root' || node.type === 'project' || node.type === 'project-sessions') {
     return (
       <PendingProjectPane
+        node={node}
         projectMetadata={projectMetadata}
         projectMetadataLoading={projectMetadataLoading}
         projectMetadataError={projectMetadataError}
