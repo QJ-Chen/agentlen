@@ -195,9 +195,7 @@ function App() {
   const DATE_PRESETS = [{ label: t('today'), days: 0 }, { label: t('last7'), days: 6 }, { label: t('last30'), days: 29 }];
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectCatalogItem[]>([]);
-  const [openProjectPaths, setOpenProjectPaths] = useState<string[]>(() => {
-    return [...new Set(new URLSearchParams(window.location.search).getAll('project').filter(Boolean))];
-  });
+  const [openProjectPaths, setOpenProjectPaths] = useState<string[]>([]);
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
   const [sessionsTotal, setSessionsTotal] = useState(0);
@@ -450,13 +448,6 @@ function App() {
     if (!hasLoadedInitiallyRef.current) return;
     void Promise.all([fetchData(), fetchHierarchyRoot()]);
   }, [openProjectPaths, fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
-
-  useEffect(() => {
-    const nextUrl = new URL(window.location.href);
-    nextUrl.searchParams.delete('project');
-    openProjectPaths.forEach((projectPath) => nextUrl.searchParams.append('project', projectPath));
-    window.history.replaceState({}, '', nextUrl);
-  }, [openProjectPaths]);
 
   const resetWorkspaceSelection = useCallback(() => {
     setSelectedTraceId(null);

@@ -64,8 +64,8 @@ The first useful flow is:
    projects with zero indexed sessions.
 5. Add another project later without replacing projects already open; close
    individual projects from their hierarchy rows when needed.
-6. Update the URL with repeated `project` parameters so the explicit context
-   can be bookmarked.
+6. Keep the open project set in dashboard state without changing the browser
+   URL.
 7. Refresh all project-scoped data in one coordinated request cycle.
 
 The left panel owns the **Open Project** tool and the open-project tree. A
@@ -137,11 +137,11 @@ activeConnectionId: string
 openProjectIds: string[]
 ```
 
-Persist the open context in the URL with repeated `project` parameters. This
-makes refresh, bookmarks, and future multi-connection navigation predictable.
-The current inbox and hierarchy requests should derive repeated
-`project_paths` query parameters from this state, rather than each component
-implementing its own project filter.
+Keep the open context in dashboard state for the current browser session; the
+project workflow should not modify the browser URL. The current inbox and
+hierarchy requests should derive repeated `project_paths` query parameters
+from this state, rather than each component implementing its own project
+filter.
 
 The project selector belongs in the left application panel so project opening,
 tree navigation, and project closing are one workflow.
@@ -290,8 +290,7 @@ the SSH library's structured APIs or safely escaped command arguments.
   stats, and hierarchy.
 - Start with no project loaded and add an Open Project dialog with detected
   projects, counts, and paths.
-- Support additive multi-project selection and persist the open project set in
-  the URL.
+- Support additive multi-project selection without changing the browser URL.
 - Add tests proving that sessions, stats, and hierarchy all apply the same
   project scope.
 
@@ -307,7 +306,7 @@ the SSH library's structured APIs or safely escaped command arguments.
 
 - Add connection and capability types to the API and frontend.
 - Treat the existing local backend as a `local` connection.
-- Include connection identity in project IDs, cache keys, and URL state.
+- Include connection identity in project IDs, cache keys, and dashboard state.
 - Replace path-only assumptions in provenance and open-folder actions.
 
 ### Phase 4: Remote review
