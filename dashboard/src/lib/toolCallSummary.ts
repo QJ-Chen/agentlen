@@ -15,7 +15,7 @@ export function applyPatchFilePath(tool: ToolCall): string | null {
   const paths = [...patch.matchAll(/^\*\*\* (?:Update|Add|Delete) File: (.+)$/gm)]
     .map((match) => match[1]?.trim())
     .filter((path): path is string => Boolean(path));
-  return new Set(paths).size === 1 ? paths[0] : null;
+  return paths[0] ?? null;
 }
 
 function shellWords(command: string): string[] {
