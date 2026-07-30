@@ -129,7 +129,7 @@ export const ProjectMetadataPanel: React.FC<ProjectMetadataPanelProps> = ({
       </Section>
 
       <Section icon={FolderTree} title="Project artifacts">
-        <Row label="Sessions" value={String(metadata.session_artifacts.session_count)} />
+        <Row label="Session logs" value={String(metadata.session_artifacts.session_count)} />
         <Row label="Subagents" value={String(Math.max(metadata.session_artifacts.subagent_log_count, metadata.session_artifacts.subagent_meta_count))} />
         <Row label="Tool results" value={String(metadata.session_artifacts.tool_result_count)} />
       </Section>

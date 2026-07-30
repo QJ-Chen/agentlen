@@ -205,7 +205,7 @@ function PendingProjectPane({
       <InfoField label="Instruction" value={projectMetadata.instructions.exists ? 'present' : 'missing'} />
       <InfoField label="Memory notes" value={String(projectMetadata.memory.note_count)} />
       <InfoField label="Skills" value={String(projectMetadata.skills.count)} />
-      <InfoField label="Sessions" value={String(projectMetadata.session_artifacts.session_count)} />
+      <InfoField label="Sessions" value={String(projectMetadata.indexed_session_count)} />
     </Surface>
   );
 }
