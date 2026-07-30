@@ -80,6 +80,17 @@ def _encode_project_path(project_path: str) -> str:
     return re.sub(r"[/\\]+", "-", project_path.strip())
 
 
+def _project_scope_kwargs(
+    project_path: Optional[str], project_paths: Optional[List[str]]
+) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {}
+    if project_path is not None:
+        kwargs["project_path"] = project_path
+    if project_paths:
+        kwargs["project_paths"] = list(dict.fromkeys(project_paths))
+    return kwargs
+
+
 def _safe_read_text(path: Path, max_chars: int = 4000) -> str:
     try:
         return path.read_text(encoding="utf-8")[:max_chars]
@@ -428,9 +439,13 @@ def _build_hierarchy_root(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     project_path: Optional[str] = None,
+    project_paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    normalized_project_path = (
-        str(Path(project_path).expanduser().resolve()) if project_path is not None else None
+    explicit_project_paths = list(
+        dict.fromkeys(
+            str(Path(path).expanduser().resolve())
+            for path in ([project_path] if project_path is not None else []) + (project_paths or [])
+        )
     )
     session_kwargs = {
         "status": status,
@@ -442,8 +457,10 @@ def _build_hierarchy_root(
         "offset": 0,
         "light": True,
     }
-    if normalized_project_path is not None:
-        session_kwargs["project_path"] = normalized_project_path
+    if len(explicit_project_paths) == 1 and project_paths is None:
+        session_kwargs["project_path"] = explicit_project_paths[0]
+    elif explicit_project_paths:
+        session_kwargs["project_paths"] = explicit_project_paths
     sessions_payload = storage.list_sessions(
         **session_kwargs,
     )
@@ -455,8 +472,8 @@ def _build_hierarchy_root(
     for session in sessions:
         session_project_path = str(session.get("project_path") or "")
         grouped.setdefault(session_project_path, []).append(session)
-    if normalized_project_path:
-        grouped.setdefault(normalized_project_path, [])
+    for explicit_project_path in explicit_project_paths:
+        grouped.setdefault(explicit_project_path, [])
 
     project_nodes = []
     for project_path, project_sessions in sorted(grouped.items(), key=lambda item: item[0]):
@@ -751,6 +768,7 @@ def get_sessions(
     status: Optional[str] = None,
     query: Optional[str] = None,
     project_path: Optional[str] = None,
+    project_paths: Optional[List[str]] = Query(default=None),
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     period_hours: Optional[int] = Query(default=720, ge=1, le=8760),
@@ -763,7 +781,7 @@ def get_sessions(
     return storage.list_sessions(
         platform=platform,
         project=project,
-        project_path=project_path,
+        **_project_scope_kwargs(project_path, project_paths),
         model=model,
         status=status,
         query=query,
@@ -991,8 +1009,12 @@ def get_hierarchy(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     project_path: Optional[str] = None,
+    project_paths: Optional[List[str]] = Query(default=None),
 ):
-    cache_key = f"hierarchy:{status}:{query}:{start_time}:{end_time}:{project_path}"
+    cache_key = (
+        f"hierarchy:{status}:{query}:{start_time}:{end_time}:"
+        f"{project_path}:{tuple(project_paths or [])}"
+    )
     return {
         "root": _cached(
             cache_key,
@@ -1002,6 +1024,7 @@ def get_hierarchy(
                 start_time=start_time,
                 end_time=end_time,
                 project_path=project_path,
+                project_paths=project_paths,
             ),
         )
     }
@@ -1057,12 +1080,15 @@ def get_stats(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     project_path: Optional[str] = None,
+    project_paths: Optional[List[str]] = Query(default=None),
     period_hours: int = Query(720, ge=1, le=8760),
 ):
     """Backward-compatible overview stats endpoint."""
-    kwargs = {"start_time": start_time, "end_time": end_time}
-    if project_path is not None:
-        kwargs["project_path"] = project_path
+    kwargs = {
+        "start_time": start_time,
+        "end_time": end_time,
+        **_project_scope_kwargs(project_path, project_paths),
+    }
     return storage.get_overview_stats(period_hours, **kwargs)
 
 
@@ -1071,9 +1097,13 @@ def get_overview_stats(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     project_path: Optional[str] = None,
+    project_paths: Optional[List[str]] = Query(default=None),
     period_hours: int = Query(720, ge=1, le=8760),
 ):
-    cache_key = f"overview:{period_hours}:{start_time}:{end_time}:{project_path}"
+    cache_key = (
+        f"overview:{period_hours}:{start_time}:{end_time}:"
+        f"{project_path}:{tuple(project_paths or [])}"
+    )
     return _cached(
         cache_key,
         lambda: storage.get_overview_stats(
@@ -1081,7 +1111,7 @@ def get_overview_stats(
             **{
                 "start_time": start_time,
                 "end_time": end_time,
-                **({"project_path": project_path} if project_path is not None else {}),
+                **_project_scope_kwargs(project_path, project_paths),
             },
         ),
     )
@@ -1092,6 +1122,7 @@ def get_project_stats(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
     project_path: Optional[str] = None,
+    project_paths: Optional[List[str]] = Query(default=None),
     period_hours: int = Query(720, ge=1, le=8760),
 ):
     return {
@@ -1101,7 +1132,7 @@ def get_project_stats(
             **{
                 "start_time": start_time,
                 "end_time": end_time,
-                **({"project_path": project_path} if project_path is not None else {}),
+                **_project_scope_kwargs(project_path, project_paths),
             },
         ),
     }

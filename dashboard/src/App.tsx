@@ -7,7 +7,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Filter,
-  FolderOpen,
   LayoutDashboard,
   RefreshCw,
   Search,
@@ -196,9 +195,8 @@ function App() {
   const DATE_PRESETS = [{ label: t('today'), days: 0 }, { label: t('last7'), days: 6 }, { label: t('last30'), days: 29 }];
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [projects, setProjects] = useState<ProjectCatalogItem[]>([]);
-  const [activeProjectPath, setActiveProjectPath] = useState<string | null>(() => {
-    const projectParam = new URLSearchParams(window.location.search).get('project');
-    return projectParam || null;
+  const [openProjectPaths, setOpenProjectPaths] = useState<string[]>(() => {
+    return [...new Set(new URLSearchParams(window.location.search).getAll('project').filter(Boolean))];
   });
   const [projectDialogOpen, setProjectDialogOpen] = useState(false);
   const [traces, setTraces] = useState<TraceWithRaw[]>([]);
@@ -229,10 +227,11 @@ function App() {
   const hasLoadedInitiallyRef = useRef(false);
   const dateRangeEffectReadyRef = useRef(false);
   const hasActiveDateRange = startDate.length > 0 || endDate.length > 0;
+  const hasOpenProjects = openProjectPaths.length > 0;
   const activeDateRangeLabel = buildDateRangeLabel(startDate, endDate);
 
   const fetchHierarchyRoot = useCallback(async () => {
-    if (!activeProjectPath) {
+    if (!hasOpenProjects) {
       hierarchyFetchGenerationRef.current += 1;
       hierarchyFetchAbortRef.current?.abort();
       hierarchyFetchAbortRef.current = null;
@@ -251,7 +250,7 @@ function App() {
     if (startTime) params.set('start_time', startTime);
     if (endTime) params.set('end_time', endTime);
     if (debouncedQuery) params.set('query', debouncedQuery);
-    params.set('project_path', activeProjectPath);
+    openProjectPaths.forEach((projectPath) => params.append('project_paths', projectPath));
     const queryString = params.toString();
 
     try {
@@ -264,9 +263,12 @@ function App() {
       }
       const hierarchyData = (await response.json()) as HierarchyResponse;
       if (generation !== hierarchyFetchGenerationRef.current) return;
-      const firstProjectNodeId = hierarchyData.root?.children?.find((child) => child.type === 'projects-root')?.children?.[0]?.id || null;
+      const projectNodeIds = hierarchyData.root?.children
+        ?.find((child) => child.type === 'projects-root')
+        ?.children?.map((child) => child.id) || [];
+      const firstProjectNodeId = projectNodeIds[0] || null;
       setHierarchyRoot(hierarchyData.root || null);
-      setExpandedNodeIds(new Set(['global-root', 'projects-root', ...(firstProjectNodeId ? [firstProjectNodeId] : [])]));
+      setExpandedNodeIds(new Set(['global-root', 'projects-root', ...projectNodeIds]));
       setSelectedNodeId((existingNodeId) => {
         if (existingNodeId && hierarchyData.root) {
           const stack = [hierarchyData.root];
@@ -289,7 +291,7 @@ function App() {
         hierarchyFetchAbortRef.current = null;
       }
     }
-  }, [startDate, endDate, debouncedQuery, activeProjectPath, t]);
+  }, [startDate, endDate, debouncedQuery, hasOpenProjects, openProjectPaths, t]);
 
   const buildSessionParams = useCallback(
     (offset: number) => {
@@ -299,14 +301,14 @@ function App() {
       if (startTime) params.set('start_time', startTime);
       if (endTime) params.set('end_time', endTime);
       if (debouncedQuery) params.set('query', debouncedQuery);
-      if (activeProjectPath) params.set('project_path', activeProjectPath);
+      openProjectPaths.forEach((projectPath) => params.append('project_paths', projectPath));
       return params;
     },
-    [startDate, endDate, debouncedQuery, activeProjectPath],
+    [startDate, endDate, debouncedQuery, openProjectPaths],
   );
 
   const fetchData = useCallback(async () => {
-    if (!activeProjectPath) {
+    if (!hasOpenProjects) {
       fetchGenerationRef.current += 1;
       fetchAbortRef.current?.abort();
       fetchAbortRef.current = null;
@@ -338,7 +340,7 @@ function App() {
     const endTime = toEndOfLocalDayISOString(endDate);
     if (startTime) statsParams.set('start_time', startTime);
     if (endTime) statsParams.set('end_time', endTime);
-    statsParams.set('project_path', activeProjectPath);
+    openProjectPaths.forEach((projectPath) => statsParams.append('project_paths', projectPath));
     const statsQuery = statsParams.toString();
     try {
       const [sessionsRes, statsRes] = await Promise.all([
@@ -376,7 +378,7 @@ function App() {
         fetchAbortRef.current = null;
       }
     }
-  }, [startDate, endDate, activeProjectPath, buildSessionParams, t]);
+  }, [startDate, endDate, hasOpenProjects, openProjectPaths, buildSessionParams, t]);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -432,8 +434,8 @@ function App() {
     if (hasLoadedInitiallyRef.current) return;
     hasLoadedInitiallyRef.current = true;
     void fetchProjects();
-    if (activeProjectPath) void Promise.all([fetchData(), fetchHierarchyRoot()]);
-  }, [activeProjectPath, fetchData, fetchHierarchyRoot, fetchProjects]);
+    if (hasOpenProjects) void Promise.all([fetchData(), fetchHierarchyRoot()]);
+  }, [hasOpenProjects, fetchData, fetchHierarchyRoot, fetchProjects]);
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedQuery(searchQuery.trim()), 300);
@@ -447,31 +449,33 @@ function App() {
     }
     if (!hasLoadedInitiallyRef.current) return;
     void Promise.all([fetchData(), fetchHierarchyRoot()]);
-  }, [activeProjectPath, fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
+  }, [openProjectPaths, fetchData, fetchHierarchyRoot, startDate, endDate, debouncedQuery]);
 
   useEffect(() => {
     const nextUrl = new URL(window.location.href);
-    if (activeProjectPath) {
-      nextUrl.searchParams.set('project', activeProjectPath);
-    } else {
-      nextUrl.searchParams.delete('project');
-    }
+    nextUrl.searchParams.delete('project');
+    openProjectPaths.forEach((projectPath) => nextUrl.searchParams.append('project', projectPath));
     window.history.replaceState({}, '', nextUrl);
-  }, [activeProjectPath]);
+  }, [openProjectPaths]);
 
-  const handleProjectChange = useCallback((projectPath: string) => {
-    setActiveProjectPath(projectPath || null);
-    setProjectDialogOpen(false);
+  const resetWorkspaceSelection = useCallback(() => {
     setSelectedTraceId(null);
     setSelectedNodeId(null);
     setSessionDetailsById({});
     setProjectMetadata(null);
     setProjectMetadataError(null);
-    setHierarchyRoot(null);
-    setStats(null);
-    setTraces([]);
-    setSessionsTotal(0);
   }, []);
+
+  const handleOpenProjects = useCallback((projectPaths: string[]) => {
+    setOpenProjectPaths((current) => [...new Set([...current, ...projectPaths.filter(Boolean)])]);
+    setProjectDialogOpen(false);
+    setError(null);
+  }, []);
+
+  const handleCloseProject = useCallback((projectPath: string) => {
+    setOpenProjectPaths((current) => current.filter((path) => path !== projectPath));
+    resetWorkspaceSelection();
+  }, [resetWorkspaceSelection]);
 
   useEffect(() => {
     setSelectedTraceId((current) => current ?? traces[0]?.id ?? null);
@@ -643,7 +647,7 @@ function App() {
   const hasActiveSessionFilters = searchQuery.length > 0;
   const hasMoreSessions = traces.length < sessionsTotal;
 
-  if (error && activeProjectPath) {
+  if (error && hasOpenProjects) {
     return (
       <div className="min-h-screen bg-slate-50 text-slate-950 flex items-center justify-center p-6">
         <div className="max-w-md rounded-3xl border border-red-200 bg-white p-8 text-center shadow-sm shadow-slate-200">
@@ -675,43 +679,8 @@ function App() {
             </div>
 
             <div className="ml-auto flex min-w-0 items-center gap-2 text-sm text-ink-700/70">
-              {activeProjectPath ? (
-                <div className="flex min-w-0 items-center rounded-xl border border-ink-100 bg-white shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => setProjectDialogOpen(true)}
-                    title={activeProjectPath}
-                    className="flex min-w-0 max-w-[17rem] items-center gap-2 px-3 py-2 text-xs font-medium text-ink-700 hover:bg-ink-50"
-                  >
-                    <FolderOpen className="h-4 w-4 shrink-0 text-clay-600" />
-                    <span className="truncate">{activeProjectPath.split(/[\\/]/).filter(Boolean).pop() || activeProjectPath}</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={t('closeProjectWorkspace')}
-                    title={t('closeProjectWorkspace')}
-                    onClick={() => handleProjectChange('')}
-                    className="border-l border-ink-100 p-2 text-ink-700/55 hover:bg-ink-50 hover:text-ink-900"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setError(null);
-                    void fetchProjects();
-                    setProjectDialogOpen(true);
-                  }}
-                  className="inline-flex items-center gap-2 rounded-xl bg-ink-900 px-3 py-2 text-xs font-medium text-white shadow-sm hover:bg-ink-800"
-                >
-                  <FolderOpen className="h-4 w-4 text-clay-200" />
-                  {t('openProjectWorkspace')}
-                </button>
-              )}
               {stats && <span className="hidden font-mono text-xs xl:inline">{formatInteger(stats.total_sessions)} sessions</span>}
-              {activeProjectPath && (
+              {hasOpenProjects && (
                 <button aria-label="Refresh project" onClick={() => void Promise.all([fetchData(), fetchHierarchyRoot()])} className="rounded-xl border border-ink-100 bg-white p-2 text-ink-700 hover:border-ink-200 hover:bg-ink-50 transition-colors shadow-sm" disabled={loading}>
                   <RefreshCw className={`h-5 w-5 ${loading ? 'animate-spin' : ''}`} />
                 </button>
@@ -725,33 +694,13 @@ function App() {
       <OpenProjectDialog
         open={projectDialogOpen}
         projects={projects}
+        openProjectPaths={openProjectPaths}
         language={language}
         onClose={() => setProjectDialogOpen(false)}
-        onOpenProject={handleProjectChange}
+        onOpenProjects={handleOpenProjects}
       />
 
-      {!activeProjectPath && (
-        <main className="mx-auto flex min-h-[calc(100vh-73px)] max-w-7xl items-center justify-center px-4 py-10">
-          <div className="w-full max-w-md border-y border-ink-200 py-10 text-center">
-            <FolderOpen className="mx-auto h-9 w-9 text-clay-600" />
-            <h2 className="mt-4 text-lg font-semibold text-ink-900">{t('openProjectWorkspace')}</h2>
-            <button
-              type="button"
-              onClick={() => {
-                setError(null);
-                void fetchProjects();
-                setProjectDialogOpen(true);
-              }}
-              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-ink-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-ink-800"
-            >
-              <FolderOpen className="h-4 w-4 text-clay-200" />
-              {t('openProjectWorkspace')}
-            </button>
-          </div>
-        </main>
-      )}
-
-      {activeProjectPath && stats && (
+      {hasOpenProjects && stats && (
         <section className="border-b border-ink-100 bg-transparent">
           <div className="mx-auto max-w-7xl px-4 py-4">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -778,8 +727,8 @@ function App() {
         </section>
       )}
 
-      {activeProjectPath && <main className="mx-auto max-w-7xl px-4 py-5 space-y-5">
-        <section className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm shadow-ink-100/60">
+      <main className="mx-auto max-w-7xl px-4 py-5 space-y-5">
+        {hasOpenProjects && <section className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm shadow-ink-100/60">
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-2">
               <div className="inline-flex items-center gap-2 rounded-xl bg-ink-900 px-4 py-2 text-sm font-medium text-paper shadow-sm">
@@ -890,7 +839,7 @@ function App() {
               <span className="rounded-full bg-clay-50 px-3 py-1 text-clay-700 border border-clay-100">{t('active')}</span>
             )}
           </div>
-        </section>
+        </section>}
 
         <div
           className="grid grid-cols-1 gap-6 lg:[grid-template-columns:minmax(240px,var(--left-panel-width))_12px_minmax(0,1fr)] lg:items-start"
@@ -903,6 +852,13 @@ function App() {
               selectedId={selectedNodeId}
               onToggle={toggleHierarchyNode}
               onSelect={handleSelectHierarchyNode}
+              onOpenProject={() => {
+                setError(null);
+                void fetchProjects();
+                setProjectDialogOpen(true);
+              }}
+              onCloseProject={handleCloseProject}
+              openProjectCount={openProjectPaths.length}
             />
           </section>
 
@@ -917,16 +873,22 @@ function App() {
           </div>
 
           <section className="space-y-6 min-w-0">
-            <NodeDetailPane
-              node={selectedHierarchyNode}
-              selectedTrace={selectedTrace}
-              projectMetadata={projectMetadata}
-              projectMetadataLoading={projectMetadataLoading}
-              projectMetadataError={projectMetadataError}
-            />
+            {hasOpenProjects ? (
+              <NodeDetailPane
+                node={selectedHierarchyNode}
+                selectedTrace={selectedTrace}
+                projectMetadata={projectMetadata}
+                projectMetadataLoading={projectMetadataLoading}
+                projectMetadataError={projectMetadataError}
+              />
+            ) : (
+              <div className="flex min-h-[24rem] items-center justify-center border-y border-ink-200 text-sm text-ink-700/55">
+                No project loaded
+              </div>
+            )}
           </section>
         </div>
-      </main>}
+      </main>
     </div>
   );
 }

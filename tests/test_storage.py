@@ -924,6 +924,39 @@ def test_project_workspace_scope_filters_sessions_stats_and_catalog():
         assert storage.project_id("/demo/a") != storage.project_id("/demo/b")
 
 
+def test_multiple_project_workspace_scope_filters_sessions_and_stats():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        storage = _make_storage(tmp_dir)
+        traces = []
+        for name in ("a", "b", "c"):
+            trace = _sample_trace()
+            trace.update(
+                {
+                    "trace_id": f"session_{name}",
+                    "session_id": name,
+                    "project_path": f"/demo/{name}",
+                }
+            )
+            traces.append(trace)
+        storage.save_traces(traces)
+
+        project_paths = ["/demo/a", "/demo/c"]
+        sessions = storage.list_sessions(project_paths=project_paths, period_hours=100000)
+        overview = storage.get_overview_stats(
+            project_paths=project_paths, period_hours=100000
+        )
+        project_stats = storage.get_project_stats(
+            project_paths=project_paths, period_hours=100000
+        )
+
+        assert {session["session_id"] for session in sessions["sessions"]} == {"a", "c"}
+        assert sessions["total"] == 2
+        assert overview["total_sessions"] == 2
+        assert overview["total_projects"] == 2
+        assert overview["total_traces"] == 2
+        assert {item["project_path"] for item in project_stats} == {"/demo/a", "/demo/c"}
+
+
 def test_time_window_matches_sessions_active_in_window():
     with tempfile.TemporaryDirectory() as tmp_dir:
         storage = _make_storage(tmp_dir)

@@ -1695,6 +1695,7 @@ class SQLiteStorage(Storage):
         platform: Optional[str] = None,
         project: Optional[str] = None,
         project_path: Optional[str] = None,
+        project_paths: Optional[List[str]] = None,
         model: Optional[str] = None,
         status: Optional[str] = None,
         query: Optional[str] = None,
@@ -1730,8 +1731,13 @@ class SQLiteStorage(Storage):
 
         if project:
             sessions = [s for s in sessions if project.lower() in (s.get("project_path") or "").lower()]
+        scoped_project_paths = set(project_paths or [])
         if project_path is not None:
-            sessions = [s for s in sessions if (s.get("project_path") or "") == project_path]
+            scoped_project_paths.add(project_path)
+        if scoped_project_paths:
+            sessions = [
+                s for s in sessions if (s.get("project_path") or "") in scoped_project_paths
+            ]
         if model:
             sessions = [s for s in sessions if model.lower() in (s.get("model") or "").lower()]
         if status:
@@ -1927,6 +1933,7 @@ class SQLiteStorage(Storage):
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         project_path: Optional[str] = None,
+        project_paths: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         effective_start_time, effective_end_time = self._resolve_time_range(
             period_hours=period_hours,
@@ -1938,8 +1945,11 @@ class SQLiteStorage(Storage):
             end_time=effective_end_time,
             limit=None,
         )
+        scoped_project_paths = set(project_paths or [])
         if project_path is not None:
-            rows = [row for row in rows if row.get("project_path") == project_path]
+            scoped_project_paths.add(project_path)
+        if scoped_project_paths:
+            rows = [row for row in rows if row.get("project_path") in scoped_project_paths]
 
         grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         for row in rows:
@@ -2066,6 +2076,7 @@ class SQLiteStorage(Storage):
         start_time: Optional[str] = None,
         end_time: Optional[str] = None,
         project_path: Optional[str] = None,
+        project_paths: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         effective_start_time, effective_end_time = self._resolve_time_range(
             period_hours=period_hours,
@@ -2078,8 +2089,15 @@ class SQLiteStorage(Storage):
             limit=None,
         )
         sessions = self._collapse_sessions(traces)
+        scoped_project_paths = set(project_paths or [])
         if project_path is not None:
-            sessions = [session for session in sessions if session.get("project_path") == project_path]
+            scoped_project_paths.add(project_path)
+        if scoped_project_paths:
+            sessions = [
+                session
+                for session in sessions
+                if session.get("project_path") in scoped_project_paths
+            ]
 
         grouped: Dict[str, Dict[str, Any]] = {}
         for session in sessions:

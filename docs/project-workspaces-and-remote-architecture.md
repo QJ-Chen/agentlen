@@ -42,10 +42,10 @@ avoids repeatedly rebuilding the database when the user changes projects.
 
 ### Initial states
 
-The dashboard should have an explicit workspace state in the header:
+The dashboard should have an explicit workspace state in the main surface:
 
-- **Closed**: no session, stats, or hierarchy workspace is loaded.
-- **A project**: one project’s sessions, hierarchy, metadata, and stats.
+- **Closed**: no project, session, stats, or hierarchy data is loaded.
+- **Open projects**: one or more projects’ sessions, hierarchy, metadata, and stats.
 
 The existing hierarchy remains useful inside a project. In project mode, the
 project node can become the root and global Claude Code/Codex configuration can
@@ -55,21 +55,24 @@ be shown as a secondary context rather than occupying the primary tree.
 
 The first useful flow is:
 
-1. Open the project selector.
+1. Use the **Open Project** tool in the left hierarchy panel.
 2. Show recently active and discovered projects, with session counts and last
    activity, plus a custom local path input.
 3. Inspect custom paths for directory validity, indexed sessions, instructions,
    memory, skills, and worktrees.
-4. Select a project and add it to the left hierarchy, including projects with
-   zero indexed sessions.
-5. Update the URL so the explicit context can be bookmarked.
-6. Refresh all project-scoped data in one coordinated request cycle.
+4. Select one or more projects and add them to the left hierarchy, including
+   projects with zero indexed sessions.
+5. Add another project later without replacing projects already open; close
+   individual projects from their hierarchy rows when needed.
+6. Update the URL with repeated `project` parameters so the explicit context
+   can be bookmarked.
+7. Refresh all project-scoped data in one coordinated request cycle.
 
-The header should expose **Open Project** while closed and the active project
-with change/close actions while open. A project should be identified by a
-stable ID, while its normalized path is displayed as
-provenance. The path should not be the only identity because remote paths and
-two machines with similar directory layouts will eventually collide.
+The left panel owns the **Open Project** tool and the open-project tree. A
+project should be identified by a stable ID, while its normalized path is
+displayed as provenance. The path should not be the only identity because
+remote paths and two machines with similar directory layouts will eventually
+collide.
 
 ### “Open project” versus “Open folder”
 
@@ -127,22 +130,21 @@ identity; the current encoded Claude directory name is a source-format detail.
 
 ### UI state
 
-Add one active context state, for example:
+Add an open context state, for example:
 
 ```text
 activeConnectionId: string
-activeProjectId: string | null
+openProjectIds: string[]
 ```
 
-Persist an explicitly opened context in the URL. A
-URL such as `/project/local:<stable-id>` makes refresh, bookmarks, and future
-multi-connection navigation predictable. The current inbox and hierarchy
-requests should derive their query parameters from this state, rather than
-each component implementing its own project filter.
+Persist the open context in the URL with repeated `project` parameters. This
+makes refresh, bookmarks, and future multi-connection navigation predictable.
+The current inbox and hierarchy requests should derive repeated
+`project_paths` query parameters from this state, rather than each component
+implementing its own project filter.
 
-The project selector belongs in the top application header. The hierarchy is
-then a navigation surface inside the selected context, not the only way to
-discover or enter a project.
+The project selector belongs in the left application panel so project opening,
+tree navigation, and project closing are one workflow.
 
 ### Storage and ingestion
 
@@ -284,10 +286,12 @@ the SSH library's structured APIs or safely escaped command arguments.
 ### Phase 1: Project context, complete
 
 - Add `GET /api/v1/projects` based on indexed session rollups.
-- Add exact `project_path` filtering to sessions, stats, and hierarchy.
+- Add exact `project_path` and repeated `project_paths` filtering to sessions,
+  stats, and hierarchy.
 - Start with no project loaded and add an Open Project dialog with detected
   projects, counts, and paths.
-- Persist an explicitly opened project in the URL.
+- Support additive multi-project selection and persist the open project set in
+  the URL.
 - Add tests proving that sessions, stats, and hierarchy all apply the same
   project scope.
 

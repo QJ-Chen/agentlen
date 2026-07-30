@@ -4,7 +4,7 @@ A user-facing tour of what AgentLens exposes today. Every entry maps to one or m
 
 ## Inbox
 
-- **Open Project workspace** — the dashboard starts closed; open a detected project or inspect a custom local path, then sessions, search, hierarchy, and overview stats use that exact project context.
+- **Open Project workspace** — the dashboard starts closed; use the left-panel tool to select multiple detected projects or inspect custom local paths, then add them together without replacing projects already open. Sessions, search, hierarchy, and overview stats use the exact open-project set.
 - **Sessions list** with searchable, filterable rows for project path, model, status, and text query.
 - **Date-range filter** with explicit `start_time` / `end_time` parameters that flow from the dashboard through `/api/v1/sessions`, `/api/v1/stats/overview`, `/api/v1/stats/projects`, and the compatibility `/api/v1/stats` endpoint.
 - **Cost / token / duration sortable columns** so expensive and slow sessions are easy to triage.
@@ -32,7 +32,7 @@ A lazy tree of the recent local Claude Code activity.
 
 ## Analytics
 
-- **Overview stats** — total sessions / traces / LLM calls / tool calls / tokens / cost, average duration, platform mix, model mix, status counts, top tools, active days. Stats can be scoped to the active project workspace.
+- **Overview stats** — total sessions / traces / LLM calls / tool calls / tokens / cost, average duration, platform mix, model mix, status counts, top tools, active days. Stats are scoped to the open project set.
 - **Project rollups** — token and cost totals grouped by project path.
 - **Project catalog** — the Open Project dialog lists discovered projects with stable local IDs, paths, session counts, and last activity.
 - **Lightweight projections** — heavy counters live in a side table so the inbox stays responsive on long sessions.
@@ -67,7 +67,7 @@ Surfaced from `/api/v1/projects/by-path`:
 - **Rescan endpoint** — `POST /api/v1/ingest/rescan` enqueues an out-of-band manual rescan without blocking.
 - **Ingest status** — `GET /api/v1/ingest/status` reports job state, watching flag, and per-collector health.
 - **Open in OS file manager** — `POST /api/v1/sessions/{id}/open` opens the project or session folder via `xdg-open` / `open` / `startfile` depending on platform, with proper 404 and 501 handling.
-- **Project catalog and exact scope** — `GET /api/v1/projects` lists indexed projects; `project_path` scopes sessions, overview stats, project stats, and hierarchy without changing global ingestion.
+- **Project catalog and exact scope** — `GET /api/v1/projects` lists indexed projects; singular `project_path` remains compatible, while repeated `project_paths` scopes sessions, overview stats, project stats, and hierarchy to the open set without changing global ingestion.
 
 ## Session scan / watch
 

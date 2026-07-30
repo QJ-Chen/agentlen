@@ -116,7 +116,9 @@ class RangeCaptureStorage:
             return self.session_detail
         return None
 
-    def get_overview_stats(self, period_hours, start_time=None, end_time=None, project_path=None):
+    def get_overview_stats(
+        self, period_hours, start_time=None, end_time=None, project_path=None, project_paths=None
+    ):
         call = {
             "period_hours": period_hours,
             "start_time": start_time,
@@ -124,6 +126,8 @@ class RangeCaptureStorage:
         }
         if project_path is not None:
             call["project_path"] = project_path
+        if project_paths is not None:
+            call["project_paths"] = project_paths
         self.overview_calls.append(call)
         return {
             "period_hours": period_hours,
@@ -143,7 +147,9 @@ class RangeCaptureStorage:
             "active_days": [],
         }
 
-    def get_project_stats(self, period_hours, start_time=None, end_time=None, project_path=None):
+    def get_project_stats(
+        self, period_hours, start_time=None, end_time=None, project_path=None, project_paths=None
+    ):
         call = {
             "period_hours": period_hours,
             "start_time": start_time,
@@ -151,6 +157,8 @@ class RangeCaptureStorage:
         }
         if project_path is not None:
             call["project_path"] = project_path
+        if project_paths is not None:
+            call["project_paths"] = project_paths
         self.projects_calls.append(call)
         return []
 
@@ -454,6 +462,15 @@ class DateRangeApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.storage.sessions_calls[0]["project_path"], "/demo/project")
 
+    def test_sessions_endpoint_forwards_multiple_project_scope(self):
+        response = self.client.get(
+            "/api/v1/sessions",
+            params=[("project_paths", "/demo/a"), ("project_paths", "/demo/b")],
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.sessions_calls[0]["project_paths"], ["/demo/a", "/demo/b"])
+
     def test_overview_stats_endpoint_passes_explicit_date_range(self):
         response = self.client.get(
             "/api/v1/stats/overview",
@@ -485,6 +502,15 @@ class DateRangeApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.storage.overview_calls[0]["project_path"], "/demo/project")
 
+    def test_overview_stats_endpoint_forwards_multiple_project_scope(self):
+        response = self.client.get(
+            "/api/v1/stats/overview",
+            params=[("project_paths", "/demo/a"), ("project_paths", "/demo/b")],
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.overview_calls[0]["project_paths"], ["/demo/a", "/demo/b"])
+
     def test_project_stats_endpoint_passes_explicit_date_range(self):
         response = self.client.get(
             "/api/v1/stats/projects",
@@ -514,6 +540,15 @@ class DateRangeApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.storage.projects_calls[0]["project_path"], "/demo/project")
+
+    def test_project_stats_endpoint_forwards_multiple_project_scope(self):
+        response = self.client.get(
+            "/api/v1/stats/projects",
+            params=[("project_paths", "/demo/a"), ("project_paths", "/demo/b")],
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.storage.projects_calls[0]["project_paths"], ["/demo/a", "/demo/b"])
 
     def test_projects_endpoint_returns_catalog(self):
         response = self.client.get("/api/v1/projects")
@@ -644,6 +679,34 @@ class HierarchyApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.storage.sessions_calls[-1]["project_path"], "/demo/project")
+
+    def test_hierarchy_root_keeps_multiple_selected_projects_without_sessions(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            project_paths = [Path(tmp_dir) / "empty-a", Path(tmp_dir) / "empty-b"]
+            for project_path in project_paths:
+                project_path.mkdir()
+            with patch.object(
+                self.storage,
+                "list_sessions",
+                return_value={"sessions": [], "count": 0, "total": 0},
+            ) as list_sessions:
+                response = self.client.get(
+                    "/api/v1/hierarchy",
+                    params=[("project_paths", str(path)) for path in project_paths],
+                )
+
+        self.assertEqual(response.status_code, 200)
+        normalized_paths = [str(path.resolve()) for path in project_paths]
+        self.assertEqual(list_sessions.call_args.kwargs["project_paths"], normalized_paths)
+        projects_root = next(
+            child
+            for child in response.json()["root"]["children"]
+            if child["type"] == "projects-root"
+        )
+        self.assertEqual(
+            {child["projectPath"] for child in projects_root["children"]},
+            set(normalized_paths),
+        )
 
     def test_hierarchy_root_keeps_selected_project_without_sessions(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

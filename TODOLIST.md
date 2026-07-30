@@ -17,7 +17,8 @@ Tracking open work for AgentLens. Items already shipped on `main` have been move
 
 ## Frontend
 
-- [x] Add an explicit Open Project workflow with no project loaded initially and exact project scoping
+- [x] Add an explicit Open Project workflow in the left panel with no project loaded initially
+- [x] Open multiple projects additively, preserve them in one hierarchy, and scope queries to the open project set
 - [x] Inspect custom local project paths and add projects with no indexed session history to the hierarchy
 - [ ] Add connection-aware UI state for future local SSH log sources
 - [ ] Custom session listing windows in frontend

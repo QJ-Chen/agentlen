@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Folder, FolderOpen, LoaderCircle, Search, X } from 'lucide-react';
+import { Check, Folder, FolderOpen, LoaderCircle, Search, X } from 'lucide-react';
 import { API_URL } from '../lib/api';
 import type { ProjectCatalogItem, ProjectMetadataResponse } from '../lib/sessionApiTypes';
 import type { Language } from '../lib/language';
@@ -7,9 +7,10 @@ import type { Language } from '../lib/language';
 interface OpenProjectDialogProps {
   open: boolean;
   projects: ProjectCatalogItem[];
+  openProjectPaths: string[];
   language: Language;
   onClose: () => void;
-  onOpenProject: (projectPath: string) => void;
+  onOpenProjects: (projectPaths: string[]) => void;
 }
 
 const dialogCopy = {
@@ -20,7 +21,10 @@ const dialogCopy = {
     custom: 'Custom project path',
     pathPlaceholder: '/path/to/project',
     inspect: 'Inspect',
-    open: 'Open',
+    add: 'Add',
+    addProjects: 'Add projects',
+    alreadyOpen: 'Open',
+    selected: 'selected',
     noProjects: 'No detected projects match this search.',
     invalid: 'Enter a directory that exists on this machine.',
     inspectFailed: 'AgentLens could not inspect this path.',
@@ -38,7 +42,10 @@ const dialogCopy = {
     custom: '自定义项目路径',
     pathPlaceholder: '/项目/路径',
     inspect: '检测',
-    open: '打开',
+    add: '添加',
+    addProjects: '添加项目',
+    alreadyOpen: '已打开',
+    selected: '个已选择',
     noProjects: '没有匹配的已检测项目。',
     invalid: '请输入本机存在的目录。',
     inspectFailed: 'AgentLens 无法检测此路径。',
@@ -58,9 +65,10 @@ function projectName(projectPath: string): string {
 export function OpenProjectDialog({
   open,
   projects,
+  openProjectPaths,
   language,
   onClose,
-  onOpenProject,
+  onOpenProjects,
 }: OpenProjectDialogProps) {
   const copy = dialogCopy[language];
   const inputRef = useRef<HTMLInputElement>(null);
@@ -69,6 +77,8 @@ export function OpenProjectDialog({
   const [inspection, setInspection] = useState<ProjectMetadataResponse | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [inspectionError, setInspectionError] = useState<string | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const openPaths = useMemo(() => new Set(openProjectPaths), [openProjectPaths]);
 
   useEffect(() => {
     if (!open) return;
@@ -89,6 +99,7 @@ export function OpenProjectDialog({
       setCustomPath('');
       setInspection(null);
       setInspectionError(null);
+      setSelectedPaths(new Set());
     }
   }, [open]);
 
@@ -122,9 +133,24 @@ export function OpenProjectDialog({
     }
   };
 
+  const toggleSelectedPath = (projectPath: string) => {
+    if (openPaths.has(projectPath)) return;
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(projectPath)) next.delete(projectPath);
+      else next.add(projectPath);
+      return next;
+    });
+  };
+
   if (!open) return null;
 
-  const canOpenInspection = Boolean(inspection?.identity.exists && inspection.identity.is_directory);
+  const inspectedPath = inspection?.identity.project_path || '';
+  const canAddInspection = Boolean(
+    inspection?.identity.exists
+    && inspection.identity.is_directory
+    && !openPaths.has(inspectedPath)
+  );
 
   return (
     <div
@@ -170,15 +196,22 @@ export function OpenProjectDialog({
                 <button
                   key={project.id}
                   type="button"
-                  onClick={() => onOpenProject(project.path)}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left hover:bg-ink-50"
+                  disabled={openPaths.has(project.path)}
+                  onClick={() => toggleSelectedPath(project.path)}
+                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors ${
+                    selectedPaths.has(project.path) ? 'bg-clay-50 ring-1 ring-clay-200' : 'hover:bg-ink-50'
+                  } disabled:cursor-default disabled:opacity-55`}
                 >
-                  <Folder className="h-4 w-4 shrink-0 text-clay-600" />
+                  {selectedPaths.has(project.path)
+                    ? <Check className="h-4 w-4 shrink-0 text-clay-700" />
+                    : <Folder className="h-4 w-4 shrink-0 text-clay-600" />}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-ink-900">{project.name || projectName(project.path)}</span>
                     <span className="block truncate font-mono text-[11px] text-ink-700/55">{project.path}</span>
                   </span>
-                  <span className="shrink-0 font-mono text-xs text-ink-700/55">{project.session_count}</span>
+                  <span className="shrink-0 font-mono text-xs text-ink-700/55">
+                    {openPaths.has(project.path) ? copy.alreadyOpen : project.session_count}
+                  </span>
                 </button>
               ))}
               {filteredProjects.length === 0 && (
@@ -229,17 +262,29 @@ export function OpenProjectDialog({
                 </div>
                 <button
                   type="button"
-                  disabled={!canOpenInspection}
-                  onClick={() => inspection && onOpenProject(inspection.identity.project_path)}
+                  disabled={!canAddInspection}
+                  onClick={() => inspection && toggleSelectedPath(inspection.identity.project_path)}
                   className="inline-flex shrink-0 items-center justify-center gap-2 rounded-lg bg-clay-600 px-4 py-2 text-sm font-medium text-white hover:bg-clay-700 disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  <FolderOpen className="h-4 w-4" />
-                  {copy.open}
+                  {selectedPaths.has(inspectedPath) ? <Check className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />}
+                  {openPaths.has(inspectedPath) ? copy.alreadyOpen : selectedPaths.has(inspectedPath) ? copy.selected : copy.add}
                 </button>
               </div>
             )}
             {inspectionError && <p className="mt-3 text-sm text-red-600">{inspectionError}</p>}
           </section>
+        </div>
+        <div className="flex items-center justify-between border-t border-ink-100 bg-ink-50 px-5 py-3">
+          <span className="text-xs text-ink-700/60">{selectedPaths.size} {copy.selected}</span>
+          <button
+            type="button"
+            disabled={selectedPaths.size === 0}
+            onClick={() => onOpenProjects([...selectedPaths])}
+            className="inline-flex items-center gap-2 rounded-lg bg-ink-900 px-4 py-2 text-sm font-medium text-white hover:bg-ink-800 disabled:cursor-not-allowed disabled:opacity-45"
+          >
+            <FolderOpen className="h-4 w-4 text-clay-200" />
+            {copy.addProjects}
+          </button>
         </div>
       </div>
     </div>
