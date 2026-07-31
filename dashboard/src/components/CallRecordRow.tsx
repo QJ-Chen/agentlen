@@ -74,6 +74,10 @@ const CallRecordRowInner: React.FC<CallRecordRowProps> = ({
 }) => {
   const isCallExpanded = detailLevel !== 'summary' && isExpanded;
   const { relatedTools, responseStyle, formattedToolResponse } = getCallRenderState(call, toolScope, allLLMCalls);
+  const compactPreview = responseStyle.preview.replace(/\n/g, ' ');
+  const visiblePreview = responseStyle.kind === 'tool'
+    ? compactPreview
+    : `${compactPreview.slice(0, 60)}${compactPreview.length > 60 ? '...' : ''}`;
 
   return (
     <div className={`rounded-2xl border-l-4 transition-all ${isCallExpanded ? 'bg-white border-violet-300 shadow-md shadow-violet-100/40 ring-1 ring-violet-100' : 'bg-slate-50/80 border-slate-200/80 border-l-slate-300'}`}>
@@ -84,10 +88,8 @@ const CallRecordRowInner: React.FC<CallRecordRowProps> = ({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className={`text-[11px] px-1.5 py-0.5 rounded-full ${responseStyle.badge}`}>{responseStyle.label}</span>
-            <div className={`text-sm truncate ${responseStyle.accent}`}>
-              {responseStyle.preview
-                ? `${responseStyle.preview.replace(/\n/g, ' ').slice(0, 60)}${responseStyle.preview.length > 60 ? '...' : ''}`
-                : '无响应内容'}
+            <div className={`text-sm ${responseStyle.kind === 'tool' ? 'break-words' : 'truncate'} ${responseStyle.accent}`}>
+              {visiblePreview || '无响应内容'}
             </div>
           </div>
           <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-2 flex-wrap">
