@@ -45,7 +45,7 @@ async def lifespan(_app: FastAPI):
         logger.info("Stopped Claude Code session log watching")
 
 
-app = FastAPI(title="AgentLens API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="AgentLens API", version="0.2.1", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -714,7 +714,7 @@ class TraceBatchIn(BaseModel):
 def root():
     return {
         "message": "AgentLens API",
-        "version": "0.2.0",
+        "version": "0.2.1",
         "product": "local-first coding-agent session intelligence",
     }
 

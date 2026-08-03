@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "agentlens"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first AI agent session and log viewer for Claude Code and OpenAI Codex CLI"
 authors = ["AgentLens Maintainers"]
 readme = "README.md"
