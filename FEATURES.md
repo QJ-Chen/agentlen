@@ -15,7 +15,7 @@ A user-facing tour of what AgentLens exposes today. Every entry maps to one or m
 A lazy tree of the recent local Claude Code activity.
 
 - **Root → projects → project → project-sessions → session → {llm, subagents, vision, tasks}** — every level fetches its own children via `/api/v1/hierarchy/children` so opening a session never pays for the full subtree.
-- **Recap-driven labels** — when a session has an `away_summary` recap, the hierarchy node label uses that text instead of the bare session ID.
+- **Recap-driven labels** — Claude `away_summary` text and bounded Codex compaction previews label hierarchy sessions instead of bare session IDs; complete Codex compaction summaries remain available in session history.
 - **Node detail panes** mounted per node type, so opening a subagent node does not re-render the LLM timeline.
 
 ## Session inspector

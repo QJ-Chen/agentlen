@@ -41,6 +41,72 @@ UNKNOWN_MODEL_PRICING = CLAUDE_MODEL_PRICING["sonnet"]
 
 logger = logging.getLogger(__name__)
 
+CODEX_RECAP_MAX_CHARS = 320
+CODEX_RECAP_SECTION_PRIORITY = (
+    "latest user request",
+    "latest user question",
+    "current task",
+    "current goal",
+    "objective",
+    "goal",
+    "current progress",
+)
+
+
+def summarize_codex_recap(text: str, max_chars: int = CODEX_RECAP_MAX_CHARS) -> str:
+    """Turn a verbose Codex compaction handoff into a bounded session recap."""
+    recap = str(text or "").strip()
+    if not recap:
+        return ""
+    if len(recap) <= max_chars and "Another language model started" not in recap:
+        return recap
+
+    without_fences = re.sub(r"```.*?```", " ", recap, flags=re.DOTALL)
+    headings = list(re.finditer(r"^#{1,6}\s+(.+?)\s*$", without_fences, flags=re.MULTILINE))
+    sections: Dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        title = heading.group(1).strip().lower()
+        start = heading.end()
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(without_fences)
+        sections.setdefault(title, without_fences[start:end])
+
+    selected = ""
+    for preferred_title in CODEX_RECAP_SECTION_PRIORITY:
+        selected = next(
+            (body for title, body in sections.items() if title == preferred_title),
+            "",
+        )
+        if selected:
+            break
+    if not selected:
+        selected = without_fences
+
+    lines = []
+    for raw_line in selected.splitlines():
+        line = re.sub(r"^\s*(?:[-*+]\s+|\d+[.)]\s+|>\s*)", "", raw_line).strip()
+        if not line or re.fullmatch(
+            r"(?:the user (?:asked|requested|reported)|user requested|current task|current goal):?",
+            line,
+            flags=re.IGNORECASE,
+        ):
+            continue
+        if line.startswith("#"):
+            continue
+        line = re.sub(r"!\[([^]]*)\]\([^)]+\)", r"\1", line)
+        line = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", line)
+        line = re.sub(r"(?<!\w)(?:\*\*|__|~~)(.+?)(?:\*\*|__|~~)(?!\w)", r"\1", line)
+        line = re.sub(r"(?<!\w)[*`](.+?)[*`](?!\w)", r"\1", line)
+        lines.append(line)
+
+    summary = " · ".join(lines[:3])
+    summary = re.sub(r"\s+", " ", summary).strip()
+    if not summary:
+        summary = re.sub(r"\s+", " ", recap).strip()
+    if len(summary) <= max_chars:
+        return summary
+    clipped = summary[: max_chars + 1].rsplit(" ", 1)[0].rstrip(".,;: ")
+    return f"{clipped}…"
+
 
 def merge_content_blocks(existing: List[Dict[str, Any]], new_blocks: Any) -> List[Dict[str, Any]]:
     merged = [dict(block) for block in existing if isinstance(block, dict)]
@@ -1912,7 +1978,7 @@ class CodexCollector(LogCollector):
         if envelope_type == "compacted":
             recap = str(payload.get("message") or "").strip()
             if recap:
-                state["latest_recap"] = recap
+                state["latest_recap"] = summarize_codex_recap(recap)
             compact_payload = {
                 key: payload.get(key)
                 for key in (

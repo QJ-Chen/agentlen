@@ -2,12 +2,64 @@ import json
 from pathlib import Path
 
 from agentlens.activity import validate_activity_graph
-from agentlens.collectors import CODEX_PLATFORM, CodexCollector, CollectorManager
+from agentlens.collectors import (
+    CODEX_PLATFORM,
+    CodexCollector,
+    CollectorManager,
+    summarize_codex_recap,
+)
 from agentlens.storage import SQLiteStorage
 
 
 def _line(timestamp: str, record_type: str, payload: dict) -> str:
     return json.dumps({"timestamp": timestamp, "type": record_type, "payload": payload})
+
+
+def test_codex_recap_summarizes_compaction_handoff():
+    recap = """Another language model started to solve this problem and produced a summary.
+
+## Current Progress
+
+- Repository inspection completed.
+
+## Latest User Question
+
+The user asked:
+
+> How is a **pasted image** displayed?
+
+They then interrupted and requested this checkpoint.
+"""
+
+    assert summarize_codex_recap(recap) == (
+        "How is a pasted image displayed? · "
+        "They then interrupted and requested this checkpoint."
+    )
+
+
+def test_codex_recap_keeps_short_normal_summary():
+    assert summarize_codex_recap("The parser was fixed and verified.") == (
+        "The parser was fixed and verified."
+    )
+
+
+def test_codex_recap_bounds_long_current_task():
+    recap = """Another language model started to solve this problem.
+
+### Current Task
+
+User requested:
+
+- Restore concise Codex session previews.
+- Keep full compaction evidence available in session history.
+- Verify the collector and dashboard behavior.
+"""
+
+    summary = summarize_codex_recap(recap, max_chars=80)
+
+    assert summary.endswith("…")
+    assert len(summary) <= 81
+    assert summary.startswith("Restore concise Codex session previews")
 
 
 def test_codex_collector_normalizes_messages_tools_usage_and_compaction(tmp_path: Path):
@@ -178,6 +230,9 @@ def test_codex_collector_normalizes_messages_tools_usage_and_compaction(tmp_path
     assert trace["cache_read_tokens"] == 20
     assert trace["metadata"]["tool_name_counts"] == {"exec_command": 2, "apply_patch": 1}
     assert trace["metadata"]["recap_text"] == "The parser was fixed and verified."
+    assert trace["metadata"]["compaction_records"][-1]["summary"] == (
+        "The parser was fixed and verified."
+    )
     assert validate_activity_graph(trace["activity_graph"]) == []
     compacted = next(
         node for node in trace["activity_graph"]["nodes"] if node["kind"] == "context-compacted"
